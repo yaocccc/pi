@@ -1,0 +1,31 @@
+{
+  "lastChangelogVersion": "0.81.1",
+  "editorPaddingX": 1,
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "hideThinkingBlock": true,
+  "enabledModels_": [
+    "deepseek-v4-pro",
+    "gpt-5.6-sol"
+  ],
+  "theme": "pi",
+  "showHardwareCursor": true,
+  "transport": "auto",
+  "defaultThinkingLevel": "high",
+  "packages": [
+    "npm:pi-web-access",
+    "npm:@ff-labs/pi-fff"
+  ],
+  "treeFilterMode": "all",
+  "enableInstallTelemetry": true,
+  "quietStartup": true,
+  "images": {
+    "blockImages": false
+  },
+  "steeringMode": "one-at-a-time",
+  "followUpMode": "one-at-a-time",
+  "doubleEscapeAction": "none",
+  "warnings": {
+    "anthropicExtraUsage": false
+  }
+}
