@@ -2,7 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { AGENT_NAMES, type AgentDefinition, type AgentName } from "./types/index.ts";
+import {
+	AGENT_NAMES,
+	AGENT_THINKING_LEVELS,
+	type AgentDefinition,
+	type AgentName,
+	type AgentThinkingLevel,
+} from "./types/index.ts";
 
 const AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
 
@@ -10,16 +16,26 @@ function isAgentName(value: string): value is AgentName {
 	return AGENT_NAMES.includes(value as AgentName);
 }
 
-function parseTools(value: unknown, filePath: string): string[] {
-	if (typeof value !== "string") {
-		throw new Error(`Agent 配置缺少 tools: ${filePath}`);
+function parseThinking(value: unknown, filePath: string): AgentThinkingLevel {
+	if (typeof value !== "string" || !AGENT_THINKING_LEVELS.includes(value as AgentThinkingLevel)) {
+		throw new Error(`Agent thinking 无效: ${filePath}`);
 	}
-	const tools = value
-		.split(",")
-		.map((tool) => tool.trim())
-		.filter(Boolean);
-	if (tools.length === 0) throw new Error(`Agent tools 不能为空: ${filePath}`);
-	return tools;
+	return value as AgentThinkingLevel;
+}
+
+function parseExcludeTools(value: unknown, filePath: string): string[] {
+	if (value === undefined) return [];
+	if (typeof value !== "string") {
+		throw new Error(`Agent excludeTools 无效: ${filePath}`);
+	}
+	return [
+		...new Set(
+			value
+				.split(",")
+				.map((tool) => tool.trim())
+				.filter(Boolean),
+		),
+	];
 }
 
 export function loadAgents(): Map<AgentName, AgentDefinition> {
@@ -40,10 +56,19 @@ export function loadAgents(): Map<AgentName, AgentDefinition> {
 		}
 		if (!body.trim()) throw new Error(`Agent 提示词不能为空: ${filePath}`);
 
+		const excludeTools = parseExcludeTools(frontmatter.excludeTools, filePath);
+		if (rawName !== "worker") {
+			const missingWriteTools = ["edit", "write"].filter((tool) => !excludeTools.includes(tool));
+			if (missingWriteTools.length) {
+				throw new Error(`Agent ${rawName} 必须通过 excludeTools 排除写工具: ${missingWriteTools.join(", ")} (${filePath})`);
+			}
+		}
+
 		agents.set(rawName, {
 			name: rawName,
 			description: description.trim(),
-			tools: parseTools(frontmatter.tools, filePath),
+			thinking: parseThinking(frontmatter.thinking, filePath),
+			excludeTools,
 			systemPrompt: body.trim(),
 			filePath,
 		});

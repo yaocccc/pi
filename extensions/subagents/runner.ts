@@ -190,6 +190,7 @@ export interface RunAgentOptions {
 	displayModel?: string;
 	thinking?: string;
 	extensionPaths?: string[];
+	excludeTools?: string[];
 	signal?: AbortSignal;
 	onUpdate?: (result: AgentRunResult) => void;
 }
@@ -363,9 +364,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 		"--no-extensions",
 		"--no-skills",
 		"--no-prompt-templates",
-		"--tools",
-		options.agent.tools.join(","),
 	];
+	if (options.excludeTools?.length) args.push("--exclude-tools", options.excludeTools.join(","));
 	for (const extensionPath of options.extensionPaths ?? []) args.push("--extension", extensionPath);
 	if (options.launchModel) args.push("--model", options.launchModel);
 	if (options.thinking) args.push("--thinking", options.thinking);

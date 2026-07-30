@@ -20,12 +20,13 @@
 ```text
 .
 ├── extensions/          # TypeScript 扩展
+│   ├── ask-question/    # 结构化用户提问
+│   ├── fast/            # 模型请求优化
+│   ├── filter-output/   # 敏感信息过滤
 │   ├── memory/          # 分级记忆、记忆工具与 /end 命令
-│   ├── ask-question.ts  # 结构化用户提问
-│   ├── fast.ts          # 模型请求优化
-│   ├── filter-output.ts # 敏感信息过滤
-│   ├── plan.ts          # /plan 工作流
-│   └── ui.ts            # TUI 定制
+│   ├── plan/            # /plan 工作流
+│   ├── subagents/       # 中文 Subagents 工作流
+│   └── ui/              # TUI 定制
 ├── skills/              # Agent Skills
 ├── themes/pi.json       # 自定义主题
 ├── keybindings.json     # 快捷键

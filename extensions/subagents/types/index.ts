@@ -1,15 +1,18 @@
 import type { Message } from "@earendil-works/pi-ai";
 
 export const AGENT_NAMES = ["scout", "planner", "worker", "reviewer"] as const;
+export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type AgentName = (typeof AGENT_NAMES)[number];
+export type AgentThinkingLevel = (typeof AGENT_THINKING_LEVELS)[number];
 export type RunMode = "single" | "chain";
 export type RunStatus = "running" | "completed" | "failed";
 
 export interface AgentDefinition {
 	name: AgentName;
 	description: string;
-	tools: string[];
+	thinking: AgentThinkingLevel;
+	excludeTools: string[];
 	systemPrompt: string;
 	filePath: string;
 }

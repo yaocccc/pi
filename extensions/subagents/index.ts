@@ -29,23 +29,28 @@ import { buildSingleAgentPrompt, buildWorkflowPrompt, type WorkflowKind } from "
 
 const MODEL_OUTPUT_CAP = 50 * 1024;
 const PREVIOUS_OUTPUT_CAP = 100 * 1024;
-const UNSUPPORTED_CHILD_TOOLS = new Set(["ask_question", "plan_set_todos", "plan_check_result", "subagent"]);
 
-function resolveChildExtensionPaths(pi: ExtensionAPI, toolNames: string[]): string[] {
-	const invalid = toolNames.filter((name) => UNSUPPORTED_CHILD_TOOLS.has(name));
-	if (invalid.length) throw new Error(`子代理不允许使用工具：${invalid.join(", ")}`);
+interface ChildToolPolicy {
+	extensionPaths: string[];
+	excludeTools: string[];
+}
 
-	const configured = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
-	const missing = toolNames.filter((name) => !configured.has(name));
-	if (missing.length) throw new Error(`子代理工具未安装：${missing.join(", ")}`);
+function resolveChildToolPolicy(pi: ExtensionAPI, agentExcludeTools: string[]): ChildToolPolicy {
+	const excludeTools = [...new Set(agentExcludeTools)];
+	const excluded = new Set(excludeTools);
+	const extensionPaths = new Set<string>();
 
-	return [
-		...new Set(
-			toolNames
-				.map((name) => configured.get(name)?.sourceInfo?.path)
-				.filter((sourcePath): sourcePath is string => Boolean(sourcePath && !sourcePath.startsWith("<builtin:"))),
-		),
-	];
+	for (const tool of pi.getAllTools()) {
+		if (excluded.has(tool.name)) continue;
+		const source = tool.sourceInfo;
+		const sourcePath = source.path.trim();
+		if (source.source === "builtin" || source.source === "sdk" || !sourcePath || sourcePath.startsWith("<")) {
+			continue;
+		}
+		extensionPaths.add(sourcePath);
+	}
+
+	return { extensionPaths: [...extensionPaths], excludeTools };
 }
 const EXPANDED_OUTPUT_CAP = 20 * 1024;
 const EXPANDED_RAW_SCAN_CAP = 40 * 1024;
@@ -201,11 +206,13 @@ async function requestTask(
 	kind: WorkflowKind,
 	args: string,
 	ctx: ExtensionCommandContext,
+	includeScout = false,
 ): Promise<string | undefined> {
 	const provided = args.trim();
 	if (provided) return provided;
 	if (!ctx.hasUI) {
-		ctx.ui.notify(`请使用 /subagents-${kind} <任务描述>`, "error");
+		const options = kind === "review" ? "" : " [--scout]";
+		ctx.ui.notify(`请使用 /subagents-${kind}${options} <任务描述>`, "error");
 		return undefined;
 	}
 
@@ -221,7 +228,10 @@ async function requestTask(
 	};
 	const input =
 		ctx.mode === "tui"
-			? await readSubagentText(ctx, `/subagents-${kind}：${titles[kind]}，Enter 提交，Esc 取消`)
+			? await readSubagentText(
+					ctx,
+					`/subagents-${kind}${includeScout ? " --scout" : ""}：${titles[kind]}，Enter 提交，Esc 取消`,
+				)
 			: await ctx.ui.input(titles[kind], placeholders[kind]);
 	const task = input?.trim();
 	if (!task) {
@@ -268,6 +278,18 @@ function parseHeadlessAgentTask(args: string): { agent: AgentName; task: string 
 	return { agent: match[1] as AgentName, task: match[2]!.trim() };
 }
 
+function parseWorkflowArgs(
+	kind: WorkflowKind,
+	args: string,
+): { taskArgs: string; includeScout: boolean } {
+	const trimmed = args.trim();
+	if (kind === "review") return { taskArgs: trimmed, includeScout: false };
+
+	const match = trimmed.match(/^--scout(?:\s+([\s\S]*))?$/);
+	if (!match) return { taskArgs: trimmed, includeScout: false };
+	return { taskArgs: match[1]?.trim() ?? "", includeScout: true };
+}
+
 export default function (pi: ExtensionAPI) {
 	const agents = loadAgents();
 
@@ -275,9 +297,9 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent",
 		label: "子代理",
 		description: [
-			"把任务交给隔离上下文中的中文子代理。",
+			"把任务交给隔离上下文中的子代理。",
 			"仅提供四种角色：scout 负责侦察，planner 负责计划，worker 负责实现，reviewer 负责只读审查。",
-			"单任务使用 agent + task；顺序工作流使用 chain，并以 {previous} 传递上一步结果。",
+			"单任务使用 agent + task；顺序工作流使用 chain，并通过 {previous} 内联上一步输出。",
 			"同一工作目录只允许 worker 写入；reviewer 不得修改文件。",
 		].join(" "),
 		promptSnippet: "使用 scout、planner、worker、reviewer 执行单任务或顺序子代理工作流",
@@ -296,31 +318,32 @@ export default function (pi: ExtensionAPI) {
 
 			const launchModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 			const displayModel = ctx.model?.name ?? ctx.model?.id;
-			const thinking = ctx.thinkingLevel;
 
 			if (hasSingle && params.agent && params.task) {
 				const agent = agents.get(params.agent as AgentName);
 				if (!agent) throw new Error(`未知子代理: ${params.agent}`);
+				const toolPolicy = resolveChildToolPolicy(pi, agent.excludeTools);
 				const result = await runAgent({
 					cwd: ctx.cwd,
 					agent,
 					task: params.task.trim(),
 					launchModel,
 					displayModel,
-					thinking,
-					extensionPaths: resolveChildExtensionPaths(pi, agent.tools),
+					thinking: agent.thinking,
+					extensionPaths: toolPolicy.extensionPaths,
+					excludeTools: toolPolicy.excludeTools,
 					signal,
 					onUpdate: (current) => {
 						onUpdate?.({
 							content: [{ type: "text", text: `${current.agent} ${current.status === "running" ? "执行中" : current.status}` }],
-							details: makeDetails("single", [current], 1, displayModel, thinking),
+							details: makeDetails("single", [current], 1, displayModel, agent.thinking),
 						});
 					},
 				});
 				const output = isFailedResult(result) ? `子代理 ${result.agent} 执行失败：${getFailureMessage(result)}` : getFinalOutput(result.messages) || "子代理未返回文本结果";
 				return {
 					content: [{ type: "text", text: truncateUtf8(output, MODEL_OUTPUT_CAP, "输出已截断") }],
-					details: makeDetails("single", [result], 1, displayModel, thinking),
+					details: makeDetails("single", [result], 1, displayModel, agent.thinking),
 				};
 			}
 
@@ -332,6 +355,7 @@ export default function (pi: ExtensionAPI) {
 				if (!agent) throw new Error(`未知子代理: ${step.agent}`);
 				const previousForPrompt = truncateUtf8(previous, PREVIOUS_OUTPUT_CAP, "上一步输出已截断");
 				const task = step.task.replaceAll("{previous}", previousForPrompt).trim();
+				const toolPolicy = resolveChildToolPolicy(pi, agent.excludeTools);
 				const result = await runAgent({
 					cwd: ctx.cwd,
 					agent,
@@ -339,13 +363,14 @@ export default function (pi: ExtensionAPI) {
 					step: index + 1,
 					launchModel,
 					displayModel,
-					thinking,
-					extensionPaths: resolveChildExtensionPaths(pi, agent.tools),
+					thinking: agent.thinking,
+					extensionPaths: toolPolicy.extensionPaths,
+					excludeTools: toolPolicy.excludeTools,
 					signal,
 					onUpdate: (current) => {
 						onUpdate?.({
 							content: [{ type: "text", text: `步骤 ${index + 1}/${params.chain!.length}：${current.agent} 执行中` }],
-							details: makeDetails("chain", [...results, current], params.chain!.length, displayModel, thinking),
+							details: makeDetails("chain", [...results, current], params.chain!.length, displayModel),
 						});
 					},
 				});
@@ -354,7 +379,7 @@ export default function (pi: ExtensionAPI) {
 					const failure = `子代理链在步骤 ${index + 1}（${result.agent}）停止：${getFailureMessage(result)}`;
 					return {
 						content: [{ type: "text", text: truncateUtf8(failure, MODEL_OUTPUT_CAP, "错误输出已截断") }],
-						details: makeDetails("chain", results, params.chain!.length, displayModel, thinking),
+						details: makeDetails("chain", results, params.chain!.length, displayModel),
 					};
 				}
 				previous = getFinalOutput(result.messages);
@@ -363,7 +388,7 @@ export default function (pi: ExtensionAPI) {
 			const finalOutput = previous || "子代理链已完成，但最后一步未返回文本结果";
 			return {
 				content: [{ type: "text", text: truncateUtf8(finalOutput, MODEL_OUTPUT_CAP, "输出已截断") }],
-				details: makeDetails("chain", results, params.chain!.length, displayModel, thinking),
+				details: makeDetails("chain", results, params.chain!.length, displayModel),
 			};
 		},
 
@@ -395,9 +420,22 @@ export default function (pi: ExtensionAPI) {
 			const icon = running ? theme.fg("warning", "◌") : failed ? theme.fg("error", "✗") : theme.fg("success", "✓");
 			const totalSteps = details.totalSteps ?? details.results.length;
 			const title = details.mode === "chain" ? `子代理链 ${completed}/${totalSteps}` : `子代理 ${details.results[0]!.agent}`;
+			const thinkingLevels = [
+				...new Set(
+					details.results
+						.map((item) => item.thinking)
+						.filter((level): level is string => Boolean(level)),
+				),
+			];
+			const thinkingSummary =
+				thinkingLevels.length === 1
+					? thinkingLabel(thinkingLevels[0])
+					: thinkingLevels.length > 1
+						? "按角色"
+						: thinkingLabel(details.thinking);
 			const modelParts = [
 				details.model ? `模型：${details.model}` : undefined,
-				thinkingLabel(details.thinking) ? `思考强度：${thinkingLabel(details.thinking)}` : undefined,
+				thinkingSummary ? `思考强度：${thinkingSummary}` : undefined,
 			].filter(Boolean);
 
 			if (!expanded) {
@@ -474,8 +512,8 @@ export default function (pi: ExtensionAPI) {
 		kind: WorkflowKind;
 		description: string;
 	}> = [
-		{ name: "subagents-feat", kind: "feat", description: "功能开发：侦察 → 计划 → 实现 → 审查" },
-		{ name: "subagents-fix", kind: "fix", description: "问题修复：侦察 → 计划 → 修复 → 审查" },
+		{ name: "subagents-feat", kind: "feat", description: "功能开发：计划 → 实现 → 审查；可用 --scout 增加独立侦察" },
+		{ name: "subagents-fix", kind: "fix", description: "问题修复：计划 → 修复 → 审查；可用 --scout 增加独立侦察" },
 		{ name: "subagents-review", kind: "review", description: "只读代码审查" },
 	];
 
@@ -483,9 +521,10 @@ export default function (pi: ExtensionAPI) {
 		pi.registerCommand(command.name, {
 			description: command.description,
 			handler: async (args, ctx) => {
-				const task = await requestTask(command.kind, args, ctx);
+				const parsed = parseWorkflowArgs(command.kind, args);
+				const task = await requestTask(command.kind, parsed.taskArgs, ctx, parsed.includeScout);
 				if (!task) return;
-				const prompt = buildWorkflowPrompt(command.kind, task);
+				const prompt = buildWorkflowPrompt(command.kind, task, { includeScout: parsed.includeScout });
 				sendWorkflowPrompt(pi, ctx, prompt);
 			},
 		});
