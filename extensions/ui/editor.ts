@@ -22,11 +22,14 @@ export class TextAreaEditor extends CustomEditor {
         this.borderColor = this.blankBorder;
         try {
             const lines = super.render(width);
-            return lines.map((line, index) => {
+            const showingAutocomplete = this.isShowingAutocomplete();
+            const rendered = lines.map((line, index) => {
                 if (index === 0) return halfBlockLine(width, 'top');
-                if (index === lines.length - 1) return halfBlockLine(width, 'bottom');
+                if (!showingAutocomplete && index === lines.length - 1) return halfBlockLine(width, 'bottom');
                 return this.bg(padToWidth(line, width));
             });
+            if (showingAutocomplete) rendered.push(halfBlockLine(width, 'bottom'));
+            return rendered;
         } finally {
             this.borderColor = previousBorderColor;
         }

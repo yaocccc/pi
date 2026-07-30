@@ -171,11 +171,13 @@ class PlanTextAreaEditor extends CustomEditor {
         this.borderColor = this.blankBorder;
         try {
             const lines = super.render(width);
+            const showingAutocomplete = this.isShowingAutocomplete();
             const textarea = lines.map((line, index) => {
                 if (index === 0) return halfBgLine('▄', width);
-                if (index === lines.length - 1) return halfBgLine('▀', width);
+                if (!showingAutocomplete && index === lines.length - 1) return halfBgLine('▀', width);
                 return this.bg(padToWidth(line, width));
             });
+            if (showingAutocomplete) textarea.push(halfBgLine('▀', width));
             return [padToWidth(this.hint, width), ...textarea];
         } finally {
             this.borderColor = previousBorderColor;
