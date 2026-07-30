@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Box, Text } from '@earendil-works/pi-tui';
-import { DEBOUNCE_MS, MEMORY_INDEX_PATH, SearchMemoryParams } from './_memory/constants';
-import { commitIndexedMemory } from './_memory/commit';
+import { commitIndexedMemory } from './commit';
+import { DEBOUNCE_MS, MEMORY_INDEX_PATH, SearchMemoryParams } from './constants';
 import {
     compactSearchDisplay,
     duplicateSearchResult,
@@ -9,10 +9,10 @@ import {
     projectName,
     searchCacheKey,
     searchIndexedMemory,
-} from './_memory/indexed';
-import { memoryPrompt, updateMemory } from './_memory/profile';
-import type { SearchCacheEntry } from './_memory/types';
-import { textOf, userText } from './_memory/utils';
+} from './indexed';
+import { memoryPrompt, updateMemory } from './profile';
+import type { SearchCacheEntry } from './types';
+import { textOf, userText } from './utils';
 
 const memoryExtension = (pi: ExtensionAPI) => {
     let queue = Promise.resolve();

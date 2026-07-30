@@ -1,4 +1,5 @@
-import { completeSimple, type Message } from '@earendil-works/pi-ai';
+import type { Message } from '@earendil-works/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { readFile } from 'node:fs/promises';
 import { DEFAULT_MEMORY, MAX_INPUT_CHARS, MAX_MEMORY_CHARS, MEMORY_PATH } from './constants';

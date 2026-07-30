@@ -20,11 +20,10 @@
 ```text
 .
 ├── extensions/          # TypeScript 扩展
-│   ├── _memory/         # 分级记忆实现
+│   ├── memory/          # 分级记忆、记忆工具与 /end 命令
 │   ├── ask-question.ts  # 结构化用户提问
 │   ├── fast.ts          # 模型请求优化
 │   ├── filter-output.ts # 敏感信息过滤
-│   ├── memory.ts        # 记忆工具与 /end 命令
 │   ├── plan.ts          # /plan 工作流
 │   └── ui.ts            # TUI 定制
 ├── skills/              # Agent Skills

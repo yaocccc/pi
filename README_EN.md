@@ -20,11 +20,10 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 ```text
 .
 ├── extensions/          # TypeScript extensions
-│   ├── _memory/         # Tiered memory implementation
+│   ├── memory/          # Tiered memory, memory tools, and /end
 │   ├── ask-question.ts  # Structured user questions
 │   ├── fast.ts          # Model request optimization
 │   ├── filter-output.ts # Sensitive output filtering
-│   ├── memory.ts        # Memory tools and /end
 │   ├── plan.ts          # /plan workflow
 │   └── ui.ts            # TUI customization
 ├── skills/              # Agent Skills

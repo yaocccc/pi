@@ -1,9 +1,9 @@
 {
-  "lastChangelogVersion": "0.82.1",
+  "lastChangelogVersion": "0.83.0",
   "editorPaddingX": 1,
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
-  "hideThinkingBlock": false,
+  "hideThinkingBlock": true,
   "enabledModels": [
     "deepseek-v4-pro",
     "gpt-5.6-sol"
@@ -14,7 +14,8 @@
   "defaultThinkingLevel": "xhigh",
   "packages": [
     "npm:pi-web-access",
-    "npm:@ff-labs/pi-fff"
+    "npm:@ff-labs/pi-fff",
+    "npm:context-mode"
   ],
   "treeFilterMode": "all",
   "enableInstallTelemetry": true,
