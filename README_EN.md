@@ -8,7 +8,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 
 - **Custom UI**: startup logo, editor, message cards, working status, and a compact footer.
 - **Structured questions**: the `ask_question` tool supports single choice, multiple choice, and custom input.
-- **Plan workflow**: `/plan` creates a plan, waits for confirmation, executes and reviews each todo, then performs a final review.
+- **Plan workflow**: `/plan` creates a checklist, waits for confirmation, executes its steps continuously, and performs a final check.
 - **Tiered memory**: automatically maintains user preferences, retrieves indexed memories through `searchmemory`, and persists reusable project knowledge with `/end`.
 - **Sensitive output filtering**: redacts common API keys, tokens, private keys, and connection strings before tool results enter the model context.
 - **Request optimization**: enables the priority service tier for supported OpenAI Codex GPT-5.6 models.
@@ -79,14 +79,14 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 
 | Command | Description |
 | --- | --- |
-| `/plan [task]` | Plan, confirm, execute, and review a task |
+| `/plan [task]` | Create a checklist, confirm it, execute it continuously, and run a final check |
 | `/end` | Finish the task and persist reusable indexed memory |
 | `/reload` | Reload extensions, skills, themes, and keybindings |
 | `/login` | Configure provider authentication |
 | `/model` | Select a model |
 | `Ctrl+Y` | Open the session resume picker |
 
-`searchmemory`, `ask_question`, `plan_set_todos`, and `plan_check_result` are agent tools and do not need to be invoked manually.
+`searchmemory`, `ask_question`, and `plan_check_result` are agent tools and do not need to be invoked manually.
 
 ## Privacy and Security
 

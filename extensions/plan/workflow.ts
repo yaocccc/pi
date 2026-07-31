@@ -1,10 +1,8 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import {
-    executeTodoPrompt,
-    failurePrompt,
+    executeChecklistPrompt,
     finalReviewPrompt,
     planPrompt,
-    reviewTodoPrompt,
     supplementPrompt,
 } from './prompts.ts';
 import type { CheckResult, PlanState } from './types/index.ts';
@@ -25,12 +23,11 @@ const sendAndWait = async (
 
 export const registerPlanCommand = (pi: ExtensionAPI, state: PlanState) => {
     pi.registerCommand('plan', {
-        description: 'Plan 模式：使用当前配置模型规划、逐项执行、检查并最终复查',
+        description: 'Plan 模式：生成 checklist，确认后连续执行并做最终检查',
         handler: async (args, ctx) => {
             const task = (args as string).trim() || await readPlanTask(ctx);
             if (!task?.trim()) return ctx.ui.notify('已取消：无输入。', 'warning');
 
-            state.todos = [];
             state.lastCheck = undefined;
             ctx.ui.notify('正在规划……', 'info');
             await sendAndWait(pi, ctx, planPrompt(task));
@@ -46,39 +43,26 @@ export const registerPlanCommand = (pi: ExtensionAPI, state: PlanState) => {
                     continue;
                 }
 
-                state.todos = [];
                 ctx.ui.notify('正在补充计划……', 'info');
                 await sendAndWait(pi, ctx, supplementPrompt(feedback));
             }
 
-            if (state.todos.length === 0) {
-                ctx.ui.notify('模型未提交 todos。', 'error');
-                return;
+            ctx.ui.notify('正在按 checklist 连续执行……', 'info');
+            await sendAndWait(pi, ctx, executeChecklistPrompt(task));
+
+            state.lastCheck = undefined;
+            ctx.ui.notify('正在做最终检查……', 'info');
+            await sendAndWait(pi, ctx, finalReviewPrompt(task));
+
+            // as 断言：TypeScript 无法追踪闭包内对象属性的 mutation
+            const check = state.lastCheck as CheckResult | undefined;
+            if (!check) {
+                ctx.ui.notify('最终检查未提交 plan_check_result。', 'error');
+            } else if (check.status === 'pass') {
+                ctx.ui.notify('✅ checklist 已完成并通过最终检查。', 'info');
+            } else {
+                ctx.ui.notify(`❌ 最终检查未通过：${check.reason ?? '存在未解决问题。'}`, 'warning');
             }
-
-            for (const [i, todo] of state.todos.entries()) {
-                const idx = i + 1;
-                const total = state.todos.length;
-
-                ctx.ui.notify(`正在执行 todo ${idx}/${total}：${todo.title}`, 'info');
-                await sendAndWait(pi, ctx, executeTodoPrompt(todo, idx, total));
-
-                state.lastCheck = undefined;
-                ctx.ui.notify(`正在检查 todo ${idx}/${total}：${todo.title}`, 'info');
-                await sendAndWait(pi, ctx, reviewTodoPrompt(todo, idx, total));
-
-                // as 断言：TypeScript 无法追踪闭包内对象属性的 mutation
-                if ((state.lastCheck as CheckResult | undefined)?.status !== 'pass') {
-                    ctx.ui.notify(`❌ todo ${idx}/${total} 未通过，正在总结……`, 'warning');
-                    await sendAndWait(pi, ctx, failurePrompt(todo, idx, total, state.lastCheck as CheckResult | undefined));
-                    return;
-                }
-
-                ctx.ui.notify(`✅ todo ${idx}/${total} 通过。`, 'info');
-            }
-
-            ctx.ui.notify('正在做最终总复查……', 'info');
-            await sendAndWait(pi, ctx, finalReviewPrompt);
         },
     });
 };

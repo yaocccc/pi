@@ -5,7 +5,6 @@ import { registerPlanCommand } from './workflow.ts';
 
 export default (pi: ExtensionAPI) => {
     const state: PlanState = {
-        todos: [],
         lastCheck: undefined,
     };
 

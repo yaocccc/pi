@@ -8,7 +8,7 @@
 
 - **自定义界面**：启动 Logo、输入框、消息卡片、工作状态和精简 Footer。
 - **结构化提问**：`ask_question` 工具支持单选、多选和自由输入。
-- **Plan 工作流**：`/plan` 会先生成计划，确认后逐项执行、检查，并进行最终复查。
+- **Plan 工作流**：`/plan` 会生成一份 checklist，确认后按步骤连续执行并进行最终检查。
 - **分级记忆**：自动维护用户偏好；通过 `searchmemory` 按需检索索引记忆；使用 `/end` 沉淀长期有效的项目经验。
 - **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
 - **请求优化**：为支持的 OpenAI Codex GPT-5.6 模型设置 priority service tier。
@@ -79,14 +79,14 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 
 | 命令 | 说明 |
 | --- | --- |
-| `/plan [任务]` | 规划、确认、逐项执行和复查任务 |
+| `/plan [任务]` | 生成 checklist，确认后连续执行并最终检查 |
 | `/end` | 结束当前任务并沉淀可复用的 indexed memory |
 | `/reload` | 重新加载扩展、Skill、主题和快捷键 |
 | `/login` | 配置 Provider 认证 |
 | `/model` | 选择模型 |
 | `Ctrl+Y` | 打开会话恢复界面 |
 
-`searchmemory`、`ask_question`、`plan_set_todos` 和 `plan_check_result` 是供 Agent 调用的工具，不需要手动执行。
+`searchmemory`、`ask_question` 和 `plan_check_result` 是供 Agent 调用的工具，不需要手动执行。
 
 ## 隐私与安全
 

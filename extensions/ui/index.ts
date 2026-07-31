@@ -2,19 +2,20 @@ import { estimateTokens, type ExtensionAPI, type ExtensionContext } from '@earen
 import { TextAreaEditor } from './editor.ts';
 import { NoCostFooter } from './footer.ts';
 import { StartupHeader } from './header.ts';
-import { patchPaddedBackgroundHalfBlocks, patchUserMessageHalfBlocks } from './patches.ts';
+import { patchCollapsedThinkingPreview, patchPaddedBackgroundHalfBlocks, patchUserMessageHalfBlocks } from './patches.ts';
 import type { TokenUsage } from './types.ts';
 import { applyWorkingMessage } from './working-message.ts';
 
 export { TextAreaEditor } from './editor.ts';
 export { NoCostFooter } from './footer.ts';
 export { StartupHeader } from './header.ts';
-export { patchPaddedBackgroundHalfBlocks, patchUserMessageHalfBlocks } from './patches.ts';
+export { patchCollapsedThinkingPreview, patchPaddedBackgroundHalfBlocks, patchUserMessageHalfBlocks } from './patches.ts';
 export type { FooterData, TokenUsage } from './types.ts';
 export { formatElapsed, formatTokenCount, foregroundFromRenderedBox, halfBlockLine, padToWidth, replaceVisibleContent, textAreaBg } from './utils.ts';
 export { applyWorkingMessage, workingMessage } from './working-message.ts';
 
 export default function ui(pi: ExtensionAPI) {
+    patchCollapsedThinkingPreview();
     patchPaddedBackgroundHalfBlocks();
     patchUserMessageHalfBlocks();
 

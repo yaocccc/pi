@@ -3,7 +3,7 @@
   "editorPaddingX": 1,
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
-  "hideThinkingBlock": false,
+  "hideThinkingBlock": true,
   "enabledModels": [
     "deepseek-v4-pro",
     "gpt-5.6-sol"

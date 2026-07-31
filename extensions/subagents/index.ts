@@ -290,7 +290,7 @@ function parseWorkflowArgs(
 	return { taskArgs: match[1]?.trim() ?? "", includeScout: true };
 }
 
-export default function (pi: ExtensionAPI) {
+function registerSubagents(pi: ExtensionAPI) {
 	const agents = loadAgents();
 
 	pi.registerTool({
@@ -529,4 +529,8 @@ export default function (pi: ExtensionAPI) {
 			},
 		});
 	}
+}
+
+export default function (pi: ExtensionAPI) {
+	// registerSubagents(pi);
 }
