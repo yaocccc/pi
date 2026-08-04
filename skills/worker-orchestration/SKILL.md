@@ -1,6 +1,6 @@
 ---
 name: worker-orchestration
-description: Use when deciding whether to delegate coding work to the worker tool, selecting Fast, Standard, Deep, or Critical routing, splitting independent subtasks, defining file boundaries and acceptance criteria, planning parallel work, reviewing worker results, or deciding whether rework or an independent review is needed.
+description: Use for Worker delegation, Fast/Normal/Deep/Max routing, parallel task splitting, file boundaries, review, rework, and acceptance.
 ---
 
 # Worker 编排
@@ -35,7 +35,7 @@ description: Use when deciding whether to delegate coding work to the worker too
 
 ## 先调查再实施
 
-需求有不确定性，但代码事实能够消除歧义时，先调用 `investigate` Worker。事实未确认前不要直接实施。调查结果应压缩为调用链、根因、证据和建议边界。
+需求有不确定性，但代码事实能够消除歧义时，先调用 `scout` Worker。事实未确认前不要直接实施。调查结果应压缩为调用链、根因、证据和建议边界。
 
 ## 任务契约
 
@@ -78,30 +78,30 @@ outputRequirements:
 
 ## 路由
 
-### Fast — Luna + high
+### Fast
 
-用于目标明确、范围小、失败易检测且成本低的局部工作，例如查找符号、短调用链、CSS/文案、明确类型错误、已有测试、机械修改、简单测试。
+用于目标明确、范围小、失败易检测且成本低的局部工作，例如查找符号、短调用链、CSS/文案、明确类型错误、已有测试、机械修改、简单测试，以及功能实现完成后由主 Agent 自动追加的常规 Review。
 
-### Standard — Terra + high
+### Normal
 
-日常默认。用于普通功能、常规 Bug、多相关文件、API、前后端功能、普通重构、单元或集成测试、中等调用链和普通 Review。不确定 Fast 或 Deep 时选 Standard。
+日常默认。用于普通功能、常规 Bug、多相关文件、API、前后端功能、普通重构、单元或集成测试、中等调用链和普通 Review。不确定 Fast 或 Deep 时选 Normal。
 
-### Deep — Sol + high
+### Deep
 
-用于跨模块/服务/语言、根因不明、并发与异步状态、缓存一致性、重试容错、资源生命周期、数据同步、复杂架构、大范围回归、重要 Review、约束很多或 Terra 已失败的任务。文件多本身不等于 Critical。
+用于跨模块/服务/语言、根因不明、并发与异步状态、缓存一致性、重试容错、资源生命周期、数据同步、复杂架构、大范围回归、重要 Review、约束很多或 Normal 已失败的任务。文件多本身不等于 Max。
 
-### Critical — Sol + xhigh
+### Max
 
-只用于风险升级：资金、私钥/助记词逻辑、钱包签名、重放、授权与权限边界、合约资金安全、不可恢复数据破坏、核心数据一致性、高风险终审，或用户明确要求 xhigh。复杂但低风险仍使用 Sol + high。
-
-`max` 不参与自动路由。只有用户明确要求 max/最高思考强度/Sol + max 时，任务才可设置 `thinking: max` 和 `userExplicitMax: true`。不支持时接受 `unsupported`，不得伪装或静默改成 xhigh。
+仅当用户主动明确要求 `Max`、最高强度或同等表述时使用，并设置 `userExplicitMax: true`。不得仅因任务涉及资金、私钥、签名、权限、不可恢复数据或其他高风险边界而自动选择 Max；这些任务默认使用 Deep。Max 不参与自动路由，也不得静默降级。各档位的模型与 thinking 仅由 `worker-settings.json` 配置。
 
 ## Review 与返工
 
 - 小任务：Worker → 主 Agent 验收。
 - 普通任务：Worker → 主 Agent 验收。
 - 复杂或重要任务：实现 Worker → 独立 Review Worker → Fix Worker → 主 Agent 验收。
-- 高风险任务：实现 Worker → Critical Review Worker → Fix Worker → 独立终审 → 主 Agent 验收。
+- 高风险任务：实现 Worker → Deep Review Worker → Fix Worker → 独立 Deep 终审 → 主 Agent 验收；只有用户主动明确要求 Max/最高强度时才升级为 Max。
+
+功能实现完成后，如果 Review 是主 Agent 自动追加而非用户明确要求，默认使用 `preset: fast`；具体模型和 thinking 读取 `worker-settings.json`。不得为这种常规自动 Review 使用 Max。高风险边界需要加强审查时最多自动升级到 Deep；只有用户主动明确要求更强审查时才可使用 Max。
 
 不要让所有小任务默认走完整 Review 流程。Review finding 必须有文件、位置、证据、影响、建议和置信度；只修复主 Agent 已确认的问题。
 
@@ -116,4 +116,4 @@ Worker 声称完成不代表任务完成。主 Agent 至少检查：
 5. 是否有 blocker、越界写入、模型降级或未解析输出；
 6. 是否需要定向返工或独立 Review。
 
-批量结果彼此独立；一个失败不得掩盖其他任务。任何 `blocked`、`failed`、Critical 降级、越界文件或实际模型不匹配都不能直接验收为成功。
+批量结果彼此独立；一个失败不得掩盖其他任务。任何 `blocked`、`failed`、Max 降级、越界文件或实际模型不匹配都不能直接验收为成功。

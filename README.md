@@ -28,10 +28,10 @@
 │   ├── plan/            # /plan 工作流
 │   ├── subagents/       # 中文 Subagents 工作流
 │   ├── ui/              # TUI 定制
-│   └── worker.ts        # 通用 Worker 工具
+│   └── worker/          # 通用 Worker 工具
 ├── agents/worker.md     # Worker 执行契约
 ├── skills/              # Agent Skills 与 Worker 编排规则
-├── worker-routing.json  # Worker 模型与并发配置
+├── worker-settings.json # Worker 模型与并发配置
 ├── themes/pi.json       # 自定义主题
 ├── keybindings.json     # 快捷键
 └── settings.json        # Pi 全局设置
@@ -94,14 +94,14 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 
 ## Worker
 
-`worker` 使用独立、无会话的 Pi 子进程执行任务，支持 Fast、Standard、Deep 和 Critical 四档路由。Worker 不限制工具列表，并会加载全局扩展，因此后续扩展提供的工具也可直接使用；`PI_WORKER_DEPTH` 仍会阻止 Worker 递归委派。只读任务可并行；批量任务包含写入时会顺序执行。写入任务必须声明允许路径，并通过 Git、文件系统快照和符号链接边界检查。模型、thinking、并发、超时和输出上限可在 `worker-routing.json` 中调整。
+`worker` 使用独立、无会话的 Pi 子进程执行任务，支持 Fast、Normal、Deep 和 Max 四档路由。Max 仅在用户主动明确要求时启用；其他高风险任务最多自动使用 Deep。每个档位的完整模型 ID 和 thinking 直接配置在 `worker-settings.json`。Worker 不限制工具列表，并会加载全局扩展，因此后续扩展提供的工具也可直接使用；`PI_WORKER_DEPTH` 仍会阻止 Worker 递归委派。只读任务可并行；批量任务包含写入时会顺序执行。写入任务必须声明允许路径，并通过 Git、文件系统快照和符号链接边界检查。模型、thinking、并发、超时和输出上限可在 `worker-settings.json` 中调整。
 
 Worker 的主要文件为：
 
-- `extensions/worker.ts`：工具实现、路由、进程管理、安全校验和 TUI。
+- `extensions/worker/index.ts`：工具入口与执行编排；同目录模块负责路由、进程、安全校验和 TUI。
 - `skills/worker-orchestration/SKILL.md`：主 Agent 的拆分、委派、Review 与验收规则。
 - `agents/worker.md`：Worker 的执行纪律和结构化返回格式。
-- `worker-routing.json`：模型、thinking、并发、重试和超时配置。
+- `worker-settings.json`：模型、thinking、并发、超时和最终输出上限配置。
 
 ## 隐私与安全
 
