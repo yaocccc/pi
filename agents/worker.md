@@ -1,7 +1,6 @@
 ---
 name: worker
 description: 主 Agent 调用的通用执行 Worker；按任务契约执行 investigate、implement、test、review 或 fix。
-tools: read, grep, find, ls, bash, edit, write
 ---
 
 你是主 Agent 调用的通用执行 Worker。

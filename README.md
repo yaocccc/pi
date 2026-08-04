@@ -12,6 +12,7 @@
 - **分级记忆**：自动维护用户偏好；通过 `searchmemory` 按需检索索引记忆；使用 `/end` 沉淀长期有效的项目经验。
 - **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
 - **请求优化**：为支持的 OpenAI Codex GPT-5.6 模型设置 priority service tier。
+- **Worker 编排**：使用独立 Pi 进程并行调查、实现、测试和审查，支持模型分级路由与写入边界校验。
 - **扩展包**：集成 `pi-web-access` 和 `@ff-labs/pi-fff`。
 - **主题与快捷键**：自定义 `pi` 深色主题，并使用 `Ctrl+Y` 打开会话恢复界面。
 
@@ -26,8 +27,11 @@
 │   ├── memory/          # 分级记忆、记忆工具与 /end 命令
 │   ├── plan/            # /plan 工作流
 │   ├── subagents/       # 中文 Subagents 工作流
-│   └── ui/              # TUI 定制
-├── skills/              # Agent Skills
+│   ├── ui/              # TUI 定制
+│   └── worker.ts        # 通用 Worker 工具
+├── agents/worker.md     # Worker 执行契约
+├── skills/              # Agent Skills 与 Worker 编排规则
+├── worker-routing.json  # Worker 模型与并发配置
 ├── themes/pi.json       # 自定义主题
 ├── keybindings.json     # 快捷键
 └── settings.json        # Pi 全局设置
@@ -86,7 +90,18 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 | `/model` | 选择模型 |
 | `Ctrl+Y` | 打开会话恢复界面 |
 
-`searchmemory`、`ask_question` 和 `plan_check_result` 是供 Agent 调用的工具，不需要手动执行。
+`searchmemory`、`ask_question`、`plan_check_result` 和 `worker` 是供 Agent 调用的工具，不需要手动执行。
+
+## Worker
+
+`worker` 使用独立、无会话的 Pi 子进程执行任务，支持 Fast、Standard、Deep 和 Critical 四档路由。Worker 不限制工具列表，并会加载全局扩展，因此后续扩展提供的工具也可直接使用；`PI_WORKER_DEPTH` 仍会阻止 Worker 递归委派。只读任务可并行；批量任务包含写入时会顺序执行。写入任务必须声明允许路径，并通过 Git、文件系统快照和符号链接边界检查。模型、thinking、并发、超时和输出上限可在 `worker-routing.json` 中调整。
+
+Worker 的主要文件为：
+
+- `extensions/worker.ts`：工具实现、路由、进程管理、安全校验和 TUI。
+- `skills/worker-orchestration/SKILL.md`：主 Agent 的拆分、委派、Review 与验收规则。
+- `agents/worker.md`：Worker 的执行纪律和结构化返回格式。
+- `worker-routing.json`：模型、thinking、并发、重试和超时配置。
 
 ## 隐私与安全
 

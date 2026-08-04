@@ -24,7 +24,8 @@
       "enabled": true,
       "supportedThinking": [
         "high",
-        "xhigh"
+        "xhigh",
+        "max"
       ]
     }
   },

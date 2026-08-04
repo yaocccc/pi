@@ -90,6 +90,8 @@ interface WorkspaceSnapshot {
 	cwd: string;
 	statusPaths: Set<string>;
 	files: Map<string, { worktree: string | null; index: string | null }>;
+	fsEntries?: Map<string, string>;
+	externalSymlinks: string[];
 }
 
 type WorkerUiStatus = "queued" | "running" | "completed" | "blocked" | "failed";
@@ -180,6 +182,11 @@ let runtimeShuttingDown = false;
 let activeSlots = 0;
 const slotWaiters: Array<() => void> = [];
 const UI_ACTIVITY_LIMIT = 20;
+const MAX_FS_SNAPSHOT_ENTRIES = 250_000;
+const MAX_IGNORED_HASH_FILE_BYTES = 1024 * 1024;
+const MAX_IGNORED_HASH_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_WORKER_EVENT_LINE_BYTES = 8 * 1024 * 1024;
+const MAX_WORKER_STDOUT_BYTES = 64 * 1024 * 1024;
 const UI_RECENT_ACTIVITY_LIMIT = 5;
 const UI_OBJECTIVE_CAP = 180;
 const UI_DETAIL_CAP = 160;
@@ -225,7 +232,7 @@ const TaskSchema = Type.Object({
 	acceptanceCriteria: Type.Optional(Type.Array(Type.String())),
 	verificationCommands: Type.Optional(Type.Array(Type.String())),
 	outputRequirements: Type.Optional(Type.Array(Type.String())),
-	cwd: Type.Optional(Type.String()),
+	cwd: Type.Optional(Type.String({ description: "Relative subdirectory within the main agent cwd; absolute and escaping paths are rejected" })),
 	timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 3_600_000 })),
 });
 
@@ -236,11 +243,68 @@ const InputSchema = Type.Object({
 });
 
 function sanitizeUiText(value: string): string {
-	return value
+	const stripped = value
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, " ")
+		.replace(/-----BEGIN [^-\r\n]*(?:PRIVATE KEY|SECRET)[^-\r\n]*-----[\s\S]*?-----END [^-\r\n]*(?:PRIVATE KEY|SECRET)[^-\r\n]*-----/gi, "[PEM 已隐藏]")
 		.replace(/\b((?:authorization|cookie|x-auth)\s*:\s*)[^'"\r\n]+/gi, "$1[已隐藏]")
-		.replace(/\b((?:[a-z0-9]+[_-])*(?:token|secret|password|passwd|api[-_]?key|private[-_]?key|mnemonic|credential|auth|authorization|cookie)(?:[_-][a-z0-9]+)*\s*[:=]\s*)[^\s,;&]+/gi, "$1[已隐藏]");
+		.replace(/\b((?:[a-z0-9]+[_-])*(?:token|secret|password|passwd|api[-_]?key|private[-_]?key|mnemonic|credential|auth|authorization|cookie)(?:[_-][a-z0-9]+)*\s*[:=]\s*)[^\s,;&]+/gi, "$1[已隐藏]")
+		.replace(/\b(?:[a-f0-9]{64,}|[A-Za-z0-9+/_=-]{64,})\b/g, "[高熵内容已隐藏]");
+	const compact = stripped.trim();
+	const words = compact.split(/\s+/);
+	if ([12, 15, 18, 21, 24].includes(words.length) && words.every((word) => /^[a-z]{3,10}$/.test(word))) return "[疑似助记词已隐藏]";
+	return stripped;
+}
+
+function sanitizeStructuredValue(value: unknown, key = "", depth = 0): unknown {
+	if (UI_SENSITIVE_KEY.test(key)) return "[已隐藏]";
+	if (typeof value === "string") return truncateUtf8Text(sanitizeUiText(value), 16 * 1024);
+	if (value === null || typeof value !== "object") return value;
+	if (depth >= 12) return "[内容层级过深]";
+	if (Array.isArray(value)) return value.map((item) => sanitizeStructuredValue(item, "", depth + 1));
+	return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([nestedKey, nested]) => [nestedKey, sanitizeStructuredValue(nested, nestedKey, depth + 1)]));
+}
+
+function compactWorkerResult(result: Record<string, any>): Record<string, any> {
+	const take = (key: string, limit: number) => Array.isArray(result[key]) ? result[key].slice(0, limit) : [];
+	return {
+		status: result.status,
+		execution: result.execution,
+		summary: take("summary", 12),
+		changed_files: take("changed_files", 200),
+		validation: take("validation", 50),
+		acceptance: take("acceptance", 50),
+		findings: take("findings", 50),
+		risks: take("risks", 30),
+		out_of_scope: take("out_of_scope", 30),
+		recommended_next_action: take("recommended_next_action", 20),
+	};
+}
+
+function serializePayload(payload: Record<string, any>, maxBytes: number): { payload: Record<string, any>; text: string } {
+	let bounded = payload;
+	let text = JSON.stringify(bounded, null, 2);
+	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
+	bounded = Array.isArray(payload.results)
+		? { status: payload.status, truncated: true, results: payload.results.map((item: Record<string, any>) => compactWorkerResult(item)) }
+		: { ...compactWorkerResult(payload), truncated: true };
+	text = JSON.stringify(bounded, null, 2);
+	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
+	bounded = Array.isArray(payload.results)
+		? { status: payload.status, truncated: true, results: payload.results.map((item: Record<string, any>, index: number) => ({ index, status: item.status })) }
+		: { status: payload.status, truncated: true, summary: ["Worker 结果超过输出上限，详细字段已省略"] };
+	text = JSON.stringify(bounded, null, 2);
+	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
+	bounded = { status: "failed", truncated: true, summary: ["Worker 结果超过输出上限"] };
+	return { payload: bounded, text: JSON.stringify(bounded) };
+}
+
+function truncateUtf8Text(value: string, maxBytes: number): string {
+	const bytes = Buffer.from(value, "utf8");
+	if (bytes.length <= maxBytes) return value;
+	let end = maxBytes;
+	while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+	return bytes.subarray(0, end).toString("utf8");
 }
 
 function uiSnippet(value: string, maxLength: number): string {
@@ -487,6 +551,19 @@ async function loadRoutingConfig(ctx: ExtensionContext): Promise<{ config: Routi
 	return { config, warnings, path: configPath };
 }
 
+function isPathInside(base: string, candidate: string): boolean {
+	const relative = path.relative(base, candidate);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveTaskCwd(baseCwd: string, requested?: string): string {
+	const base = fs.realpathSync(baseCwd);
+	if (requested && path.isAbsolute(requested)) throw new Error(`cwd 必须是当前工作区内的相对路径: ${requested}`);
+	const candidate = fs.realpathSync(path.resolve(base, requested || "."));
+	if (!isPathInside(base, candidate)) throw new Error(`cwd 解析后越出当前工作区: ${requested ?? "."}`);
+	return candidate;
+}
+
 function validateTask(task: WorkerTask, baseCwd: string): string[] {
 	const errors: string[] = [];
 	if (!MODES.includes(task.mode)) errors.push(`无效 mode: ${String(task.mode)}`);
@@ -501,8 +578,12 @@ function validateTask(task: WorkerTask, baseCwd: string): string[] {
 			if (!pattern.trim() || path.isAbsolute(pattern) || pattern.split(/[\\/]+/).includes("..")) errors.push(`${label} 只能包含 cwd 下的相对路径或 glob: ${pattern}`);
 		}
 	}
-	const cwd = path.resolve(baseCwd, task.cwd || ".");
-	if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) errors.push(`cwd 不是现有目录: ${cwd}`);
+	try {
+		const cwd = resolveTaskCwd(baseCwd, task.cwd);
+		if (!fs.statSync(cwd).isDirectory()) errors.push(`cwd 不是目录: ${cwd}`);
+	} catch (error) {
+		errors.push(error instanceof Error ? error.message : String(error));
+	}
 	return errors;
 }
 
@@ -601,23 +682,10 @@ function matchesAny(file: string, patterns: string[]): boolean {
 	return patterns.some((pattern) => globToRegExp(pattern).test(normalized));
 }
 
-function staticGlobPrefix(pattern: string): string {
-	const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//, "");
-	const index = normalized.search(/[?*[]/);
-	return (index < 0 ? normalized : normalized.slice(0, index)).replace(/\/$/, "");
-}
-
-function writeTasksMayOverlap(a: WorkerTask, b: WorkerTask): boolean {
-	if (!WRITE_MODES.has(a.mode) || !WRITE_MODES.has(b.mode)) return false;
-	if (!a.allowedPaths?.length || !b.allowedPaths?.length) return true;
-	const aCwd = path.resolve(a.cwd || ".");
-	const bCwd = path.resolve(b.cwd || ".");
-	if (aCwd !== bCwd) return false;
-	return a.allowedPaths.some((left) => b.allowedPaths!.some((right) => {
-		const lp = staticGlobPrefix(left);
-		const rp = staticGlobPrefix(right);
-		return !lp || !rp || lp === rp || lp.startsWith(`${rp}/`) || rp.startsWith(`${lp}/`);
-	}));
+function batchRequiresSerial(tasks: WorkerTask[]): boolean {
+	// All tasks observe the same Git worktree. A concurrent writer can otherwise
+	// be attributed to a read-only sibling or race another writer's snapshot.
+	return tasks.length > 1 && tasks.some((task) => WRITE_MODES.has(task.mode));
 }
 
 async function runCommand(command: string, args: string[], cwd: string, maxBytes = 4 * 1024 * 1024): Promise<CommandResult> {
@@ -648,6 +716,51 @@ async function gitChangedPaths(gitRoot: string): Promise<Set<string>> {
 	return new Set(results.flatMap((result) => nulPaths(result.stdout)));
 }
 
+async function gitIgnoredPaths(gitRoot: string): Promise<Set<string>> {
+	const result = await runCommand("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], gitRoot, 32 * 1024 * 1024);
+	return result.code === 0 ? new Set(nulPaths(result.stdout)) : new Set();
+}
+
+function scanWorkspace(gitRoot: string, ignoredPaths: Set<string>): { entries: Map<string, string>; externalSymlinks: string[] } {
+	const entries = new Map<string, string>();
+	const externalSymlinks: string[] = [];
+	const pending = [gitRoot];
+	let ignoredHashBytes = 0;
+	while (pending.length) {
+		const directory = pending.pop()!;
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			const fullPath = path.join(directory, entry.name);
+			const relativePath = path.relative(gitRoot, fullPath).replaceAll("\\", "/");
+			if (relativePath === ".git" || relativePath.startsWith(".git/")) continue;
+			const stat = fs.lstatSync(fullPath, { bigint: true });
+			if (stat.isDirectory()) {
+				pending.push(fullPath);
+				continue;
+			}
+			if (entries.size >= MAX_FS_SNAPSHOT_ENTRIES) throw new Error(`工作区文件超过安全快照上限 ${MAX_FS_SNAPSHOT_ENTRIES}`);
+			// ctime/ino cannot be restored by an unprivileged Worker the way mtime can,
+			// so large ignored files remain detectable even after hash budget fallback.
+			let signature = `${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}`;
+			if (stat.isSymbolicLink()) {
+				const link = fs.readlinkSync(fullPath);
+				try {
+					const target = fs.realpathSync(fullPath);
+					if (!isPathInside(gitRoot, target)) externalSymlinks.push(relativePath);
+					const targetStat = fs.statSync(target, { bigint: true });
+					signature = `link:${link}:${targetStat.mode}:${targetStat.size}:${targetStat.mtimeNs}:${targetStat.ctimeNs}:${targetStat.ino}:${targetStat.dev}`;
+				} catch {
+					signature = `link:${link}:broken`;
+				}
+			} else if (stat.isFile() && ignoredPaths.has(relativePath) && stat.size <= BigInt(MAX_IGNORED_HASH_FILE_BYTES) && ignoredHashBytes + Number(stat.size) <= MAX_IGNORED_HASH_TOTAL_BYTES) {
+				ignoredHashBytes += Number(stat.size);
+				signature += `:${fileHash(fullPath) ?? "unreadable"}`;
+			}
+			entries.set(relativePath, signature);
+		}
+	}
+	return { entries, externalSymlinks: [...new Set(externalSymlinks)].sort() };
+}
+
 function fileHash(filePath: string): string | null {
 	try {
 		if (!fs.statSync(filePath).isFile()) return null;
@@ -662,7 +775,7 @@ async function indexHash(gitRoot: string, relativePath: string): Promise<string 
 	return result.code === 0 ? result.stdout.toString("utf8").trim() : null;
 }
 
-async function snapshotWorkspace(cwd: string, includePaths: Set<string> = new Set()): Promise<WorkspaceSnapshot> {
+async function snapshotWorkspace(cwd: string, includePaths: Set<string> = new Set(), includeFilesystem = false): Promise<WorkspaceSnapshot> {
 	const rootResult = await runCommand("git", ["rev-parse", "--show-toplevel"], cwd, 4096);
 	if (rootResult.code !== 0) throw new Error("写入 Worker 需要 Git 工作区以安全校验变更范围");
 	const gitRoot = fs.realpathSync(rootResult.stdout.toString("utf8").trim());
@@ -672,22 +785,37 @@ async function snapshotWorkspace(cwd: string, includePaths: Set<string> = new Se
 	for (const relativePath of paths) {
 		files.set(relativePath, { worktree: fileHash(path.join(gitRoot, relativePath)), index: await indexHash(gitRoot, relativePath) });
 	}
-	return { gitRoot, cwd, statusPaths, files };
+	let fsEntries: Map<string, string> | undefined;
+	let externalSymlinks: string[] = [];
+	if (includeFilesystem) {
+		const scanned = scanWorkspace(gitRoot, await gitIgnoredPaths(gitRoot));
+		fsEntries = scanned.entries;
+		externalSymlinks = scanned.externalSymlinks;
+	}
+	return { gitRoot, cwd, statusPaths, files, fsEntries, externalSymlinks };
 }
 
-async function changedSince(before: WorkspaceSnapshot): Promise<{ changed: string[]; after: WorkspaceSnapshot }> {
+async function changedSince(before: WorkspaceSnapshot): Promise<{ changed: string[]; after: WorkspaceSnapshot; externalSymlinks: string[] }> {
 	const currentPaths = await gitChangedPaths(before.gitRoot);
 	const union = new Set([...before.statusPaths, ...currentPaths]);
-	const after = await snapshotWorkspace(before.cwd, union);
-	const changed: string[] = [];
+	const after = await snapshotWorkspace(before.cwd, union, Boolean(before.fsEntries));
+	const changed = new Set<string>();
 	for (const relativePath of union) {
 		const old = before.files.get(relativePath) ?? { worktree: fileHash(path.join(before.gitRoot, relativePath)), index: await indexHash(before.gitRoot, relativePath) };
 		const now = after.files.get(relativePath)!;
 		if (old.worktree !== now.worktree || old.index !== now.index || before.statusPaths.has(relativePath) !== currentPaths.has(relativePath)) {
-			changed.push(path.relative(before.cwd, path.join(before.gitRoot, relativePath)).replaceAll("\\", "/"));
+			changed.add(path.relative(before.cwd, path.join(before.gitRoot, relativePath)).replaceAll("\\", "/"));
 		}
 	}
-	return { changed: [...new Set(changed)].sort(), after };
+	if (before.fsEntries && after.fsEntries) {
+		const fsPaths = new Set([...before.fsEntries.keys(), ...after.fsEntries.keys()]);
+		for (const relativePath of fsPaths) {
+			if (before.fsEntries.get(relativePath) !== after.fsEntries.get(relativePath)) {
+				changed.add(path.relative(before.cwd, path.join(before.gitRoot, relativePath)).replaceAll("\\", "/"));
+			}
+		}
+	}
+	return { changed: [...changed].sort(), after, externalSymlinks: after.externalSymlinks };
 }
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -719,13 +847,44 @@ function killAllChildren(force = false): void {
 	}
 }
 
-async function acquireSlot(limit: number): Promise<() => void> {
-	while (activeSlots >= limit) await new Promise<void>((resolve) => slotWaiters.push(resolve));
-	activeSlots++;
-	return () => {
-		activeSlots--;
-		slotWaiters.shift()?.();
-	};
+function releaseSlot(): void {
+	activeSlots = Math.max(0, activeSlots - 1);
+	for (const waiter of [...slotWaiters]) waiter();
+}
+
+async function acquireSlot(limit: number, signal: AbortSignal | undefined, timeoutMs: number): Promise<() => void> {
+	if (signal?.aborted) throw new Error("Worker 在等待执行槽位时已取消");
+	if (activeSlots < limit) {
+		activeSlots++;
+		return releaseSlot;
+	}
+	return await new Promise<() => void>((resolve, reject) => {
+		let settled = false;
+		const cleanup = () => {
+			const index = slotWaiters.indexOf(wake);
+			if (index >= 0) slotWaiters.splice(index, 1);
+			signal?.removeEventListener("abort", abortHandler);
+			clearTimeout(timer);
+		};
+		const fail = (message: string) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(new Error(message));
+		};
+		const wake = () => {
+			if (settled || activeSlots >= limit) return;
+			settled = true;
+			cleanup();
+			activeSlots++;
+			resolve(releaseSlot);
+		};
+		const abortHandler = () => fail("Worker 在等待执行槽位时已取消");
+		const timer = setTimeout(() => fail("Worker 等待执行槽位超时"), timeoutMs);
+		timer.unref();
+		slotWaiters.push(wake);
+		signal?.addEventListener("abort", abortHandler, { once: true });
+	});
 }
 
 function workerPromptBody(): string {
@@ -771,7 +930,6 @@ async function runPiWorker(
 	concurrencyLimit: number,
 	onProgress?: (progress: ChildProgress) => void,
 ): Promise<ChildResult> {
-	const tools = READ_ONLY_MODES.has(task.mode) ? ["read", "grep", "find", "ls"] : ["read", "grep", "find", "ls", "bash", "edit", "write"];
 	const activities: WorkerUiActivity[] = [];
 	const seenToolIds = new Set<string>();
 	let phase = "等待执行槽位";
@@ -830,12 +988,32 @@ async function runPiWorker(
 
 	emit(true);
 	const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-worker-"));
-	const systemPath = path.join(tempDir, "worker-system.md");
-	await fs.promises.writeFile(systemPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
-	const args = ["--mode", "json", "--print", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--model", route.modelId, "--thinking", route.thinking, "--tools", tools.join(","), "--append-system-prompt", systemPath, prompt];
-	const invocation = getPiInvocation(args);
-	const release = await acquireSlot(concurrencyLimit);
+	let release: (() => void) | undefined;
 	try {
+		const systemPath = path.join(tempDir, "worker-system.md");
+		await fs.promises.writeFile(systemPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
+		const args = ["--mode", "json", "--print", "--no-session", "--no-skills", "--no-context-files", "--model", route.modelId, "--thinking", route.thinking, "--append-system-prompt", systemPath, prompt];
+		const invocation = getPiInvocation(args);
+		const deadline = Date.now() + timeoutMs;
+		try {
+			release = await acquireSlot(concurrencyLimit, signal, timeoutMs);
+		} catch (error) {
+			const aborted = Boolean(signal?.aborted);
+			const message = error instanceof Error ? error.message : String(error);
+			setPhase(aborted ? "已取消" : "等待执行槽位超时", "failed");
+			return {
+				exitCode: 1,
+				stderr: "",
+				assistantText: "",
+				errorMessage: message,
+				aborted,
+				timedOut: !aborted,
+				truncated: false,
+				activities: activities.map((item) => ({ ...item })),
+				toolCalls,
+				usage: usageSnapshot(),
+			};
+		}
 		return await new Promise<ChildResult>((resolve) => {
 			let stdoutBuffer = "";
 			let stderr = "";
@@ -848,6 +1026,7 @@ async function runPiWorker(
 			let aborted = false;
 			let timedOut = false;
 			let settled = false;
+			let stdoutBytes = 0;
 			setPhase("启动独立 Worker");
 			const child = spawn(invocation.command, invocation.args, {
 				cwd,
@@ -875,16 +1054,16 @@ async function runPiWorker(
 				usage.turns = Math.max(usage.turns, settledUsage.turns);
 				resolve({ exitCode, stderr: stderr.slice(-16_384), assistantText, actualProvider, actualModel, stopReason, errorMessage, aborted, timedOut, truncated, activities: activities.map((item) => ({ ...item })), toolCalls, usage });
 			};
-			const terminate = (reason: "abort" | "timeout") => {
+			const terminate = (reason: "abort" | "timeout" | "output") => {
 				if (settled) return;
 				aborted = reason === "abort";
 				timedOut = reason === "timeout";
-				setPhase(reason === "abort" ? "正在取消" : "正在终止超时任务", "failed");
+				setPhase(reason === "abort" ? "正在取消" : reason === "timeout" ? "正在终止超时任务" : "正在终止超限输出", "failed");
 				killProcessTree(child, "SIGTERM");
 				setTimeout(() => { if (!settled) killProcessTree(child, "SIGKILL"); }, 3_000).unref();
 			};
 			const abortHandler = () => terminate("abort");
-			const timeout = setTimeout(() => terminate("timeout"), timeoutMs);
+			const timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
 			if (signal?.aborted) abortHandler(); else signal?.addEventListener("abort", abortHandler, { once: true });
 			const processEvent = (event: any) => {
 				if (event.type === "turn_start") {
@@ -912,7 +1091,14 @@ async function runPiWorker(
 				}
 				if (event.type === "message_end" && event.message?.role === "assistant") {
 					assistantText = extractText(event.message) || assistantText;
-					if (Buffer.byteLength(assistantText, "utf8") > maxOutputBytes) truncated = true;
+					const assistantBytes = Buffer.byteLength(assistantText, "utf8");
+					if (assistantBytes > maxOutputBytes) truncated = true;
+					if (assistantBytes > maxOutputBytes * 4) {
+						assistantText = truncateUtf8Text(assistantText, maxOutputBytes * 4);
+						errorMessage = `Worker 最终输出超过 ${maxOutputBytes * 4} 字节安全上限`;
+						terminate("output");
+						return;
+					}
 					actualProvider = event.message.provider || actualProvider;
 					actualModel = event.message.model || actualModel;
 					stopReason = event.message.stopReason || stopReason;
@@ -951,11 +1137,31 @@ async function runPiWorker(
 				}
 			};
 			child.stdout.on("data", (chunk: Buffer) => {
+				stdoutBytes += chunk.length;
+				if (stdoutBytes > MAX_WORKER_STDOUT_BYTES) {
+					errorMessage = `Worker 事件流超过 ${MAX_WORKER_STDOUT_BYTES} 字节安全上限`;
+					truncated = true;
+					terminate("output");
+					return;
+				}
 				stdoutBuffer += chunk.toString("utf8");
 				const lines = stdoutBuffer.split("\n");
 				stdoutBuffer = lines.pop() || "";
+				if (Buffer.byteLength(stdoutBuffer, "utf8") > MAX_WORKER_EVENT_LINE_BYTES) {
+					errorMessage = `Worker 协议行超过 ${MAX_WORKER_EVENT_LINE_BYTES} 字节安全上限`;
+					truncated = true;
+					stdoutBuffer = "";
+					terminate("output");
+					return;
+				}
 				for (const line of lines) {
 					if (!line.trim()) continue;
+					if (Buffer.byteLength(line, "utf8") > MAX_WORKER_EVENT_LINE_BYTES) {
+						errorMessage = `Worker 协议行超过 ${MAX_WORKER_EVENT_LINE_BYTES} 字节安全上限`;
+						truncated = true;
+						terminate("output");
+						break;
+					}
 					try { processEvent(JSON.parse(line)); }
 					catch { /* ignore non-JSON diagnostics */ }
 				}
@@ -970,7 +1176,7 @@ async function runPiWorker(
 			});
 		});
 	} finally {
-		release();
+		release?.();
 		await fs.promises.rm(tempDir, { recursive: true, force: true });
 	}
 }
@@ -1025,7 +1231,7 @@ function baseExecution(task: WorkerTask, route: Route | null, attempt: number, e
 }
 
 async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: string[], ctx: ExtensionContext, signal: AbortSignal | undefined, onProgress?: (patch: Partial<WorkerUiTask>) => void): Promise<Record<string, any>> {
-	const cwd = fs.realpathSync(path.resolve(ctx.cwd, task.cwd || "."));
+	const cwd = resolveTaskCwd(ctx.cwd, task.cwd);
 	let route: Route;
 	onProgress?.({ status: "running", phase: "解析模型路由" });
 	try {
@@ -1037,10 +1243,13 @@ async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: st
 	}
 	let before: WorkspaceSnapshot | null = null;
 	try {
-		if (WRITE_MODES.has(task.mode) || READ_ONLY_MODES.has(task.mode)) before = await snapshotWorkspace(cwd);
+		if (WRITE_MODES.has(task.mode) || READ_ONLY_MODES.has(task.mode)) before = await snapshotWorkspace(cwd, new Set(), WRITE_MODES.has(task.mode));
+		if (WRITE_MODES.has(task.mode) && before?.externalSymlinks.length) {
+			return { status: "blocked", execution: baseExecution(task, route, 0, null, warnings), summary: [`工作区包含指向外部的符号链接，无法安全执行写入：${before.externalSymlinks.join(", ")}`], changed_files: [], validation: [], acceptance: [], findings: [], risks: ["外部符号链接可能绕过工作区边界"], out_of_scope: [], recommended_next_action: ["移除外部符号链接或改用隔离 worktree"] };
+		}
 		onProgress?.({ phase: "工作区检查完成" });
 	} catch (error) {
-		if (WRITE_MODES.has(task.mode)) return { status: "blocked", execution: baseExecution(task, route, 0, null, warnings), summary: [error instanceof Error ? error.message : String(error)], changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: ["在 Git 工作区中运行写入任务"] };
+		if (WRITE_MODES.has(task.mode)) return { status: "blocked", execution: baseExecution(task, route, 0, null, warnings), summary: [error instanceof Error ? error.message : String(error)], changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: ["在可安全快照的 Git 工作区中运行写入任务"] };
 	}
 	const systemPrompt = workerPromptBody();
 	let attempt = 1;
@@ -1073,17 +1282,19 @@ async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: st
 	}
 	onProgress?.({ phase: "校验结果与修改范围", activities: child.activities, toolCalls: child.toolCalls, usage: cumulativeUsage });
 	const parsed = parseStructuredResult(child.assistantText);
-	const delta = before ? await changedSince(before) : { changed: [] as string[] };
+	const delta = before ? await changedSince(before) : { changed: [] as string[], externalSymlinks: [] as string[] };
 	const changedFiles = delta.changed;
 	const forbidden = changedFiles.filter((file) => matchesAny(file, task.forbiddenPaths ?? []));
 	const outsideAllowed = WRITE_MODES.has(task.mode) ? changedFiles.filter((file) => !matchesAny(file, task.allowedPaths ?? [])) : changedFiles;
+	const externalSymlinks = WRITE_MODES.has(task.mode) ? delta.externalSymlinks : [];
 	const actualMismatch = Boolean(child.actualProvider && child.actualModel && `${child.actualProvider}/${child.actualModel}` !== route.modelId);
 	let status: "completed" | "blocked" | "failed" = parsed?.status === "completed" || parsed?.status === "blocked" || parsed?.status === "failed" ? parsed.status : "failed";
 	const risks = Array.isArray(parsed?.risks) ? parsed.risks : [];
-	if (runtimeShuttingDown || child.aborted || child.timedOut || child.exitCode !== 0 || child.errorMessage || !parsed || actualMismatch || forbidden.length || outsideAllowed.length) status = isBlockedFailure(child) ? "blocked" : "failed";
+	if (runtimeShuttingDown || child.aborted || child.timedOut || child.exitCode !== 0 || child.errorMessage || !parsed || actualMismatch || forbidden.length || outsideAllowed.length || externalSymlinks.length) status = isBlockedFailure(child) ? "blocked" : "failed";
 	if (route.resolvedPreset === "critical" && route.degraded) status = "blocked";
 	if (forbidden.length) risks.push(`修改了 forbiddenPaths: ${forbidden.join(", ")}`);
 	if (outsideAllowed.length) risks.push(`${READ_ONLY_MODES.has(task.mode) ? "只读模式发生写入" : "修改超出 allowedPaths"}: ${outsideAllowed.join(", ")}`);
+	if (externalSymlinks.length) risks.push(`检测到指向工作区外部的符号链接：${externalSymlinks.join(", ")}`);
 	if (actualMismatch) risks.push(`实际模型 ${child.actualProvider}/${child.actualModel} 与请求 ${route.modelId} 不一致`);
 	if (child.truncated) risks.push("Worker 事件输出超过上限，已截断");
 	const summary = Array.isArray(parsed?.summary) ? parsed.summary : [child.aborted ? "Worker 已取消" : child.timedOut ? "Worker 超时" : child.errorMessage || child.stderr || "Worker 未返回可解析 JSON"];
@@ -1129,11 +1340,6 @@ function resultArray(result: Record<string, any> | undefined, key: string): any[
 }
 
 function renderWorkerDetails(details: WorkerUiDetails, expanded: boolean, theme: Theme) {
-	const failed = details.tasks.some((task) => task.status === "failed");
-	const blocked = details.tasks.some((task) => task.status === "blocked");
-	const running = details.tasks.some((task) => task.status === "running" || task.status === "queued");
-	const icon = running ? theme.fg("warning", "◌") : failed ? theme.fg("error", "✗") : blocked ? theme.fg("warning", "!") : theme.fg("success", "✓");
-	const title = details.total === 1 ? "Worker" : `Workers ×${details.total}`;
 	const totalTools = details.tasks.reduce((sum, task) => sum + task.toolCalls, 0);
 	const totalUsage = details.tasks.reduce((usage, task) => addWorkerUsage(usage, task.usage), emptyWorkerUsage());
 	const changed = details.tasks.reduce((sum, task) => sum + resultArray(task.result, "changed_files").length, 0);
@@ -1155,10 +1361,10 @@ function renderWorkerDetails(details: WorkerUiDetails, expanded: boolean, theme:
 			const usage = workerUsageText(task.usage, task.status === "running");
 			const preset = task.resolvedPreset ?? task.requestedPreset;
 			const runtime = [preset, usage, duration].filter(Boolean).join(" · ");
-			text += `${uiStatusIcon(task.status, theme)} ${theme.fg("accent", `#${task.index + 1} ${task.mode}`)}${runtime ? theme.fg("muted", ` · ${runtime}`) : ""}`;
+			text += `${uiStatusIcon(task.status, theme)} ${theme.fg("accent", task.mode)}${runtime ? theme.fg("muted", ` · ${runtime}`) : ""}`;
 			text += `\n  ${theme.fg("dim", uiSnippet(task.objective, 110))}`;
 			for (const activity of task.activities.slice(-3)) {
-				text += `\n  ${theme.fg("dim", `#${task.index + 1}`)} ${uiActivityLine(activity, theme)}`;
+				text += `\n  ${uiActivityLine(activity, theme)}`;
 			}
 		}
 		text += `\n\n${theme.fg("muted", "展开可查看路由、活动、验证和结果")}`;
@@ -1166,13 +1372,14 @@ function renderWorkerDetails(details: WorkerUiDetails, expanded: boolean, theme:
 	}
 
 	const container = new Container();
-	container.addChild(new Text(`${icon} ${theme.fg("toolTitle", theme.bold(title))}`, 0, 0));
 	if (footer) container.addChild(new Text(theme.fg("muted", footer), 0, 0));
-	for (const task of details.tasks) {
-		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("borderMuted", "─".repeat(12)), 0, 0));
+	for (const [position, task] of details.tasks.entries()) {
+		if (position > 0) {
+			container.addChild(new Spacer(1));
+			container.addChild(new Text(theme.fg("borderMuted", "─".repeat(24)), 0, 0));
+		}
 		const duration = uiDuration(task);
-		container.addChild(new Text(`${uiStatusIcon(task.status, theme)} ${theme.fg("accent", `#${task.index + 1} ${task.mode}`)}${duration ? theme.fg("dim", ` · ${duration}`) : ""}`, 0, 0));
+		container.addChild(new Text(`${uiStatusIcon(task.status, theme)} ${theme.fg("accent", task.mode)}${duration ? theme.fg("dim", ` · ${duration}`) : ""}`, 0, 0));
 		container.addChild(new Text(theme.fg("text", uiSnippet(task.objective, UI_OBJECTIVE_CAP)), 0, 0));
 		const route = [
 			task.resolvedPreset ? `档位 ${task.resolvedPreset}` : undefined,
@@ -1263,7 +1470,7 @@ export default function workerExtension(pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: JSON.stringify({ status: "blocked", summary: ["自动委派已在 worker-routing.json 中关闭；手动调用请设置 manual: true"] }, null, 2) }], details: { status: "blocked" } };
 			}
 			let limit = loaded.config.maxConcurrentWorkers;
-			for (let i = 0; i < tasks.length; i++) for (let j = i + 1; j < tasks.length; j++) if (writeTasksMayOverlap(tasks[i], tasks[j])) limit = 1;
+			if (batchRequiresSerial(tasks)) limit = 1;
 			const uiDetails: WorkerUiDetails = {
 				kind: "worker-ui",
 				startedAt: Date.now(),
@@ -1293,12 +1500,12 @@ export default function workerExtension(pi: ExtensionAPI) {
 				uiTask.status = "running";
 				uiTask.startedAt = Date.now();
 				uiTask.phase = "准备任务";
-				emitUi(`#${index + 1} ${task.mode} 开始`);
+				emitUi(`${task.mode} 开始`);
 				let item: Record<string, any>;
 				try {
 					item = await executeTask(task, loaded.config, loaded.warnings, ctx, signal, (patch) => {
 						Object.assign(uiTask, patch);
-						emitUi(`#${index + 1} ${uiTask.phase}`);
+						emitUi(`${task.mode} ${uiTask.phase}`);
 					});
 				} catch (error) {
 					item = {
@@ -1307,6 +1514,7 @@ export default function workerExtension(pi: ExtensionAPI) {
 						changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: ["主 Agent 检查异常"],
 					};
 				}
+				item = compactWorkerResult(sanitizeStructuredValue(item) as Record<string, any>);
 				uiTask.result = item;
 				uiTask.status = item.status === "completed" || item.status === "blocked" || item.status === "failed" ? item.status : "failed";
 				uiTask.phase = uiTask.status === "completed" ? "已完成" : uiTask.status === "blocked" ? "已阻塞" : "执行失败";
@@ -1321,15 +1529,15 @@ export default function workerExtension(pi: ExtensionAPI) {
 					if (execution.usage) uiTask.usage = { ...execution.usage };
 				}
 				uiDetails.completed++;
-				emitUi(`#${index + 1} ${uiTask.phase}`);
+				emitUi(`${task.mode} ${uiTask.phase}`);
 				return item;
 			});
 			const payload: Record<string, any> = input.task ? results[0] : { status: results.every((item) => item.status === "completed") ? "completed" : "partial", results };
-			uiDetails.payload = payload;
+			const serialized = serializePayload(payload, loaded.config.maxOutputBytes);
+			uiDetails.payload = serialized.payload;
 			uiDetails.finishedAt = Date.now();
-			const text = JSON.stringify(payload, null, 2);
 			return {
-				content: [{ type: "text", text: text.length > loaded.config.maxOutputBytes ? `${text.slice(0, loaded.config.maxOutputBytes)}\n…[worker result truncated]` : text }],
+				content: [{ type: "text", text: serialized.text }],
 				details: cloneUiDetails(uiDetails),
 			};
 		},
