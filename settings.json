@@ -1,6 +1,7 @@
 {
-  "lastChangelogVersion": "0.83.0",
+  "lastChangelogVersion": "0.84.0",
   "editorPaddingX": 1,
+  "outputPad": 1,
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
   "hideThinkingBlock": true,
@@ -29,5 +30,12 @@
   "doubleEscapeAction": "none",
   "warnings": {
     "anthropicExtraUsage": false
-  }
+  },
+  "enableSkillCommands": true,
+  "markdown": {
+    "mermaid": "streaming"
+  },
+  "defaultProjectTrust": "ask",
+  "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto"
 }

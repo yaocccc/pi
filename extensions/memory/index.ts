@@ -47,7 +47,7 @@ const memoryExtension = (pi: ExtensionAPI) => {
             pending = [];
             queue = queue.catch(() => undefined).then(async () => {
                 try {
-                    if (await updateMemory(batch, ctx) && ctx.hasUI) ctx.ui.notify('memory.md 已自动更新。', 'info');
+                    await updateMemory(batch, ctx);
                 } catch {
                     // 自动更新静默失败，不打断主会话。
                 }
