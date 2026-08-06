@@ -2,6 +2,21 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { TokenUsage } from './types.ts';
 import { formatElapsed, formatTokenCount } from './utils.ts';
 
+const WORKING_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+export const WORKING_FRAME_INTERVAL_MS = 120;
+
+let workingMessageActive = false;
+let workingAnimationStartedAt = 0;
+let currentWorkingLine: string | undefined;
+
+export const setWorkingMessageActive = (active: boolean): void => {
+    if (active && !workingMessageActive) workingAnimationStartedAt = Date.now();
+    workingMessageActive = active;
+    if (!active) currentWorkingLine = undefined;
+};
+
+export const getWorkingMessageLine = (): string | undefined => currentWorkingLine;
+
 export const workingMessage = (startedAt: number | undefined, usage: TokenUsage = {}, turn?: number): string => {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
@@ -17,4 +32,17 @@ export const workingMessage = (startedAt: number | undefined, usage: TokenUsage 
     return parts.join(' · ');
 };
 
-export const applyWorkingMessage = (ctx: ExtensionContext, startedAt?: number, usage?: TokenUsage, turn?: number): void => ctx.ui.setWorkingMessage(workingMessage(startedAt, usage, turn));
+export const applyWorkingMessage = (ctx: ExtensionContext, startedAt?: number, usage?: TokenUsage, turn?: number): void => {
+    // 内置 status 与 editor 之间固定经过 widget spacer；把 working 行并入 editor 才能消除其下方空行。
+    ctx.ui.setWorkingVisible(false);
+    if (!workingMessageActive) {
+        currentWorkingLine = undefined;
+        return;
+    }
+
+    const elapsed = Math.max(0, Date.now() - workingAnimationStartedAt);
+    const frameIndex = Math.floor(elapsed / WORKING_FRAME_INTERVAL_MS) % WORKING_FRAMES.length;
+    const frame = WORKING_FRAMES[frameIndex]!;
+    const message = workingMessage(startedAt, usage, turn);
+    currentWorkingLine = `${ctx.ui.theme.fg('accent', frame)} ${ctx.ui.theme.fg('muted', message)}`;
+};

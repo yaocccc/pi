@@ -1,6 +1,7 @@
 import { CustomEditor, type KeybindingsManager } from '@earendil-works/pi-coding-agent';
 import { visibleWidth, type EditorTheme, type TUI } from '@earendil-works/pi-tui';
 import { halfBlockLine, padToWidth, textAreaBg } from './utils.ts';
+import { getWorkingMessageLine } from './working-message.ts';
 
 export class TextAreaEditor extends CustomEditor {
     private readonly bg: (text: string) => string;
@@ -29,7 +30,8 @@ export class TextAreaEditor extends CustomEditor {
                 return this.bg(padToWidth(line, width));
             });
             if (showingAutocomplete) rendered.push(halfBlockLine(width, 'bottom'));
-            return rendered;
+            const workingLine = getWorkingMessageLine();
+            return workingLine ? [padToWidth(` ${workingLine}`, width), ...rendered] : rendered;
         } finally {
             this.borderColor = previousBorderColor;
         }
