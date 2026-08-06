@@ -5,8 +5,8 @@ import { foregroundFromRenderedBox, halfBlockLine, padToWidth, replaceVisibleCon
 let paddedBackgroundHalfBlockPatched = false;
 let userMessageHalfBlockPatched = false;
 
-const COLLAPSED_THINKING_PATCH = Symbol.for('pi.extensions.ui.single-thinking-preview.v5');
-const THINKING_SPACING_PATCH = Symbol.for('pi.extensions.ui.thinking-spacing.v1');
+const COLLAPSED_THINKING_PATCH = Symbol.for('pi.extensions.ui.single-thinking-preview.v7');
+const THINKING_SPACING_PATCH = Symbol.for('pi.extensions.ui.thinking-spacing.v3');
 const LEGACY_FINAL_RESPONSE_SEPARATOR_PATCH = Symbol.for('pi.extensions.ui.final-response-separator.v1');
 const FINAL_RESPONSE_SEPARATOR_PATCH = Symbol.for('pi.extensions.ui.final-response-separator.v2');
 const FULLSCREEN_SCROLLBAR_PATCH = Symbol.for('pi.extensions.ui.fullscreen-scrollbar.v1');
@@ -14,8 +14,6 @@ const COMPACT_TOOL_DISPLAY_PATCH = Symbol.for('pi.extensions.ui.compact-tool-dis
 const MERGE_CONSECUTIVE_TOOLS_PATCH = Symbol.for('pi.extensions.ui.merge-consecutive-tools.v5');
 const RUNTIME_THEME_KEY = Symbol.for('@earendil-works/pi-coding-agent:theme');
 const COLLAPSED_THINKING_LINE_WIDTH = 120;
-const ANSI_BOLD = '\x1b[1m';
-const ANSI_NORMAL_INTENSITY = '\x1b[22m';
 
 let renderedActivitySinceUserMessage = false;
 
@@ -262,7 +260,7 @@ export const patchMergeConsecutiveTools = (): void => {
     prototype[MERGE_CONSECUTIVE_TOOLS_PATCH] = true;
 };
 
-const thinkingPreview = (message: AssistantMessage): string => {
+const thinkingPreview = (message: AssistantMessage): string[] => {
     const lines: string[] = [];
 
     for (const part of message.content) {
@@ -282,12 +280,12 @@ const thinkingPreview = (message: AssistantMessage): string => {
         }
     }
 
-    return lines.at(-1) ?? '';
+    return lines;
 };
 
 const escapeMarkdown = (value: string): string => value.replace(/([\\`*_{}\[\]()<>#+\-.!|])/g, '\\$1');
 
-const compactThinkingMessage = (message: AssistantMessage, preview: string): AssistantMessage => {
+const compactThinkingMessage = (message: AssistantMessage, preview: string[]): AssistantMessage => {
     const content: AssistantMessage['content'] = [];
     let inserted = false;
 
@@ -298,7 +296,8 @@ const compactThinkingMessage = (message: AssistantMessage, preview: string): Ass
         }
         if (inserted) continue;
         inserted = true;
-        content.push({ ...part, thinking: `Thinking: ${ANSI_BOLD}${escapeMarkdown(preview)}${ANSI_NORMAL_INTENSITY}` });
+        const previewLines = preview.map(escapeMarkdown).join('  \n');
+        content.push({ ...part, thinking: previewLines });
     }
 
     return { ...message, content };
@@ -317,7 +316,7 @@ export const patchCollapsedThinkingPreview = (): void => {
         }
 
         const preview = thinkingPreview(message);
-        if (!preview) {
+        if (preview.length === 0) {
             originalUpdateContent.call(this, message);
             return;
         }
