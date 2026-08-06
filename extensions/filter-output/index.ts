@@ -111,7 +111,6 @@ export default (pi: ExtensionAPI) => {
         });
 
         if (wasModified) {
-            if (ctx.hasUI) ctx.ui.notify('Sensitive data redacted from output', 'info');
             return { content };
         }
 

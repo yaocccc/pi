@@ -31,7 +31,7 @@ description: Use for Worker delegation, Fast/Normal/Deep/Max routing, parallel t
 - 能降低主会话上下文压力的工作；
 - 可以安全并行的独立模块。
 
-低风险且边界清晰时自主调用，不先询问用户。主 Agent 始终负责最终 diff、验证和交付。
+边界清晰且可独立验收时自主调用，不先询问用户。主 Agent 始终负责最终 diff、验证和交付。
 
 ## 先调查再实施
 
@@ -88,20 +88,19 @@ outputRequirements:
 
 ### Deep
 
-用于跨模块/服务/语言、根因不明、并发与异步状态、缓存一致性、重试容错、资源生命周期、数据同步、复杂架构、大范围回归、重要 Review、约束很多或 Normal 已失败的任务。文件多本身不等于 Max。
+用于困难任务，例如跨模块/服务/语言、根因不明、并发与异步状态、缓存一致性、重试容错、资源生命周期、数据同步、复杂架构、大范围回归、重要 Review、约束很多或 Normal 已失败的任务。Deep 是自动路由的最高任务复杂度级别，文件多本身不等于困难任务。
 
 ### Max
 
-仅当用户主动明确要求 `Max`、最高强度或同等表述时使用，并设置 `userExplicitMax: true`。不得仅因任务涉及资金、私钥、签名、权限、不可恢复数据或其他高风险边界而自动选择 Max；这些任务默认使用 Deep。Max 不参与自动路由，也不得静默降级。各档位的模型与 thinking 仅由 `worker-settings.json` 配置。
+`Max` 不是任务复杂度级别，仅代表用户显式要求的最高执行强度。仅当用户主动明确要求 `Max`、最高强度或同等表述时使用，并设置 `userExplicitMax: true`。Max 不参与自动路由，也不得静默降级。各档位的模型与 thinking 仅由 `worker-settings.json` 配置。
 
 ## Review 与返工
 
 - 小任务：Worker → 主 Agent 验收。
 - 普通任务：Worker → 主 Agent 验收。
-- 复杂或重要任务：实现 Worker → 独立 Review Worker → Fix Worker → 主 Agent 验收。
-- 高风险任务：实现 Worker → Deep Review Worker → Fix Worker → 独立 Deep 终审 → 主 Agent 验收；只有用户主动明确要求 Max/最高强度时才升级为 Max。
+- 困难任务：实现 Worker → 独立 Deep Review Worker → Fix Worker → 主 Agent 验收。
 
-功能实现完成后，如果 Review 是主 Agent 自动追加而非用户明确要求，默认使用 `preset: fast`；具体模型和 thinking 读取 `worker-settings.json`。不得为这种常规自动 Review 使用 Max。高风险边界需要加强审查时最多自动升级到 Deep；只有用户主动明确要求更强审查时才可使用 Max。
+功能实现完成后，如果 Review 是主 Agent 自动追加而非用户明确要求，默认使用 `preset: fast`；具体模型和 thinking 读取 `worker-settings.json`。不得为这种常规自动 Review 使用 Max。困难任务需要加强审查时使用 Deep；只有用户主动明确要求最高执行强度时才可使用 Max。
 
 不要让所有小任务默认走完整 Review 流程。Review finding 必须有文件、位置、证据、影响、建议和置信度；只修复主 Agent 已确认的问题。
 

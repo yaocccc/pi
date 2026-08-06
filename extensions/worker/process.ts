@@ -86,7 +86,7 @@ export async function acquireSlot(limit: number, signal: AbortSignal | undefined
 }
 
 export function workerPromptBody(): string {
-	const promptPath = path.join(agentDir(), "agents", "worker.md");
+	const promptPath = path.join(agentDir(), "extensions", "worker", "agents", "worker.md");
 	if (!fs.existsSync(promptPath)) throw new Error(`缺少 Worker Prompt: ${promptPath}`);
 	const parsed = parseFrontmatter<Record<string, string>>(fs.readFileSync(promptPath, "utf8"));
 	return parsed.body.trim();

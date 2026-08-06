@@ -149,8 +149,6 @@ export function validateTask(task: WorkerTask, baseCwd: string): string[] {
 export function inferPreset(task: WorkerTask): { preset: ResolvedPreset; reasons: string[] } {
 	if (task.preset && task.preset !== "auto") return { preset: task.preset, reasons: [`任务显式指定 ${task.preset}`] };
 	const text = [task.objective, task.context, ...(task.acceptanceCriteria ?? [])].filter(Boolean).join(" ").toLowerCase();
-	const highRisk = /(私钥|助记词|资金|资产安全|钱包签名|签名重放|授权|权限边界|合约资金|不可恢复|不可逆数据|core data consistency|private key|mnemonic|wallet signing|replay|authorization|permission boundary|funds)/i.test(text);
-	if (highRisk) return { preset: "deep", reasons: ["涉及高风险边界，但用户未明确要求 Max，使用 Deep"] };
 	const deep = /(跨模块|跨服务|跨语言|并发|异步状态|缓存一致性|网络重试|资源生命周期|数据同步|根因不明|架构|cross.module|cross.service|concurren|async state|cache consistency|retry|resource lifecycle|architecture)/i.test(text);
 	if (deep || (task.relevantFiles?.length ?? 0) >= 6) return { preset: "deep", reasons: [deep ? "包含复杂跨模块或状态一致性约束" : "相关文件范围较大"] };
 	const fast = /(查找|搜索|文案|css|类型错误|运行已有测试|机械修改|find|locate|copy change|type error|existing test)/i.test(text);
