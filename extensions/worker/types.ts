@@ -20,7 +20,6 @@ export interface WorkerTask {
 	verificationCommands?: string[];
 	outputRequirements?: string[];
 	cwd?: string;
-	timeoutMs?: number;
 }
 
 export interface WorkerToolInput {

@@ -447,7 +447,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 		systemPrompt,
 		buildTaskPrompt(task, route, before),
 		signal,
-		task.timeoutMs ?? config.defaultTimeoutMs,
+		config.defaultTimeoutMs,
 		config.maxConcurrentWorkers,
 		(progress) => onProgress?.({ phase: progress.phase, activities: progress.activities, toolCalls: progress.toolCalls, usage: progress.usage }),
 	);

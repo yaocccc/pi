@@ -25,7 +25,6 @@ export const TaskSchema = Type.Object({
 	verificationCommands: Type.Optional(Type.Array(Type.String())),
 	outputRequirements: Type.Optional(Type.Array(Type.String())),
 	cwd: Type.Optional(Type.String({ description: "Relative subdirectory within the main agent cwd; absolute and escaping paths are rejected" })),
-	timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 3_600_000 })),
 });
 
 export const InputSchema = Type.Object({
