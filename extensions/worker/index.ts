@@ -18,7 +18,7 @@ export const TaskSchema = Type.Object({
 	preset: Type.Optional(StringEnum(PRESETS)),
 	userExplicitMax: Type.Optional(Type.Boolean({ description: "Must be true only when the user explicitly requested Max or maximum strength" })),
 	context: Type.Optional(Type.String()),
-	relevantFiles: Type.Optional(Type.Array(Type.String())),
+	relevantFiles: Type.Optional(Type.Array(Type.String({ description: "Read hints may be relative, absolute, or outside cwd; they do not grant write access" }))),
 	allowedPaths: Type.Optional(Type.Array(Type.String())),
 	forbiddenPaths: Type.Optional(Type.Array(Type.String())),
 	acceptanceCriteria: Type.Optional(Type.Array(Type.String())),

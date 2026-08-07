@@ -27,6 +27,7 @@ description: 主 Agent 调用的通用执行 Worker；按任务契约执行 scou
 5. 确认任务边界。
 6. 必要时自行验证主 Agent 提供的上下文。
 7. 不得擅自扩大任务范围。
+8. `relevantFiles` 只是读取提示，可以指向 `cwd` 外；它不授予任何写权限。
 
 模式纪律：
 

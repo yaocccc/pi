@@ -132,7 +132,10 @@ export function validateTask(task: WorkerTask, baseCwd: string): string[] {
 	if (task.preset && !PRESETS.includes(task.preset)) errors.push(`无效 preset: ${String(task.preset)}`);
 	if (task.preset === "max" && !task.userExplicitMax) errors.push("Max 仅允许响应用户明确要求；请设置 userExplicitMax: true");
 	if (WRITE_MODES.has(task.mode) && (!task.allowedPaths || task.allowedPaths.length === 0)) errors.push(`${task.mode} 必须提供非空 allowedPaths`);
-	for (const [label, patterns] of [["relevantFiles", task.relevantFiles], ["allowedPaths", task.allowedPaths], ["forbiddenPaths", task.forbiddenPaths]] as const) {
+	for (const file of task.relevantFiles ?? []) {
+		if (!file.trim()) errors.push("relevantFiles 不能包含空路径");
+	}
+	for (const [label, patterns] of [["allowedPaths", task.allowedPaths], ["forbiddenPaths", task.forbiddenPaths]] as const) {
 		for (const pattern of patterns ?? []) {
 			if (!pattern.trim() || path.isAbsolute(pattern) || pattern.split(/[\\/]+/).includes("..")) errors.push(`${label} 只能包含 cwd 下的相对路径或 glob: ${pattern}`);
 		}

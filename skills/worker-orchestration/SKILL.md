@@ -53,7 +53,7 @@ verificationCommands:
 outputRequirements:
 ```
 
-不要只发送“帮我把这个功能做好”。写入模式必须给出非空 `allowedPaths`；敏感目录应加入 `forbiddenPaths`。验收条件应可通过 diff、编译、测试或明确代码证据判断。
+不要只发送“帮我把这个功能做好”。`relevantFiles` 只是读取提示，可包含绝对路径、`cwd` 外路径或 glob，不授予写权限。写入模式必须给出非空 `allowedPaths`；`allowedPaths` 和 `forbiddenPaths` 必须是 `cwd` 下的相对路径或 glob，敏感目录应加入 `forbiddenPaths`。验收条件应可通过 diff、编译、测试或明确代码证据判断。
 
 ## 并行原则
 
