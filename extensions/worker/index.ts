@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { MODES, PRESETS, loadRoutingConfig, validateTask } from "./config";
-import { logWorkerReturn } from "./logging";
+import { registerWorkerWriteGuard } from "./guard";
 import { beginWorkerShutdown, executeTask, killAllChildren, resetWorkerRuntime } from "./process";
 import { batchRequiresSerial } from "./security";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
@@ -49,7 +49,10 @@ export async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T
 }
 
 export default function workerExtension(pi: ExtensionAPI) {
-	if (Number(process.env.PI_WORKER_DEPTH || "0") >= 1) return;
+	if (Number(process.env.PI_WORKER_DEPTH || "0") >= 1) {
+		registerWorkerWriteGuard(pi);
+		return;
+	}
 	resetWorkerRuntime();
 	pi.on("session_shutdown", async () => beginWorkerShutdown());
 	pi.registerTool({
@@ -57,11 +60,11 @@ export default function workerExtension(pi: ExtensionAPI) {
 		label: "Worker",
 		description: TOOL_DESCRIPTION,
 		parameters: InputSchema,
-		async execute(toolCallId, input: WorkerToolInput, signal, onUpdate, ctx) {
-			const respond = (text: string, details: unknown) => {
-				logWorkerReturn(toolCallId, text);
-				return { content: [{ type: "text" as const, text }], details };
-			};
+		async execute(_toolCallId, input: WorkerToolInput, signal, onUpdate, ctx) {
+			const respond = (text: string, details: unknown) => ({
+				content: [{ type: "text" as const, text }],
+				details,
+			});
 			if (Boolean(input.task) === Boolean(input.tasks)) {
 				return respond("worker 参数错误：task 和 tasks 必须二选一", { status: "failed" });
 			}
@@ -71,8 +74,8 @@ export default function workerExtension(pi: ExtensionAPI) {
 				const details = taskErrors.map((errors, index) => ({ index, errors }));
 				return respond(JSON.stringify({ status: "failed", validation_errors: details }, null, 2), details);
 			}
-			let loaded: Awaited<ReturnType<typeof loadRoutingConfig>>;
-			try { loaded = await loadRoutingConfig(ctx); }
+			let loaded: ReturnType<typeof loadRoutingConfig>;
+			try { loaded = loadRoutingConfig(); }
 			catch (error) {
 				return respond(JSON.stringify({ status: "blocked", summary: [error instanceof Error ? error.message : String(error)] }, null, 2), { status: "blocked" });
 			}

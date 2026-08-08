@@ -91,7 +91,7 @@ export function supportedThinking(model: Model<any>): string[] {
 	return levels.filter((level) => map[level] !== null);
 }
 
-export async function loadRoutingConfig(ctx: ExtensionContext): Promise<{ config: RoutingConfig; warnings: string[]; path: string }> {
+export function loadRoutingConfig(): { config: RoutingConfig; warnings: string[]; path: string } {
 	const configPath = path.join(agentDir(), "worker-settings.json");
 	if (!fs.existsSync(configPath)) throw new Error(`缺少 Worker 路由配置：${configPath}`);
 	let current: unknown;
@@ -107,7 +107,6 @@ export async function loadRoutingConfig(ctx: ExtensionContext): Promise<{ config
 	const hadLegacyRetrySetting = Boolean(current && typeof current === "object" && "maxAutomaticRetries" in current);
 	const merged = deepMergeMissing(current as Record<string, unknown>, DEFAULT_OPTIONS);
 	const validated = validateConfig(merged.value as RoutingConfig);
-	await ctx.modelRegistry.refresh();
 	if (merged.changed || hadPresetOutputLimits || hadLegacyRetrySetting) atomicWriteJson(configPath, validated.config);
 	return { config: validated.config, warnings: validated.warnings, path: configPath };
 }

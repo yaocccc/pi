@@ -4,8 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { READ_ONLY_MODES, WRITE_MODES, agentDir, resolveRoute, resolveTaskCwd } from "./config";
-import { changedSince, isTaskLocalPath, matchesAny, snapshotWorkspace } from "./security";
+import { agentDir, resolveRoute, resolveTaskCwd } from "./config";
+import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard";
+import { changedSince, snapshotWorkspace } from "./security";
 import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkerUsage, WorkspaceSnapshot } from "./types";
 import { UI_ACTIVITY_LIMIT, UI_DETAIL_CAP, addWorkerUsage, appendUiActivity, emptyWorkerUsage, estimateMessageTokens, messageUsage, publicThinking, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./ui";
 
@@ -15,6 +16,8 @@ export let activeSlots = 0;
 export const slotWaiters: Array<() => void> = [];
 export const MAX_WORKER_EVENT_LINE_BYTES = 8 * 1024 * 1024;
 export const MAX_WORKER_STDOUT_BYTES = 64 * 1024 * 1024;
+export const WORKER_TERMINATE_GRACE_MS = 3_000;
+export const WORKER_FORCE_SETTLE_MS = 1_000;
 
 export function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
@@ -223,23 +226,38 @@ export async function runPiWorker(
 			let aborted = false;
 			let timedOut = false;
 			let settled = false;
+			let terminating = false;
 			let stdoutBytes = 0;
+			let forceKillTimer: NodeJS.Timeout | undefined;
+			let forceSettleTimer: NodeJS.Timeout | undefined;
+			let timeout: NodeJS.Timeout;
 			setPhase("启动独立 Worker");
 			const child = spawn(invocation.command, invocation.args, {
 				cwd,
 				shell: false,
 				detached: process.platform !== "win32",
 				stdio: ["ignore", "pipe", "pipe"],
-				env: { ...process.env, PI_WORKER_DEPTH: "1", PI_SKIP_VERSION_CHECK: "1" },
+				env: {
+					...process.env,
+					PI_WORKER_DEPTH: "1",
+					PI_SKIP_VERSION_CHECK: "1",
+					[WORKER_MODE_ENV]: task.mode,
+					[WORKER_CWD_ENV]: cwd,
+					[WORKER_ALLOWED_PATHS_ENV]: JSON.stringify(task.allowedPaths ?? []),
+					[WORKER_FORBIDDEN_PATHS_ENV]: JSON.stringify(task.forbiddenPaths ?? []),
+				},
+
 			});
 			activeChildren.add(child);
 			setPhase("Worker 执行中");
-			const finish = (exitCode: number) => {
+			const finish = (exitCode: number, childClosed = true) => {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timeout);
+				if (forceKillTimer) clearTimeout(forceKillTimer);
+				if (forceSettleTimer) clearTimeout(forceSettleTimer);
 				signal?.removeEventListener("abort", abortHandler);
-				activeChildren.delete(child);
+				if (childClosed) activeChildren.delete(child);
 				phase = aborted ? "已取消" : timedOut ? "已超时" : exitCode === 0 ? "子进程已完成" : "子进程失败";
 				for (const activity of activities) {
 					if (activity.status !== "running") continue;
@@ -252,15 +270,26 @@ export async function runPiWorker(
 				resolve({ exitCode, stderr: stderr.slice(-16_384), assistantText, actualProvider, actualModel, stopReason, errorMessage, aborted, timedOut, truncated, activities: activities.map((item) => ({ ...item })), toolCalls, usage });
 			};
 			const terminate = (reason: "abort" | "timeout" | "output") => {
-				if (settled) return;
+				if (settled || terminating) return;
+				terminating = true;
 				aborted = reason === "abort";
 				timedOut = reason === "timeout";
 				setPhase(reason === "abort" ? "正在取消" : reason === "timeout" ? "正在终止超时任务" : "正在终止超限输出", "failed");
 				killProcessTree(child, "SIGTERM");
-				setTimeout(() => { if (!settled) killProcessTree(child, "SIGKILL"); }, 3_000).unref();
+				forceKillTimer = setTimeout(() => {
+					if (settled) return;
+					killProcessTree(child, "SIGKILL");
+					forceSettleTimer = setTimeout(() => {
+						if (settled) return;
+						errorMessage ||= "Worker 子进程强制终止后未触发 close";
+						finish(1, false);
+					}, WORKER_FORCE_SETTLE_MS);
+					forceSettleTimer.unref();
+				}, WORKER_TERMINATE_GRACE_MS);
+				forceKillTimer.unref();
 			};
 			const abortHandler = () => terminate("abort");
-			const timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
+			timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
 			if (signal?.aborted) abortHandler(); else signal?.addEventListener("abort", abortHandler, { once: true });
 			const processEvent = (event: any) => {
 				if (event.type === "turn_start") {
@@ -356,8 +385,13 @@ export async function runPiWorker(
 				}
 			});
 			child.stderr.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-65_536); });
-			(child as any).on("error", (error: Error) => { errorMessage = error.message; finish(1); });
+			(child as any).on("error", (error: Error) => {
+				activeChildren.delete(child);
+				errorMessage = error.message;
+				finish(1);
+			});
 			(child as any).on("close", (code: number | null) => {
+				activeChildren.delete(child);
 				if (stdoutBuffer.trim()) {
 					try { processEvent(JSON.parse(stdoutBuffer)); } catch { /* ignore trailing diagnostics */ }
 				}
@@ -417,7 +451,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	onProgress?.({ status: "running", phase: "解析模型路由" });
 	try {
 		route = resolveRoute(task, config, ctx);
-		onProgress?.({ resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, phase: "检查工作区" });
+		onProgress?.({ resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, phase: "记录 Git 状态" });
 	}
 	catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
@@ -426,13 +460,8 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	}
 	let before: WorkspaceSnapshot | null = null;
 	try {
-		if (WRITE_MODES.has(task.mode) || READ_ONLY_MODES.has(task.mode)) before = await snapshotWorkspace(cwd, new Set(), true, READ_ONLY_MODES.has(task.mode));
-		if (WRITE_MODES.has(task.mode) && before?.externalSymlinks.length) {
-			const reason = `工作区包含指向外部的符号链接，无法安全执行写入：${before.externalSymlinks.join(", ")}`;
-			const failure = failureDetails("workspace_boundary", reason);
-			return { status: "blocked", execution: baseExecution(task, route, 0, warnings), failure, summary: [reason], changed_files: [], validation: [], acceptance: [], findings: [], risks: ["外部符号链接可能绕过工作区边界"], out_of_scope: [], recommended_next_action: [failure.next_action] };
-		}
-		onProgress?.({ phase: "工作区检查完成" });
+		before = await snapshotWorkspace(cwd, new Set(), signal);
+		onProgress?.({ phase: "Git 状态记录完成" });
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		const failure = failureDetails("workspace_snapshot", reason);
@@ -453,18 +482,12 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	);
 	onProgress?.({ phase: "校验结果与修改范围", activities: child.activities, toolCalls: child.toolCalls, usage: child.usage });
 	const parsed = parseStructuredResult(child.assistantText);
-	const delta = before ? await changedSince(before) : { changed: [] as string[], externalSymlinks: [] as string[] };
+	const delta = before ? await changedSince(before, signal) : { changed: [] as string[] };
 	const changedFiles = delta.changed;
-	const forbidden = changedFiles.filter((file) => matchesAny(file, task.forbiddenPaths ?? []));
-	const outsideAllowed = WRITE_MODES.has(task.mode) ? changedFiles.filter((file) => !isTaskLocalPath(file) || !matchesAny(file, task.allowedPaths ?? [])) : changedFiles;
-	const externalSymlinks = WRITE_MODES.has(task.mode) ? delta.externalSymlinks : [];
 	const actualMismatch = Boolean(child.actualProvider && child.actualModel && `${child.actualProvider}/${child.actualModel}` !== route.modelId);
 	let status: "completed" | "blocked" | "failed" = parsed?.status === "completed" || parsed?.status === "blocked" || parsed?.status === "failed" ? parsed.status : "failed";
 	const risks = Array.isArray(parsed?.risks) ? parsed.risks : [];
-	if (runtimeShuttingDown || child.aborted || child.timedOut || child.exitCode !== 0 || child.errorMessage || !parsed || actualMismatch || forbidden.length || outsideAllowed.length || externalSymlinks.length) status = isBlockedFailure(child) ? "blocked" : "failed";
-	if (forbidden.length) risks.push(`修改了 forbiddenPaths: ${forbidden.join(", ")}`);
-	if (outsideAllowed.length) risks.push(`${READ_ONLY_MODES.has(task.mode) ? "只读模式发生写入" : "修改超出 allowedPaths"}: ${outsideAllowed.join(", ")}`);
-	if (externalSymlinks.length) risks.push(`检测到指向工作区外部的符号链接：${externalSymlinks.join(", ")}`);
+	if (runtimeShuttingDown || child.aborted || child.timedOut || child.exitCode !== 0 || child.errorMessage || !parsed || actualMismatch) status = isBlockedFailure(child) ? "blocked" : "failed";
 	if (actualMismatch) risks.push(`实际模型 ${child.actualProvider}/${child.actualModel} 与请求 ${route.modelId} 不一致`);
 	if (child.truncated) risks.push("Worker 事件输出超过上限，已截断");
 	const summary = Array.isArray(parsed?.summary) ? parsed.summary : [child.aborted ? "Worker 已取消" : child.timedOut ? "Worker 超时" : child.errorMessage || child.stderr || "Worker 未返回可解析 JSON"];
@@ -472,24 +495,17 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	if (status !== "completed") {
 		const category = runtimeShuttingDown || child.aborted ? "cancelled"
 			: child.timedOut ? "timeout"
-				: forbidden.length || outsideAllowed.length || externalSymlinks.length ? "workspace_boundary"
-					: actualMismatch ? "model_mismatch"
-						: status === "blocked" ? "worker_blocked"
-							: child.truncated ? "protocol_output_limit"
-								: child.exitCode !== 0 ? "process_exit"
-									: child.errorMessage ? "runtime_error"
-										: !parsed ? "invalid_result" : "worker_failed";
-		const boundaryReason = [
-			forbidden.length ? `修改了 forbiddenPaths: ${forbidden.join(", ")}` : undefined,
-			outsideAllowed.length ? `${READ_ONLY_MODES.has(task.mode) ? "只读模式发生写入" : "修改超出 allowedPaths"}: ${outsideAllowed.join(", ")}` : undefined,
-			externalSymlinks.length ? `检测到外部符号链接: ${externalSymlinks.join(", ")}` : undefined,
-		].filter(Boolean).join("；");
-		const reason = category === "workspace_boundary" ? boundaryReason
-			: category === "model_mismatch" ? `实际模型与请求不一致: ${child.actualProvider}/${child.actualModel}`
-				: category === "cancelled" ? "Worker 已取消"
-					: category === "timeout" ? "Worker 超时"
-						: String(child.errorMessage ?? summary[0] ?? child.stderr ?? "Worker 执行失败");
-		failure = failureDetails(category, reason || "Worker 工作区边界校验失败");
+				: actualMismatch ? "model_mismatch"
+					: status === "blocked" ? "worker_blocked"
+						: child.truncated ? "protocol_output_limit"
+							: child.exitCode !== 0 ? "process_exit"
+								: child.errorMessage ? "runtime_error"
+									: !parsed ? "invalid_result" : "worker_failed";
+		const reason = category === "model_mismatch" ? `实际模型与请求不一致: ${child.actualProvider}/${child.actualModel}`
+			: category === "cancelled" ? "Worker 已取消"
+				: category === "timeout" ? "Worker 超时"
+					: String(child.errorMessage ?? summary[0] ?? child.stderr ?? "Worker 执行失败");
+		failure = failureDetails(category, reason);
 	}
 	return {
 		status,

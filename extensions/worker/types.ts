@@ -62,9 +62,6 @@ export interface WorkspaceSnapshot {
 	cwd: string;
 	statusPaths: Set<string>;
 	files: Map<string, { worktree: string | null; index: string | null }>;
-	fsEntries?: Map<string, string>;
-	excludeAgentRuntime: boolean;
-	externalSymlinks: string[];
 }
 
 export type WorkerUiStatus = "queued" | "running" | "completed" | "blocked" | "failed";

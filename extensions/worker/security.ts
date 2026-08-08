@@ -2,17 +2,20 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { agentDir, isPathInside, WRITE_MODES } from "./config";
+import { WRITE_MODES } from "./config";
 import type { CommandResult, WorkerTask, WorkspaceSnapshot } from "./types";
 
-export const MAX_FS_SNAPSHOT_ENTRIES = 250_000;
-export const MAX_IGNORED_HASH_FILE_BYTES = 1024 * 1024;
-export const MAX_IGNORED_HASH_TOTAL_BYTES = 64 * 1024 * 1024;
-export const AGENT_RUNTIME_SNAPSHOT_EXCLUDES = ["memory.md", "memory-index.md", "memories", "sessions"];
+export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 30_000;
+export const GIT_COMMAND_KILL_GRACE_MS = 1_000;
 
-export function isTaskLocalPath(file: string): boolean {
-	const normalized = file.replaceAll("\\", "/").replace(/^\.\//, "");
-	return normalized !== ".." && !normalized.startsWith("../") && !path.isAbsolute(file);
+export interface RunCommandOptions {
+	maxBytes?: number;
+	signal?: AbortSignal;
+	timeoutMs?: number;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, phase: string): void {
+	if (signal?.aborted) throw new Error(`${phase}已取消`);
 }
 
 export function globToRegExp(pattern: string): RegExp {
@@ -43,17 +46,64 @@ export function batchRequiresSerial(tasks: WorkerTask[]): boolean {
 	return tasks.length > 1 && tasks.some((task) => WRITE_MODES.has(task.mode));
 }
 
-export async function runCommand(command: string, args: string[], cwd: string, maxBytes = 4 * 1024 * 1024): Promise<CommandResult> {
+export async function runCommand(command: string, args: string[], cwd: string, options: RunCommandOptions = {}): Promise<CommandResult> {
+	const maxBytes = Math.max(1, options.maxBytes ?? 4 * 1024 * 1024);
+	const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS);
+	throwIfAborted(options.signal, `命令 ${command} `);
 	return await new Promise((resolve, reject) => {
 		const child = spawn(command, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
 		const stdout: Buffer[] = [];
 		const stderr: Buffer[] = [];
 		let stdoutBytes = 0;
 		let stderrBytes = 0;
-		child.stdout.on("data", (chunk: Buffer) => { if (stdoutBytes < maxBytes) { stdout.push(chunk.subarray(0, maxBytes - stdoutBytes)); stdoutBytes += chunk.length; } });
-		child.stderr.on("data", (chunk: Buffer) => { if (stderrBytes < maxBytes) { stderr.push(chunk.subarray(0, maxBytes - stderrBytes)); stderrBytes += chunk.length; } });
-		(child as any).on("error", reject);
-		(child as any).on("close", (code: number | null) => resolve({ code: code ?? 1, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) }));
+		let settled = false;
+		let killTimer: NodeJS.Timeout | undefined;
+		let timeout: NodeJS.Timeout | undefined;
+		const cleanup = () => {
+			if (timeout) clearTimeout(timeout);
+			options.signal?.removeEventListener("abort", abortHandler);
+		};
+		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(error);
+		};
+		const terminate = (error: Error) => {
+			if (settled) return;
+			try { child.kill("SIGTERM"); } catch { /* process already exited */ }
+			killTimer = setTimeout(() => {
+				try { child.kill("SIGKILL"); } catch { /* process already exited */ }
+			}, GIT_COMMAND_KILL_GRACE_MS);
+			killTimer.unref();
+			fail(error);
+		};
+		const abortHandler = () => terminate(new Error(`命令 ${command} 已取消`));
+		child.stdout.on("data", (chunk: Buffer) => {
+			const length = Math.min(chunk.length, Math.max(0, maxBytes - stdoutBytes));
+			if (length > 0) stdout.push(chunk.subarray(0, length));
+			stdoutBytes += length;
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			const length = Math.min(chunk.length, Math.max(0, maxBytes - stderrBytes));
+			if (length > 0) stderr.push(chunk.subarray(0, length));
+			stderrBytes += length;
+		});
+		(child as any).on("error", (error: Error) => {
+			if (killTimer) clearTimeout(killTimer);
+			fail(error);
+		});
+		(child as any).on("close", (code: number | null) => {
+			if (killTimer) clearTimeout(killTimer);
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve({ code: code ?? 1, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) });
+		});
+		options.signal?.addEventListener("abort", abortHandler, { once: true });
+		timeout = setTimeout(() => terminate(new Error(`命令 ${command} 超时（${timeoutMs}ms）`)), timeoutMs);
+		timeout.unref();
+		if (options.signal?.aborted) abortHandler();
 	});
 }
 
@@ -61,60 +111,14 @@ export function nulPaths(buffer: Buffer): string[] {
 	return buffer.toString("utf8").split("\0").filter(Boolean);
 }
 
-export async function gitChangedPaths(gitRoot: string): Promise<Set<string>> {
+export async function gitChangedPaths(gitRoot: string, signal?: AbortSignal): Promise<Set<string>> {
 	const commands: string[][] = [
 		["diff", "--name-only", "-z"],
 		["diff", "--cached", "--name-only", "-z"],
 		["ls-files", "--others", "--exclude-standard", "-z"],
 	];
-	const results = await Promise.all(commands.map((args) => runCommand("git", args, gitRoot)));
+	const results = await Promise.all(commands.map((args) => runCommand("git", args, gitRoot, { signal })));
 	return new Set(results.flatMap((result) => nulPaths(result.stdout)));
-}
-
-export async function gitIgnoredPaths(gitRoot: string): Promise<Set<string>> {
-	const result = await runCommand("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], gitRoot, 32 * 1024 * 1024);
-	return result.code === 0 ? new Set(nulPaths(result.stdout)) : new Set();
-}
-
-export function scanWorkspace(gitRoot: string, ignoredPaths: Set<string>, excludeAgentRuntime = false): { entries: Map<string, string>; externalSymlinks: string[] } {
-	const entries = new Map<string, string>();
-	const externalSymlinks: string[] = [];
-	const pending = [gitRoot];
-	let ignoredHashBytes = 0;
-	while (pending.length) {
-		const directory = pending.pop()!;
-		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-			const fullPath = path.join(directory, entry.name);
-			const relativePath = path.relative(gitRoot, fullPath).replaceAll("\\", "/");
-			if (relativePath === ".git" || relativePath.startsWith(".git/")) continue;
-			if (excludeAgentRuntime && AGENT_RUNTIME_SNAPSHOT_EXCLUDES.some((excluded) => relativePath === excluded || relativePath.startsWith(`${excluded}/`))) continue;
-			const stat = fs.lstatSync(fullPath, { bigint: true });
-			if (stat.isDirectory()) {
-				pending.push(fullPath);
-				continue;
-			}
-			if (entries.size >= MAX_FS_SNAPSHOT_ENTRIES) throw new Error(`工作区文件超过安全快照上限 ${MAX_FS_SNAPSHOT_ENTRIES}`);
-			// ctime/ino cannot be restored by an unprivileged Worker the way mtime can,
-			// so large ignored files remain detectable even after hash budget fallback.
-			let signature = `${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}`;
-			if (stat.isSymbolicLink()) {
-				const link = fs.readlinkSync(fullPath);
-				try {
-					const target = fs.realpathSync(fullPath);
-					if (!isPathInside(gitRoot, target)) externalSymlinks.push(relativePath);
-					const targetStat = fs.statSync(target, { bigint: true });
-					signature = `link:${link}:${targetStat.mode}:${targetStat.size}:${targetStat.mtimeNs}:${targetStat.ctimeNs}:${targetStat.ino}:${targetStat.dev}`;
-				} catch {
-					signature = `link:${link}:broken`;
-				}
-			} else if (stat.isFile() && ignoredPaths.has(relativePath) && stat.size <= BigInt(MAX_IGNORED_HASH_FILE_BYTES) && ignoredHashBytes + Number(stat.size) <= MAX_IGNORED_HASH_TOTAL_BYTES) {
-				ignoredHashBytes += Number(stat.size);
-				signature += `:${fileHash(fullPath) ?? "unreadable"}`;
-			}
-			entries.set(relativePath, signature);
-		}
-	}
-	return { entries, externalSymlinks: [...new Set(externalSymlinks)].sort() };
 }
 
 export function fileHash(filePath: string): string | null {
@@ -126,51 +130,39 @@ export function fileHash(filePath: string): string | null {
 	}
 }
 
-export async function indexHash(gitRoot: string, relativePath: string): Promise<string | null> {
-	const result = await runCommand("git", ["rev-parse", `:${relativePath}`], gitRoot, 1024);
+export async function indexHash(gitRoot: string, relativePath: string, signal?: AbortSignal): Promise<string | null> {
+	const result = await runCommand("git", ["rev-parse", `:${relativePath}`], gitRoot, { maxBytes: 1024, signal });
 	return result.code === 0 ? result.stdout.toString("utf8").trim() : null;
 }
 
-export async function snapshotWorkspace(cwd: string, includePaths: Set<string> = new Set(), includeFilesystem = false, excludeAgentRuntime = false): Promise<WorkspaceSnapshot> {
-	const rootResult = await runCommand("git", ["rev-parse", "--show-toplevel"], cwd, 4096);
-	if (rootResult.code !== 0) throw new Error("写入 Worker 需要 Git 工作区以安全校验变更范围");
+export async function snapshotWorkspace(cwd: string, includePaths: Set<string> = new Set(), signal?: AbortSignal): Promise<WorkspaceSnapshot> {
+	throwIfAborted(signal, "工作区快照");
+	const rootResult = await runCommand("git", ["rev-parse", "--show-toplevel"], cwd, { maxBytes: 4096, signal });
+	if (rootResult.code !== 0) throw new Error("Worker 需要 Git 工作区以记录变更");
 	const gitRoot = fs.realpathSync(rootResult.stdout.toString("utf8").trim());
-	const statusPaths = await gitChangedPaths(gitRoot);
+	const statusPaths = await gitChangedPaths(gitRoot, signal);
 	const paths = new Set([...statusPaths, ...includePaths]);
 	const files = new Map<string, { worktree: string | null; index: string | null }>();
 	for (const relativePath of paths) {
-		files.set(relativePath, { worktree: fileHash(path.join(gitRoot, relativePath)), index: await indexHash(gitRoot, relativePath) });
+		throwIfAborted(signal, "工作区快照");
+		files.set(relativePath, { worktree: fileHash(path.join(gitRoot, relativePath)), index: await indexHash(gitRoot, relativePath, signal) });
 	}
-	let fsEntries: Map<string, string> | undefined;
-	let externalSymlinks: string[] = [];
-	if (includeFilesystem) {
-		const shouldExcludeAgentRuntime = excludeAgentRuntime && gitRoot === fs.realpathSync(agentDir());
-		const scanned = scanWorkspace(gitRoot, await gitIgnoredPaths(gitRoot), shouldExcludeAgentRuntime);
-		fsEntries = scanned.entries;
-		externalSymlinks = scanned.externalSymlinks;
-	}
-	return { gitRoot, cwd, statusPaths, files, fsEntries, excludeAgentRuntime, externalSymlinks };
+	return { gitRoot, cwd, statusPaths, files };
 }
 
-export async function changedSince(before: WorkspaceSnapshot): Promise<{ changed: string[]; after: WorkspaceSnapshot; externalSymlinks: string[] }> {
-	const currentPaths = await gitChangedPaths(before.gitRoot);
+export async function changedSince(before: WorkspaceSnapshot, signal?: AbortSignal): Promise<{ changed: string[]; after: WorkspaceSnapshot }> {
+	throwIfAborted(signal, "工作区变更校验");
+	const currentPaths = await gitChangedPaths(before.gitRoot, signal);
 	const union = new Set([...before.statusPaths, ...currentPaths]);
-	const after = await snapshotWorkspace(before.cwd, union, Boolean(before.fsEntries), before.excludeAgentRuntime);
+	const after = await snapshotWorkspace(before.cwd, union, signal);
 	const changed = new Set<string>();
 	for (const relativePath of union) {
-		const old = before.files.get(relativePath) ?? { worktree: fileHash(path.join(before.gitRoot, relativePath)), index: await indexHash(before.gitRoot, relativePath) };
+		throwIfAborted(signal, "工作区变更校验");
+		const old = before.files.get(relativePath) ?? { worktree: fileHash(path.join(before.gitRoot, relativePath)), index: await indexHash(before.gitRoot, relativePath, signal) };
 		const now = after.files.get(relativePath)!;
 		if (old.worktree !== now.worktree || old.index !== now.index || before.statusPaths.has(relativePath) !== currentPaths.has(relativePath)) {
 			changed.add(path.relative(before.cwd, path.join(before.gitRoot, relativePath)).replaceAll("\\", "/"));
 		}
 	}
-	if (before.fsEntries && after.fsEntries) {
-		const fsPaths = new Set([...before.fsEntries.keys(), ...after.fsEntries.keys()]);
-		for (const relativePath of fsPaths) {
-			if (before.fsEntries.get(relativePath) !== after.fsEntries.get(relativePath)) {
-				changed.add(path.relative(before.cwd, path.join(before.gitRoot, relativePath)).replaceAll("\\", "/"));
-			}
-		}
-	}
-	return { changed: [...changed].sort(), after, externalSymlinks: after.externalSymlinks };
+	return { changed: [...changed].sort(), after };
 }
