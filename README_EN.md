@@ -7,6 +7,8 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 ## Features
 
 - **Custom UI**: startup logo, editor, message cards, working status, and a compact footer.
+- **Context inspection**: `/context` shows the current context-window breakdown and previews the System Prompt, Tools, Context Files, and Skills; detail views support Space for page-down navigation.
+- **Codex usage**: `/usage` uses Pi's currently resolved OpenAI Codex authorization to show the subscription plan, primary, secondary, and additional usage windows, remaining allowance, reset times, and credits.
 - **Structured questions**: the `ask_question` tool supports single choice, multiple choice, and custom input.
 - **Plan workflow**: `/plan` creates a checklist, waits for confirmation, executes its steps continuously, and performs a final check.
 - **Tiered memory**: automatically maintains user preferences, retrieves indexed memories through `searchmemory`, and persists reusable project knowledge with `/end`.
@@ -21,11 +23,13 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 .
 ├── extensions/          # TypeScript extensions
 │   ├── ask-question/    # Structured user questions
+│   ├── context/         # /context usage breakdown and content previews
 │   ├── fast/            # Model request optimization
 │   ├── filter-output/   # Sensitive output filtering
 │   ├── memory/          # Tiered memory, memory tools, and /end
 │   ├── plan/            # /plan workflow
 │   ├── subagents/       # Chinese Subagents workflows
+│   ├── usage/           # /usage Codex subscription usage
 │   └── ui/              # TUI customization
 ├── skills/              # Agent Skills
 ├── themes/pi.json       # Custom theme
@@ -79,6 +83,8 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 
 | Command | Description |
 | --- | --- |
+| `/context` | Show the context breakdown and preview the System Prompt, Tools, Context Files, or Skills |
+| `/usage` | Show subscription usage, remaining allowance, and reset times for the current OpenAI Codex account |
 | `/plan [task]` | Create a checklist, confirm it, execute it continuously, and run a final check |
 | `/end` | Finish the task and persist reusable indexed memory |
 | `/reload` | Reload extensions, skills, themes, and keybindings |
@@ -99,6 +105,8 @@ git diff --cached
 
 `.gitignore` only protects files that are not already tracked. If a sensitive file has ever been committed, remove it from the Git index and history, then rotate the affected credentials immediately.
 
+`/context` details are shown only in the local TUI and are not written to the session or sent to the model again. `/usage` does not read credential files directly: it uses Pi's resolved runtime authorization and sends only Bearer Authorization to the official `https://chatgpt.com` usage endpoint; custom or proxy origins are rejected.
+
 Ignored data includes:
 
 - Provider credentials and model API keys
@@ -110,3 +118,5 @@ Ignored data includes:
 ## Notes
 
 This configuration is tailored to a personal workflow and is not a general Pi distribution. Extensions have full local system access; review all extension source code before using or modifying third-party extensions.
+
+`/usage` relies on an undocumented ChatGPT usage endpoint whose fields or availability may change. It currently supports only the official OpenAI Codex origin.

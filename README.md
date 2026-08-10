@@ -7,6 +7,8 @@
 ## 功能
 
 - **自定义界面**：启动 Logo、输入框、消息卡片、工作状态和精简 Footer。
+- **上下文检查**：`/context` 展示当前上下文窗口的分类占用，并可查看 System Prompt、Tools、Context Files 和 Skills 的具体内容；详情支持空格翻页。
+- **Codex 用量**：`/usage` 使用 Pi 当前解析的 OpenAI Codex 认证，显示订阅计划、主/次及附加用量窗口、剩余额度、重置时间和 Credits。
 - **结构化提问**：`ask_question` 工具支持单选、多选和自由输入。
 - **Plan 工作流**：`/plan` 会生成一份 checklist，确认后按步骤连续执行并进行最终检查。
 - **分级记忆**：自动维护用户偏好；通过 `searchmemory` 按需检索索引记忆；使用 `/end` 沉淀长期有效的项目经验。
@@ -22,11 +24,13 @@
 .
 ├── extensions/          # TypeScript 扩展
 │   ├── ask-question/    # 结构化用户提问
+│   ├── context/         # /context 上下文占用与内容预览
 │   ├── fast/            # 模型请求优化
 │   ├── filter-output/   # 敏感信息过滤
 │   ├── memory/          # 分级记忆、记忆工具与 /end 命令
 │   ├── plan/            # /plan 工作流
 │   ├── subagents/       # 中文 Subagents 工作流
+│   ├── usage/           # /usage Codex 订阅用量
 │   ├── ui/              # TUI 定制
 │   └── worker/          # 通用 Worker 工具
 │       └── agents/      # Worker 执行契约
@@ -83,6 +87,8 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 
 | 命令 | 说明 |
 | --- | --- |
+| `/context` | 查看上下文分类占用，并进入 System Prompt、Tools、Context Files 或 Skills 预览 |
+| `/usage` | 查看当前 OpenAI Codex 账号的订阅用量、剩余额度和重置时间 |
 | `/plan [任务]` | 生成 checklist，确认后连续执行并最终检查 |
 | `/end` | 结束当前任务并沉淀可复用的 indexed memory |
 | `/reload` | 重新加载扩展、Skill、主题和快捷键 |
@@ -114,6 +120,8 @@ git diff --cached
 
 `.gitignore` 只能阻止尚未被 Git 跟踪的文件。若敏感文件曾经提交过，需要先将其从 Git 索引和历史中移除，并立即轮换相关密钥。
 
+`/context` 的详情只显示在本地 TUI，不会写入会话或额外发送给模型。`/usage` 不直接读取凭据文件，只使用 Pi 解析后的运行时认证，并仅向官方 `https://chatgpt.com` 用量接口发送 Bearer Authorization；自定义或代理 Origin 会被拒绝。
+
 默认忽略的内容包括：
 
 - Provider 登录凭据和模型 API Key
@@ -125,3 +133,5 @@ git diff --cached
 ## 说明
 
 这是面向个人工作流的配置，不是通用 Pi 发行版。扩展拥有本机完整权限，请在使用或修改第三方扩展前审查源码。
+
+`/usage` 依赖 ChatGPT 的非公开用量接口，服务端字段或可用性可能变化；当前仅支持官方 OpenAI Codex Origin。
