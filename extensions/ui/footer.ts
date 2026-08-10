@@ -21,9 +21,9 @@ export class NoCostFooter implements Component {
         const model = this.ctx.model as any;
         const modelText = model?.name || model?.id || 'no-model';
         const thinkingLevel = this.ctx.thinkingLevel || 'off';
-        const rightText = [contextText, `${modelText} . ${thinkingLevel}`].filter(Boolean).join(' · ');
+        const rightText = `${modelText} . ${thinkingLevel}`;
         const statuses = Array.from(this.footerData.getExtensionStatuses().values()).map((s) => s.replace(/[\r\n\t]/g, ' ').trim()).filter(Boolean);
-        const leftText = [pwd, statuses.join(' · ')].filter(Boolean).join(' · ');
+        const leftText = [pwd, statuses.join(' · '), contextText].filter(Boolean).join(' · ');
         const right = this.theme.fg('dim', rightText);
         const rightWidth = visibleWidth(right);
         const minGap = 2;

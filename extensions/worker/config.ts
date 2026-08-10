@@ -169,7 +169,7 @@ export function resolveRoute(task: WorkerTask, config: RoutingConfig, ctx: Exten
 	const preset = inferred.preset;
 	const setting = config[preset];
 	const thinking = setting.thinking;
-	if ((preset === "max" || thinking === "xhigh" || thinking === "max") && !task.userExplicitMax) throw new Error("Max/xhigh 未获用户明确授权");
+	if ((preset === "max" || thinking === "max") && !task.userExplicitMax) throw new Error("Max/xhigh 未获用户明确授权");
 	const model = findConfiguredModel(ctx, setting.model);
 	if (!model) throw new Error(`${preset}.model 配置的模型不可用：${setting.model}`);
 	const levels = supportedThinking(model);
