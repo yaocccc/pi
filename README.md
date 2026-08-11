@@ -11,7 +11,7 @@
 - **Codex 用量**：`/usage` 使用 Pi 当前解析的 OpenAI Codex 认证，显示订阅计划、主/次及附加用量窗口、剩余额度、重置时间和 Credits。
 - **结构化提问**：`ask_question` 工具支持单选、多选和自由输入。
 - **Plan 工作流**：`/plan` 会生成一份 checklist，确认后按步骤连续执行并进行最终检查。
-- **分级记忆**：自动维护用户偏好；通过 `searchmemory` 按需检索索引记忆；使用 `/end` 沉淀长期有效的项目经验。
+- **分级记忆**：自动维护用户偏好；通过 `memory_search` 检索索引、`memory_get` 按需读取详情；模型可用 `memory_summarize` 请求在本轮结束后沉淀，也可手动执行 `/summarize`。
 - **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
 - **请求优化**：为支持的 OpenAI Codex GPT-5.6 模型设置 priority service tier。
 - **Worker 编排**：使用独立 Pi 进程并行调查、实现、测试和审查，支持模型分级路由与写入边界校验。
@@ -27,7 +27,7 @@
 │   ├── context/         # /context 上下文占用与内容预览
 │   ├── fast/            # 模型请求优化
 │   ├── filter-output/   # 敏感信息过滤
-│   ├── memory/          # 分级记忆、记忆工具与 /end 命令
+│   ├── memory/          # 分级记忆、记忆工具与 /summarize 命令
 │   ├── plan/            # /plan 工作流
 │   ├── subagents/       # 中文 Subagents 工作流
 │   ├── usage/           # /usage Codex 订阅用量
@@ -35,6 +35,7 @@
 │   └── worker/          # 通用 Worker 工具
 │       └── agents/      # Worker 执行契约
 ├── skills/              # Agent Skills 与 Worker 编排规则
+├── memory-settings.json # Memory 容量、总结模型与上下文配置
 ├── worker-settings.json # Worker 模型与并发配置
 ├── themes/pi.json       # 自定义主题
 ├── keybindings.json     # 快捷键
@@ -90,13 +91,16 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 | `/context` | 查看上下文分类占用，并进入 System Prompt、Tools、Context Files 或 Skills 预览 |
 | `/usage` | 查看当前 OpenAI Codex 账号的订阅用量、剩余额度和重置时间 |
 | `/plan [任务]` | 生成 checklist，确认后连续执行并最终检查 |
-| `/end` | 结束当前任务并沉淀可复用的 indexed memory |
+| `/summarize` | 总结当前任务并沉淀可复用的 indexed memory |
+| `/memory_settings` | 交互式配置记忆上限、自动总结、模型、Thinking、通知及上下文来源 |
 | `/reload` | 重新加载扩展、Skill、主题和快捷键 |
 | `/login` | 配置 Provider 认证 |
 | `/model` | 选择模型 |
 | `Ctrl+Y` | 打开会话恢复界面 |
 
-`searchmemory`、`ask_question`、`plan_check_result` 和 `worker` 是供 Agent 调用的工具，不需要手动执行。
+`memory_search`、`memory_get`、`memory_summarize`、`ask_question`、`plan_check_result` 和 `worker` 是供 Agent 调用的工具，不需要手动执行。
+
+可通过 `/memory_settings` 交互式修改配置，也可直接编辑 `memory-settings.json`。配置项包括记忆数量上限、自动总结、总结模型、思考强度、结果展示方式以及是否包含 Tool Messages 和 Thinking。`summarize.includeToolMessages` 同时控制 Tool Call 与 Tool Result；Memory Tools 的调用和结果始终排除。保存后续总结会使用新配置；切换自动总结时需执行 `/reload` 以同步 `memory_summarize` Tool 的注册状态。`summarize.resultDisplay` 支持 `message`（写入会话）、`popup`（居中弹窗，默认）和 `none`（不通知）；文件或字段缺失时使用内置默认值。`memory_get` 会把最新记忆版本与当前分支最近一次读取结果进行比较：版本相同则提示复用原 Tool Result，内容有更新时才返回完整最新详情；上下文压缩或分支摘要后重新读取完整内容。TUI 总结在后台运行，不阻塞编辑器或后续会话；期间可按 `Esc` 取消模型请求，实际写入开始后为保证索引与详情一致性不再接受取消。弹窗会突出处理结果、记忆标题、关键字段、上下文输入/输出和耗时。
 
 ## Worker
 

@@ -1,0 +1,12 @@
+{
+  "$schemaVersion": 1,
+  "maxMemories": 100,
+  "summarize": {
+    "auto": true,
+    "model": "openai-codex/gpt-5.3-spark",
+    "thinking": "medium",
+    "resultDisplay": "popup",
+    "includeToolMessages": false,
+    "includeThinking": false
+  }
+}

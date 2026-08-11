@@ -1,8 +1,9 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { AGENT_DIR, DEFAULT_INDEX, DEFAULT_MEMORY, MAX_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH, MEMORY_PATH } from './constants';
-import type { IndexEntry, MemoryDetail, MemoryType, SearchCacheEntry } from './types';
+import { AGENT_DIR, DEFAULT_INDEX, DEFAULT_MEMORY, MAX_GET_MEMORY_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH, MEMORY_PATH } from './constants';
+import type { GetMemoryResult, IndexEntry, MemoryDetail, MemoryType, SearchCacheEntry } from './types';
 import { clamp, cleanValue, codeWords, exists, limitSummary, redactSensitive, saveText } from './utils';
 
 export const ensureIndexedMemory = async () => {
@@ -61,13 +62,19 @@ export const parseMemoryDetail = (markdown: string): MemoryDetail => {
     };
 };
 
+const memoryFileName = (file: string): string | undefined => {
+    const name = basename(cleanValue(file));
+    if (!name || name.includes('..') || !name.endsWith('.md')) return undefined;
+    return name;
+};
+
 export const parseIndex = (markdown: string): IndexEntry[] => {
     const entries: IndexEntry[] = [];
     const re = /(?:^|\n)###\s+(.+)\n([\s\S]*?)(?=\n###\s+|\s*$)/g;
     for (const match of markdown.matchAll(re)) {
         const body = match[2] ?? '';
         const heading = match[1]!.trim();
-        const file = cleanValue(fieldOf(body, 'file'));
+        const file = memoryFileName(fieldOf(body, 'file'));
         if (!file) continue;
         const tags = codeWords(fieldOf(body, 'tags'));
         const keywords = codeWords(fieldOf(body, 'keywords'));
@@ -93,7 +100,7 @@ export const parseIndex = (markdown: string): IndexEntry[] => {
 export const renderIndexEntry = (e: IndexEntry): string => [
     `### ${redactSensitive(e.heading)}`,
     '',
-    `- file: \`${cleanValue(e.file)}\``,
+    `- file: \`${memoryFileName(e.file) ?? ''}\``,
     `- type: \`${e.type}\``,
     `- project: \`${redactSensitive(e.project)}\``,
     `- tags: ${e.tags.map((t) => `\`${redactSensitive(t)}\``).join(' ')}`,
@@ -113,12 +120,11 @@ export const renderIndex = (entries: IndexEntry[]): string => `${DEFAULT_INDEX.t
     ...entry,
     heading: numberedHeading(entry.heading, index),
 })).join('\n\n')}`.trimEnd();
-export const memoryFileRef = (fileName: string): string => `.pi/agent/memories/${fileName}`;
+export const memoryFileRef = (fileName: string): string => memoryFileName(fileName) ?? '';
 
 export const memoryPathFromRef = (file: string): string | undefined => {
-    const name = basename(cleanValue(file));
-    if (!name || name.includes('..') || !name.endsWith('.md')) return undefined;
-    return join(MEMORIES_DIR, name);
+    const name = memoryFileName(file);
+    return name ? join(MEMORIES_DIR, name) : undefined;
 };
 
 const normalizeToken = (value: string): string => cleanValue(value).toLowerCase();
@@ -189,47 +195,72 @@ export const searchIndex = (query: string, index: string, project: string, limit
         .map((x) => x.entry);
 };
 
-const formatConstraints = (constraints: string[]): string => constraints.length ? constraints.slice(0, 3).map((c) => `\`${limitSummary(c)}\``).join(' ') : 'none';
-
-const formatSearchResults = (results: IndexEntry[], details = new Map<string, string>()): string => {
+const formatSearchResults = (results: IndexEntry[]): string => {
     if (results.length === 0) return '## Search Memory Results\n\n未找到相关 indexed memory。';
     return [
         '## Search Memory Results',
         '',
-        ...results.map((e, i) => [
-            `### ${i + 1}. ${e.heading}`,
-            `- summary: ${limitSummary(e.summary)}`,
-            `- when_to_use: ${e.whenToUse}`,
-            `- constraints: ${formatConstraints(e.constraints)}`,
-            ...(details.has(e.file) ? ['', '#### Detail', clamp(details.get(e.file)!, MAX_DETAIL_CHARS)] : []),
-        ].join('\n')),
+        ...results.map(renderIndexEntry),
     ].join('\n\n');
 };
 
 export const compactSearchDisplay = (text: string): string => {
-    const headings = [...text.matchAll(/^###\s+(.+)$/gm)].map((m) => `### ${m[1]!.trim()}`);
-    if (headings.length > 0) return ['\n## Search Memory Results', ...headings].join('\n');
-    if (text.includes('未找到相关 indexed memory')) return '\n## Search Memory Results\n未找到相关 indexed memory。';
-    if (text.includes('本会话已搜索过')) return '\n## Search Memory Results\n本会话已搜索过相同 indexed memory query，本次不重复注入结果。';
-    return `\n${text.trim()}`;
+    const headings = [...text.matchAll(/^###\s+(.+)$/gm)].map((match) => match[1]!.trim());
+    if (headings.length > 0) return headings.join('\n');
+    if (text.includes('未找到相关 indexed memory')) return 'Empty!';
+    if (text.includes('本会话已搜索过')) return 'Cached!';
+    return text.trim();
 };
 
-export const searchIndexedMemory = async (query: string, ctx: ExtensionContext, includeDetails = false, explicitProject?: string): Promise<string> => {
+export const searchIndexedMemory = async (query: string, ctx: ExtensionContext, explicitProject?: string): Promise<string> => {
     const index = await readIndex();
     const results = searchIndex(query, index, projectName(ctx, explicitProject));
-    const details = new Map<string, string>();
-    if (includeDetails) {
-        for (const entry of results.slice(0, 3)) {
-            const path = memoryPathFromRef(entry.file);
-            if (!path) continue;
-            try {
-                details.set(entry.file, redactSensitive(await readFile(path, 'utf8')));
-            } catch {
-                details.set(entry.file, '（详情文件读取失败或不存在）');
-            }
-        }
+    return formatSearchResults(results);
+};
+
+const memoryTitle = (heading: string): string => heading.replace(/^\d{4}\s+/, '').trim();
+const normalizeMemoryName = (name: string): string => memoryTitle(cleanValue(name)).toLowerCase().replace(/\s+/g, ' ');
+export const memoryVersion = (text: string): string => createHash('sha256').update(text).digest('hex');
+
+export const getIndexedMemory = async (name: string): Promise<GetMemoryResult> => {
+    const normalizedName = normalizeMemoryName(name);
+    const entry = parseIndex(await readIndex()).find((item) => normalizeMemoryName(item.heading) === normalizedName);
+    if (!entry) {
+        return {
+            text: `## Get Memory Result\n\n未找到记忆：${name}`,
+            name,
+            found: false,
+        };
     }
-    return formatSearchResults(results, details);
+
+    const detailPath = memoryPathFromRef(entry.file);
+    if (!detailPath) {
+        return {
+            text: `## Get Memory Result\n\n记忆文件无效：${entry.file}`,
+            name: memoryTitle(entry.heading),
+            file: entry.file,
+            found: false,
+        };
+    }
+
+    try {
+        const detail = clamp(redactSensitive(await readFile(detailPath, 'utf8')), MAX_GET_MEMORY_DETAIL_CHARS);
+        const text = `## Get Memory Result\n\n### ${memoryTitle(entry.heading)}\n\n${detail}`;
+        return {
+            text,
+            name: memoryTitle(entry.heading),
+            file: entry.file,
+            found: true,
+            version: memoryVersion(text),
+        };
+    } catch {
+        return {
+            text: `## Get Memory Result\n\n记忆文件读取失败：${entry.file}`,
+            name: memoryTitle(entry.heading),
+            file: entry.file,
+            found: false,
+        };
+    }
 };
 
 export const normalizeSearchQuery = (query: string): string => extractKeywords(query).join(' ') || query.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -242,7 +273,6 @@ export const duplicateSearchResult = (entry: SearchCacheEntry): string => [
     '',
     `- query: \`${entry.query}\``,
     `- project: \`${entry.project}\``,
-    `- previous: \`${entry.hasDetails ? 'includeDetails=true' : 'summary-only'}\``,
     '',
-    '请参考上方已有 searchmemory 结果；如需重新检索，请换一个更具体的 query。',
+    '请参考上方已有 memory_search 结果；如需重新检索，请换一个更具体的 query。',
 ].join('\n');

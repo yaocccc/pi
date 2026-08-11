@@ -1,17 +1,35 @@
 import type { Message } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
-import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { estimateTokens, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { readFile, readdir, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { MAX_COMMIT_CHARS, MAX_DETAIL_CHARS, MAX_INDEX_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH } from './constants';
-import { ensureIndexedMemory, extractKeywords, memoryFileRef, memoryPathFromRef, normalizeMemoryType, parseIndex, parseMemoryDetail, projectName, readIndex, renderIndex } from './indexed';
+import { MAX_COMMIT_CHARS, MAX_DETAIL_CHARS, MAX_INDEX_CHARS, MAX_MERGE_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH } from './constants';
+import { ensureIndexedMemory, extractKeywords, memoryFileRef, memoryPathFromRef, normalizeMemoryType, parseIndex, parseMemoryDetail, projectName, readIndex, renderIndex, renderIndexEntry } from './indexed';
+import { readMemorySettings, resolveSummaryModel, resolveSummaryThinking, type MemorySettings } from './settings';
 import type { CommitMemory, CompactResult, IndexEntry, Obj, Progress } from './types';
 import { asObj, assistantText, clamp, clampTail, cleanValue, limitSummary, redactSensitive, saveText, stripFence, textOf, today } from './utils';
+
+const summaryRuntime = async (ctx: ExtensionContext, settings: MemorySettings) => {
+    let model = resolveSummaryModel(ctx, settings);
+    if (!model) return undefined;
+    let auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if ((!auth.ok || !auth.apiKey) && ctx.model && model !== ctx.model) {
+        model = ctx.model;
+        auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    }
+    if (!auth.ok || !auth.apiKey) return undefined;
+    return {
+        model,
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        reasoning: resolveSummaryThinking(ctx, settings, model),
+    };
+};
 
 const commitPrompt = (conversation: string, index: string, project: string): string =>
     `你是 indexed memory commit 子 agent。请从本轮会话中提取值得长期保存的核心 coding/debug/架构记忆。\n\n` +
     `规则：\n` +
-    `1. /end 不代表一定要写入 memory；没有长期价值时输出 {"memories":[]}。\n` +
+    `1. /summarize 不代表一定要写入 memory；没有长期价值时输出 {"memories":[]}。\n` +
     `2. 只保存已解决 bug、技术决策、项目约定、踩坑经验、可复用方案、长期工作流。\n` +
     `3. 不保存闲聊、临时问题、大段日志、未验证猜测、完整代码、无明确复用场景的内容。\n` +
     `4. 简单任务最多 1 条，复杂任务最多 3 条；不要为了凑数强行生成。\n` +
@@ -148,13 +166,74 @@ const readDetail = async (entry: IndexEntry): Promise<string> => {
     return readFile(path, 'utf8').catch(() => '');
 };
 
-const compactionPrompt = (entries: IndexEntry[], details: Map<string, string>, project: string): string => {
+const mergePrompt = (existing: IndexEntry, existingDetail: string, incoming: CommitMemory): string =>
+    `你是 indexed memory 合并子 agent。请把本轮新增信息合并进已有长期记忆，输出更新后的完整 memory JSON。\n\n` +
+    `规则：\n` +
+    `1. 保留已有记忆中仍然有效的决策、约束、实现要点、验证结论和复用场景。\n` +
+    `2. 本轮明确的新结论优先于冲突的旧结论；仅删除已被明确替代或证明错误的内容。\n` +
+    `3. 合并去重，不要简单拼接；summary 不超过 120 字，content 保持 4-10 条简洁要点。\n` +
+    `4. constraints 最多 3 条，必须优先保留有效的硬约束；evidence 合并旧证据与本轮证据。\n` +
+    `5. 不要输出完整代码，只保留文件路径、函数名、配置名、命令和关键参数。\n` +
+    `6. 只输出 JSON，不要 Markdown，不要解释。\n\n` +
+    `JSON 格式：\n` +
+    `{"memory":{"title":"","type":"solution|decision|mistake|convention|note","project":"","tags":[""],"keywords":[""],"summary":"","when_to_use":"","constraints":[],"content":"","evidence":""}}\n\n` +
+    `<existing_index_entry>\n${renderIndexEntry(existing)}\n</existing_index_entry>\n\n` +
+    `<existing_memory>\n${clamp(existingDetail, MAX_MERGE_DETAIL_CHARS)}\n</existing_memory>\n\n` +
+    `<incoming_memory>\n${JSON.stringify({
+        title: incoming.title,
+        type: incoming.type,
+        project: incoming.project,
+        tags: incoming.tags,
+        keywords: incoming.keywords,
+        summary: incoming.summary,
+        when_to_use: incoming.whenToUse,
+        constraints: incoming.constraints,
+        content: incoming.content,
+        evidence: incoming.evidence,
+    })}\n</incoming_memory>`;
+
+const requestMergedMemory = async (
+    existing: IndexEntry,
+    existingDetail: string,
+    incoming: CommitMemory,
+    ctx: ExtensionContext,
+    settings: MemorySettings,
+    signal?: AbortSignal,
+): Promise<CommitMemory | undefined> => {
+    const runtime = await summaryRuntime(ctx, settings);
+    if (!runtime) return undefined;
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: mergePrompt(existing, existingDetail, incoming) }], timestamp: Date.now() }];
+    const res = await completeSimple(runtime.model, { messages }, {
+        apiKey: runtime.apiKey,
+        headers: runtime.headers,
+        maxTokens: 4_000,
+        reasoning: runtime.reasoning,
+        signal,
+    });
+    if (res.stopReason === 'error' || res.stopReason === 'aborted') return undefined;
+
+    try {
+        const parsed = asObj(jsonFromText(assistantText(res)));
+        const merged = normalizeCommit(parsed?.memory ?? parsed, incoming.project);
+        if (!merged) return undefined;
+        merged.file = incoming.file;
+        merged.heading = headingFromFile(merged.file, merged.title);
+        if (merged.tags.length === 0) merged.tags = [...existing.tags];
+        if (merged.constraints.length === 0) merged.constraints = [...existing.constraints];
+        merged.updated = today();
+        return merged;
+    } catch {
+        return undefined;
+    }
+};
+
+const compactionPrompt = (entries: IndexEntry[], details: Map<string, string>, project: string, maxMemories: number): string => {
     const index = renderIndex(entries);
     const detailText = entries.map((entry) => [
         `### ${entry.file}`,
         clamp(details.get(entry.file) ?? '（详情不可用）', MAX_DETAIL_CHARS),
     ].join('\n')).join('\n\n');
-    return `你是 indexed memory 压缩子 agent。当前索引 ${index.length} 字符，必须压缩到不超过 ${MAX_INDEX_CHARS} 字符。\n\n` +
+    return `你是 indexed memory 压缩子 agent。当前有 ${entries.length} 条记忆、索引 ${index.length} 字符；必须压缩到不超过 ${maxMemories} 条且索引不超过 ${MAX_INDEX_CHARS} 字符。\n\n` +
         `请评估全部记忆的长期复用价值，并决定合并和删除操作。当前项目为 ${project}。\n\n` +
         `规则：\n` +
         `1. 优先合并主题重复、相互补充或同一问题演进过程中的记忆；合并后必须保留全部有效约束、结论、验证结果和复用场景。\n` +
@@ -163,24 +242,29 @@ const compactionPrompt = (entries: IndexEntry[], details: Map<string, string>, p
         `4. 不要合并不兼容项目的专属约定；不要删除唯一的关键技术决策、安全规则或踩坑结论。\n` +
         `5. merge 的 keep_file 和 drop_files 必须来自现有 file；drop_files 内容必须完整吸收到 memory。\n` +
         `6. memory 的 summary 不超过 120 字，content 保持 4-10 条简洁要点，不输出完整代码。\n` +
-        `7. 操作应足以把索引降到 ${MAX_INDEX_CHARS} 字符以内，但不要过度删除。\n` +
+        `7. 操作应足以把记忆降到 ${maxMemories} 条以内且索引降到 ${MAX_INDEX_CHARS} 字符以内，但不要过度删除。\n` +
         `8. 只输出 JSON，不要 Markdown，不要解释。\n\n` +
         `JSON 格式：\n` +
-        `{"merges":[{"keep_file":".pi/agent/memories/0001-example.md","drop_files":[".pi/agent/memories/0002-example.md"],"memory":{"title":"","type":"solution|decision|mistake|convention|note","project":"","tags":[""],"keywords":[""],"summary":"","when_to_use":"","constraints":[],"content":"","evidence":""}}],"deletes":[".pi/agent/memories/0003-example.md"]}\n\n` +
+        `{"merges":[{"keep_file":"example.md","drop_files":["duplicate.md"],"memory":{"title":"","type":"solution|decision|mistake|convention|note","project":"","tags":[""],"keywords":[""],"summary":"","when_to_use":"","constraints":[],"content":"","evidence":""}}],"deletes":["obsolete.md"]}\n\n` +
         `<index>\n${index}\n</index>\n\n` +
         `<details>\n${detailText}\n</details>`;
 };
 
-const requestCompactionPlan = async (entries: IndexEntry[], details: Map<string, string>, project: string, ctx: ExtensionContext): Promise<Obj | undefined> => {
-    if (!ctx.model) return undefined;
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-    if (!auth.ok || !auth.apiKey) return undefined;
-    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: compactionPrompt(entries, details, project) }], timestamp: Date.now() }];
-    const res = await completeSimple(ctx.model, { messages }, {
-        apiKey: auth.apiKey,
-        headers: auth.headers,
+const requestCompactionPlan = async (
+    entries: IndexEntry[],
+    details: Map<string, string>,
+    project: string,
+    ctx: ExtensionContext,
+    settings: MemorySettings,
+): Promise<Obj | undefined> => {
+    const runtime = await summaryRuntime(ctx, settings);
+    if (!runtime) return undefined;
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: compactionPrompt(entries, details, project, settings.maxMemories) }], timestamp: Date.now() }];
+    const res = await completeSimple(runtime.model, { messages }, {
+        apiKey: runtime.apiKey,
+        headers: runtime.headers,
         maxTokens: 6_000,
-        reasoning: 'medium',
+        reasoning: runtime.reasoning,
     });
     if (res.stopReason === 'error') return undefined;
     try {
@@ -190,7 +274,7 @@ const requestCompactionPlan = async (entries: IndexEntry[], details: Map<string,
     }
 };
 
-const compactIndexedMemories = async (entries: IndexEntry[], project: string, ctx: ExtensionContext): Promise<CompactResult> => {
+const compactIndexedMemories = async (entries: IndexEntry[], project: string, ctx: ExtensionContext, settings: MemorySettings): Promise<CompactResult> => {
     const details = new Map<string, string>();
     for (const entry of entries) details.set(entry.file, await readDetail(entry));
 
@@ -210,8 +294,9 @@ const compactIndexedMemories = async (entries: IndexEntry[], project: string, ct
         return entry;
     };
 
-    for (let round = 1; renderIndex(kept).length > MAX_INDEX_CHARS && round <= 3; round++) {
-        const plan = await requestCompactionPlan(kept, details, project, ctx);
+    const exceedsLimits = () => kept.length > settings.maxMemories || renderIndex(kept).length > MAX_INDEX_CHARS;
+    for (let round = 1; exceedsLimits() && round <= 3; round++) {
+        const plan = await requestCompactionPlan(kept, details, project, ctx, settings);
         if (!plan) {
             warnings.push(`第 ${round} 轮模型压缩评估失败，已停止压缩。`);
             break;
@@ -279,6 +364,7 @@ const compactIndexedMemories = async (entries: IndexEntry[], project: string, ct
         const path = memoryPathFromRef(entry.file);
         if (path) await unlink(path).catch(() => undefined);
     }
+    if (kept.length > settings.maxMemories) warnings.push(`模型压缩后仍有 ${kept.length} 条记忆，超过 ${settings.maxMemories} 条上限。`);
     if (renderIndex(kept).length > MAX_INDEX_CHARS) warnings.push(`模型压缩后索引仍为 ${renderIndex(kept).length} 字符，超过 ${MAX_INDEX_CHARS} 字符上限。`);
     return { entries: kept, removed, merged, warnings };
 };
@@ -366,7 +452,7 @@ const validateIndexedMemory = async (entries: IndexEntry[]): Promise<Consistency
     const indexedFiles = new Set(fixed.map((entry) => fileNameFromRef(entry.file)).filter((file): file is string => !!file));
     const files = await readdir(MEMORIES_DIR).catch(() => []);
     for (const file of files.filter((name) => name.endsWith('.md')).sort()) {
-        if (!indexedFiles.has(file)) warnings.push(`发现孤儿 memory 文件：.pi/agent/memories/${file}`);
+        if (!indexedFiles.has(file)) warnings.push(`发现孤儿 memory 文件：${file}`);
     }
 
     return { entries: fixed, warnings };
@@ -403,44 +489,153 @@ const memoryMarkdown = (m: CommitMemory): string => redactSensitive([
     clamp(m.content, 4_000),
     '',
     '## Evidence',
-    m.evidence || '来自 /end 时对当前会话的总结。',
+    m.evidence || '来自 /summarize 时对当前会话的总结。',
     '',
     '## Updated',
     m.updated ?? today(),
 ].join('\n'));
 
-const sessionConversation = (ctx: ExtensionContext): string => {
+const thinkingText = (content: unknown): string => {
+    if (!Array.isArray(content)) return '';
+    return content.map((part) => {
+        const block = asObj(part);
+        return block?.type === 'thinking' && typeof block.thinking === 'string' ? block.thinking : '';
+    }).filter(Boolean).join('\n').trim();
+};
+
+const EXCLUDED_SUMMARY_TOOLS = new Set(['memory_search', 'memory_get', 'memory_summarize']);
+const MAX_SUMMARY_TOOL_MESSAGE_CHARS = 4_000;
+const SENSITIVE_TOOL_ARGUMENT_KEYS = new Set([
+    'apikey',
+    'authorization',
+    'cookie',
+    'clientsecret',
+    'dbpassword',
+    'exchangesecret',
+    'mnemonic',
+    'password',
+    'passwd',
+    'privatekey',
+    'pwd',
+    'recoveryphrase',
+    'seed',
+    'seedphrase',
+    'secret',
+    'signingsecret',
+]);
+
+const sensitiveToolArgumentKey = (key: string): boolean => {
+    const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    return SENSITIVE_TOOL_ARGUMENT_KEYS.has(normalized) || normalized === 'token' || normalized.endsWith('token');
+};
+
+const sanitizeToolArguments = (value: unknown, seen = new WeakSet<object>()): unknown => {
+    if (typeof value === 'string') return redactSensitive(value);
+    if (!value || typeof value !== 'object') return value;
+    if (seen.has(value)) return '<CIRCULAR>';
+    seen.add(value);
+    if (Array.isArray(value)) {
+        const result = value.map((item) => sanitizeToolArguments(item, seen));
+        seen.delete(value);
+        return result;
+    }
+    const object = asObj(value);
+    if (!object) return String(value);
+    const result = Object.fromEntries(Object.entries(object).map(([key, item]) => [
+        key,
+        sensitiveToolArgumentKey(key) ? '<REDACTED>' : sanitizeToolArguments(item, seen),
+    ]));
+    seen.delete(value);
+    return result;
+};
+
+const toolCallMessages = (content: unknown): string[] => {
+    if (!Array.isArray(content)) return [];
+    return content.map((part) => {
+        const block = asObj(part);
+        if (block?.type !== 'toolCall') return '';
+        const rawToolName = String(block.name ?? 'unknown');
+        if (EXCLUDED_SUMMARY_TOOLS.has(rawToolName)) return '';
+        let args: string;
+        try {
+            args = JSON.stringify(sanitizeToolArguments(block.arguments), null, 2) ?? '';
+        } catch {
+            args = '<UNSERIALIZABLE>';
+        }
+        return `[tool-call:${redactSensitive(rawToolName)}]\n${clamp(args, MAX_SUMMARY_TOOL_MESSAGE_CHARS)}`;
+    }).filter(Boolean);
+};
+
+const sessionConversation = (ctx: ExtensionContext, settings: MemorySettings): string => {
     const leaf = ctx.sessionManager.getLeafId();
     const entries = leaf ? ctx.sessionManager.getBranch(leaf) : ctx.sessionManager.getEntries();
     return entries.map((entry: any) => {
         if (entry.type !== 'message') return '';
         const role = entry.message?.role;
-        if (role !== 'user' && role !== 'assistant') return '';
-        const text = textOf(entry.message.content);
-        return text ? `[${role}]\n${redactSensitive(text)}` : '';
+        const text = textOf(entry.message?.content);
+        if (role === 'user') return text ? `[user]\n${redactSensitive(text)}` : '';
+        if (role === 'assistant') {
+            const parts: string[] = [];
+            if (text) parts.push(`[assistant]\n${redactSensitive(text)}`);
+            if (settings.summarize.includeThinking) {
+                const thinking = thinkingText(entry.message?.content);
+                if (thinking) parts.push(`[assistant-thinking]\n${redactSensitive(thinking)}`);
+            }
+            if (settings.summarize.includeToolMessages) parts.push(...toolCallMessages(entry.message?.content));
+            return parts.join('\n\n');
+        }
+        if (role === 'toolResult' && settings.summarize.includeToolMessages && text) {
+            const rawToolName = String(entry.message?.toolName ?? 'unknown');
+            if (EXCLUDED_SUMMARY_TOOLS.has(rawToolName)) return '';
+            const toolName = redactSensitive(rawToolName);
+            const status = entry.message?.isError ? 'error' : 'ok';
+            return `[tool-result:${toolName} status=${status}]\n${clamp(redactSensitive(text), MAX_SUMMARY_TOOL_MESSAGE_CHARS)}`;
+        }
+        return '';
     }).filter(Boolean).join('\n\n');
 };
 
-export const commitIndexedMemory = async (ctx: ExtensionContext, progress: Progress = () => undefined): Promise<string> => {
+export const commitIndexedMemory = async (
+    ctx: ExtensionContext,
+    progress: Progress = () => undefined,
+    configuredSettings?: MemorySettings,
+    signal?: AbortSignal,
+): Promise<string> => {
     progress('准备记忆文件……');
     await ensureIndexedMemory();
-    if (!ctx.model) return '## Indexed Memory Commit\n\n当前没有可用模型，未写入 indexed memory。';
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-    if (!auth.ok || !auth.apiKey) return '## Indexed Memory Commit\n\n当前模型认证不可用，未写入 indexed memory。';
+    const settings = configuredSettings ?? await readMemorySettings();
+    const runtime = await summaryRuntime(ctx, settings);
+    if (!runtime) return '## Indexed Memory Commit\n\n总结模型不可用或认证失败，未写入 indexed memory。';
 
     const index = await readIndex();
     const project = projectName(ctx);
-    const conversation = sessionConversation(ctx);
+    const conversation = sessionConversation(ctx, settings);
     if (!conversation.trim()) return '## Indexed Memory Commit\n\n当前会话没有可总结内容。';
 
-    progress('总结当前会话……');
     const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: commitPrompt(conversation, index, project) }], timestamp: 0 }];
-    const res = await completeSimple(ctx.model, { messages }, {
-        apiKey: auth.apiKey,
-        headers: auth.headers,
+    const requestInfo = {
+        contextTokens: estimateTokens(messages[0]),
+        model: `${runtime.model.provider}/${runtime.model.id}`,
+        thinking: runtime.reasoning ?? 'off',
+        cancellable: true,
+    };
+    progress('总结当前会话……', requestInfo);
+    const res = await completeSimple(runtime.model, { messages }, {
+        apiKey: runtime.apiKey,
+        headers: runtime.headers,
         maxTokens: 4_000,
-        reasoning: 'medium',
+        reasoning: runtime.reasoning,
+        signal,
     });
+    const actualContextTokens = res.usage.input + res.usage.cacheRead + res.usage.cacheWrite;
+    if (actualContextTokens > 0 || res.usage.output > 0) {
+        progress('总结当前会话……', {
+            ...requestInfo,
+            contextTokens: actualContextTokens > 0 ? actualContextTokens : requestInfo.contextTokens,
+            outputTokens: res.usage.output,
+        });
+    }
+    if (signal?.aborted || res.stopReason === 'aborted') return '## Indexed Memory Commit\n\n总结已取消，未写入 indexed memory。';
     if (res.stopReason === 'error') return '## Indexed Memory Commit\n\n模型总结失败，未写入 indexed memory。';
 
     let parsed: unknown;
@@ -456,11 +651,13 @@ export const commitIndexedMemory = async (ctx: ExtensionContext, progress: Progr
     const diskFiles = await readdir(MEMORIES_DIR).catch(() => []);
     const reservedFiles = new Set([...diskFiles, ...entries.map((entry) => fileNameFromRef(entry.file)).filter((file): file is string => !!file)]);
     const createdFiles = new Set<string>();
+    const stagedDetails = new Map<string, string>();
+    const commitWarnings: string[] = [];
     let compacted: CompactResult | undefined;
-    if (rawMemories.length > 0) progress('写入记忆……');
+    if (rawMemories.length > 0) progress('处理记忆……');
 
     for (const raw of rawMemories.slice(0, 3)) {
-        const item = normalizeCommit(raw, project);
+        let item = normalizeCommit(raw, project);
         if (!item) continue;
 
         const requestedFileName = fileNameFromRef(item.file);
@@ -478,7 +675,24 @@ export const commitIndexedMemory = async (ctx: ExtensionContext, progress: Progr
         item.file = memoryFileRef(fileName);
         item.heading = headingFromFile(item.file, item.title);
 
-        await saveText(join(MEMORIES_DIR, fileName), memoryMarkdown(item));
+        if (matched) {
+            const existingDetail = (matchedFileName ? stagedDetails.get(matchedFileName) : undefined) ?? await readDetail(matched);
+            if (existingDetail.trim()) {
+                progress(`合并已有记忆：${titleWithoutId(matched.heading)}……`);
+                const merged = await requestMergedMemory(matched, existingDetail, item, ctx, settings, signal);
+                if (signal?.aborted) return '## Indexed Memory Commit\n\n总结已取消，未写入 indexed memory。';
+                if (!merged) {
+                    commitWarnings.push(`已有记忆合并失败，已保留原文件：${matched.file}`);
+                    continue;
+                }
+                item = merged;
+            } else {
+                commitWarnings.push(`已有记忆详情缺失，已根据本轮内容重建：${matched.file}`);
+            }
+        }
+
+        if (signal?.aborted) return '## Indexed Memory Commit\n\n总结已取消，未写入 indexed memory。';
+        stagedDetails.set(fileName, memoryMarkdown(item));
         const oldIndex = entries.findIndex((e) => fileNameFromRef(e.file) === fileName);
         const nextEntry: IndexEntry = {
             heading: item.heading,
@@ -497,16 +711,27 @@ export const commitIndexedMemory = async (ctx: ExtensionContext, progress: Progr
         committed.push({ memory: item, action });
     }
 
-    const needsValidation = committed.length > 0 || renderIndex(entries).length > MAX_INDEX_CHARS;
-    if (!needsValidation) return '## Indexed Memory Commit\n\n本轮无 indexed memory 写入。';
+    if (signal?.aborted) return '## Indexed Memory Commit\n\n总结已取消，未写入 indexed memory。';
+    progress(stagedDetails.size > 0 ? '写入记忆……' : '完成总结……', { cancellable: false });
+    for (const [fileName, markdown] of stagedDetails) await saveText(join(MEMORIES_DIR, fileName), markdown);
+
+    const needsValidation = committed.length > 0
+        || entries.length > settings.maxMemories
+        || renderIndex(entries).length > MAX_INDEX_CHARS;
+    if (!needsValidation) return [
+        '## Indexed Memory Commit',
+        '',
+        '本轮无 indexed memory 写入。',
+        ...warningLines(commitWarnings),
+    ].join('\n');
 
     progress('校验记忆索引……');
     const validation = await safeValidateIndexedMemory(entries);
     entries = validation.entries;
 
-    if (renderIndex(entries).length > MAX_INDEX_CHARS) {
+    if (entries.length > settings.maxMemories || renderIndex(entries).length > MAX_INDEX_CHARS) {
         progress('压缩记忆……');
-        compacted = await compactIndexedMemories(entries, project, ctx);
+        compacted = await compactIndexedMemories(entries, project, ctx, settings);
         entries = compacted.entries;
     }
 
@@ -519,7 +744,7 @@ export const commitIndexedMemory = async (ctx: ExtensionContext, progress: Progr
             '',
             '本轮无 indexed memory 写入。',
             `已压缩 indexed memory：合并 ${compacted.merged} 条，删除 ${compacted.removed.length} 条，当前索引 ${renderedIndex.length} 字符（上限 ${MAX_INDEX_CHARS}）。`,
-            ...warningLines([...validation.warnings, ...compacted.warnings]),
+            ...warningLines([...commitWarnings, ...validation.warnings, ...compacted.warnings]),
         ].join('\n');
     }
     return [
@@ -529,6 +754,6 @@ export const commitIndexedMemory = async (ctx: ExtensionContext, progress: Progr
         '',
         ...committed.map(({ memory: m, action }, i) => `${i + 1}. ${action}：${m.title}\n   - file: \`${m.file}\`\n   - summary: ${m.summary}\n   - when_to_use: ${m.whenToUse}\n   - content:\n${clamp(m.content, 800).split('\n').map((line) => `     ${line}`).join('\n')}`),
         ...(compacted ? ['', `压缩结果：合并 ${compacted.merged} 条，删除 ${compacted.removed.length} 条，当前索引 ${renderedIndex.length} 字符（上限 ${MAX_INDEX_CHARS}）。`] : []),
-        ...warningLines([...validation.warnings, ...(compacted?.warnings ?? [])]),
+        ...warningLines([...commitWarnings, ...validation.warnings, ...(compacted?.warnings ?? [])]),
     ].join('\n');
 };

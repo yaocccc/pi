@@ -1,23 +1,43 @@
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Box, Text } from '@earendil-works/pi-tui';
+import { CustomEditor, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { Box, Container, Key, matchesKey, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { basename } from 'node:path';
 import { commitIndexedMemory } from './commit';
-import { DEBOUNCE_MS, MEMORY_INDEX_PATH, SearchMemoryParams } from './constants';
+import { DEBOUNCE_MS, MemoryGetParams, MEMORY_INDEX_PATH, MemorySearchParams, MemorySummarizeParams } from './constants';
 import {
     compactSearchDisplay,
     duplicateSearchResult,
     ensureIndexedMemory,
+    getIndexedMemory,
+    memoryVersion,
     projectName,
     searchCacheKey,
     searchIndexedMemory,
 } from './indexed';
 import { memoryPrompt, updateMemory } from './profile';
-import type { SearchCacheEntry } from './types';
-import { textOf, userText } from './utils';
+import { readMemorySettings } from './settings';
+import { configureMemorySettings } from './settings-ui';
+import { claimSummaryRequest, clearSummaryRequest, finishSummaryRequest, queueSummaryRequest } from './summary-request';
+import type { ProgressInfo, SearchCacheEntry } from './types';
+import { asObj, textOf, userText } from './utils';
 
-const memoryExtension = (pi: ExtensionAPI) => {
+type EditorFactory = NonNullable<ReturnType<ExtensionContext['ui']['getEditorComponent']>>;
+type SummaryResultMetadata = {
+    model: string;
+    thinking: string;
+    input: string;
+    output: string;
+    elapsed: string;
+};
+
+const SUMMARY_FRAME_INTERVAL_MS = 120;
+
+const memoryExtension = async (pi: ExtensionAPI) => {
+    let settings = await readMemorySettings();
     let queue = Promise.resolve();
     let pending: string[] = [];
     let timer: NodeJS.Timeout | undefined;
+    let summaryQueue = Promise.resolve();
+    let settledQueue = Promise.resolve();
     const searchCaches = new Map<string, Map<string, SearchCacheEntry>>();
 
     void ensureIndexedMemory().catch(() => undefined);
@@ -39,6 +59,34 @@ const memoryExtension = (pi: ExtensionAPI) => {
         return cache;
     };
 
+    const normalizeLoadedMemoryName = (name: string): string => name
+        .replace(/^\d{4}\s+/, '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+
+    const latestMemoryRead = (ctx: ExtensionContext, name: string): { name: string; version: string } | undefined => {
+        const leaf = ctx.sessionManager.getLeafId();
+        const entries = leaf ? ctx.sessionManager.getBranch(leaf) : ctx.sessionManager.getEntries();
+        const normalizedName = normalizeLoadedMemoryName(name);
+        for (let i = entries.length - 1; i >= 0; i--) {
+            const entry = entries[i];
+            if (entry.type !== 'message') continue;
+            const message = entry.message as any;
+            if (message.role === 'compactionSummary' || message.role === 'branchSummary') return undefined;
+            if (message.role !== 'toolResult' || message.toolName !== 'memory_get' || message.isError) continue;
+            const details = asObj(message.details);
+            if (details?.found !== true || typeof details.name !== 'string') continue;
+            const previousName = details.name.trim();
+            if (!previousName || normalizeLoadedMemoryName(previousName) !== normalizedName) continue;
+            if (typeof details.version === 'string' && details.version) return { name: previousName, version: details.version };
+            if (details.duplicate === true) continue;
+            const previousText = textOf(message.content);
+            if (previousText) return { name: previousName, version: memoryVersion(previousText) };
+        }
+        return undefined;
+    };
+
     const schedule = (input: string, ctx: ExtensionContext) => {
         pending.push(input);
         if (timer) clearTimeout(timer);
@@ -55,42 +103,272 @@ const memoryExtension = (pi: ExtensionAPI) => {
         }, DEBOUNCE_MS);
     };
 
+    const showSummaryResult = async (ctx: ExtensionContext, result: string, metadata?: SummaryResultMetadata): Promise<void> => {
+        if (ctx.mode !== 'tui') {
+            pi.sendMessage({ customType: 'indexed-memory', content: result, display: true });
+            return;
+        }
+
+        const source = result.replace(/^## Indexed Memory Commit\s*/, '').trim() || '本轮无 indexed memory 写入。';
+        let scrollOffset = 0;
+        let maxOffset = 0;
+        await ctx.ui.custom(
+            (tui, theme, _keybindings, done) => ({
+                invalidate() {},
+                handleInput(data: string) {
+                    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c')) || matchesKey(data, Key.enter)) {
+                        done(undefined);
+                        return;
+                    }
+                    const previousOffset = scrollOffset;
+                    if (matchesKey(data, Key.up)) scrollOffset = Math.max(0, scrollOffset - 1);
+                    else if (matchesKey(data, Key.down)) scrollOffset = Math.min(maxOffset, scrollOffset + 1);
+                    else if (matchesKey(data, Key.pageUp)) scrollOffset = Math.max(0, scrollOffset - 10);
+                    else if (matchesKey(data, Key.pageDown)) scrollOffset = Math.min(maxOffset, scrollOffset + 10);
+                    if (scrollOffset !== previousOffset) tui.requestRender();
+                },
+                render(width: number) {
+                    const inner = Math.max(1, width - 2);
+                    const contentWidth = Math.max(1, inner - 2);
+                    const styleResultLine = (line: string): string => {
+                        const trimmed = line.trim();
+                        if (!trimmed) return '';
+                        if (/^###\s+Warnings/i.test(trimmed)) return theme.bold(theme.fg('warning', 'Warnings'));
+                        if (/总结已取消|失败|warning/i.test(trimmed)) return theme.fg('warning', line);
+                        if (/^已处理|^本轮无 indexed memory 写入|^已压缩 indexed memory/.test(trimmed)) {
+                            return theme.bold(theme.fg('success', line));
+                        }
+                        if (/^\d+\.\s+(新增|更新)：/.test(trimmed)) return theme.bold(theme.fg('accent', line));
+                        const field = line.match(/^(\s*-\s+)(file|summary|when_to_use|content):\s*(.*)$/);
+                        if (field) {
+                            const [, prefix, label, value] = field;
+                            return `${prefix}${theme.bold(theme.fg('accent', `${label}:`))}${value ? ` ${value}` : ''}`;
+                        }
+                        const bullet = line.match(/^(\s*)-\s+(.*)$/);
+                        if (bullet) return `${bullet[1]}${theme.fg('accent', '•')} ${bullet[2]}`;
+                        return line;
+                    };
+                    const wrapped = source.split('\n').flatMap((line) => {
+                        const styled = styleResultLine(line);
+                        return styled ? wrapTextWithAnsi(styled, contentWidth) : [''];
+                    });
+                    const visibleRows = 16;
+                    maxOffset = Math.max(0, wrapped.length - visibleRows);
+                    scrollOffset = Math.min(scrollOffset, maxOffset);
+                    const rows = wrapped.slice(scrollOffset, scrollOffset + visibleRows);
+                    const pad = (text: string): string => {
+                        const truncated = truncateToWidth(text, inner, '…');
+                        return truncated + ' '.repeat(Math.max(0, inner - visibleWidth(truncated)));
+                    };
+                    const border = (text: string): string => theme.fg('border', text);
+                    const position = maxOffset > 0 ? theme.fg('muted', ` ${scrollOffset + 1}-${scrollOffset + rows.length}/${wrapped.length}`) : '';
+                    const title = theme.bold(theme.fg('accent', 'Indexed Memory Commit'));
+                    const metadataRows = metadata ? [
+                        ` ${theme.fg('accent', '◆')} ${theme.bold(metadata.model)} ${theme.fg('muted', `thinking ${metadata.thinking}`)}`,
+                        ` ${theme.fg('muted', '上下文')} ${theme.bold(theme.fg('accent', `↑${metadata.input}`))}  ${theme.fg('muted', '输出')} ${theme.bold(theme.fg('success', `↓${metadata.output}`))}  ${theme.fg('muted', '耗时')} ${theme.bold(theme.fg('warning', metadata.elapsed))}`,
+                    ] : [];
+                    return [
+                        border(`╭${'─'.repeat(inner)}╮`),
+                        `${border('│')}${pad(` ${title}${position}`)}${border('│')}`,
+                        `${border('├')}${border('─'.repeat(inner))}${border('┤')}`,
+                        ...metadataRows.map((row) => `${border('│')}${pad(row)}${border('│')}`),
+                        ...(metadataRows.length ? [`${border('├')}${border('─'.repeat(inner))}${border('┤')}`] : []),
+                        ...rows.map((row) => `${border('│')}${pad(` ${row}`)}${border('│')}`),
+                        `${border('├')}${border('─'.repeat(inner))}${border('┤')}`,
+                        `${border('│')}${pad(theme.fg('dim', ' ↑/↓ 滚动 · Enter / Esc 关闭'))}${border('│')}`,
+                        border(`╰${'─'.repeat(inner)}╯`),
+                    ];
+                },
+            }),
+            {
+                overlay: true,
+                overlayOptions: { anchor: 'center', width: 92, minWidth: 56, maxHeight: '90%', margin: 1 },
+            },
+        );
+    };
+
+    const runSummary = async (ctx: ExtensionContext) => {
+        type SummaryOutcome = { result?: string; error?: string };
+        const sendText = (content: string) => pi.sendMessage({ customType: 'text', content, display: true });
+        const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        let progressText = '开始……';
+        let summaryContextTokens: number | undefined;
+        let summaryOutputTokens: number | undefined;
+        let requestModel: string | undefined;
+        let requestThinking: string | undefined;
+        let cancellable = true;
+        let cancelRequested = false;
+        const formatTokens = (tokens: number | null | undefined): string => {
+            if (tokens === null || tokens === undefined || !Number.isFinite(tokens)) return '?';
+            if (tokens < 1_000) return String(Math.round(tokens));
+            if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
+            return `${(tokens / 1_000_000).toFixed(1)}m`;
+        };
+        const formatElapsed = (): string => {
+            const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1_000);
+            const minutes = Math.floor(elapsedSeconds / 60);
+            const seconds = elapsedSeconds % 60;
+            return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${seconds}s`;
+        };
+        const progressLine = (): string => {
+            const elapsed = Math.max(0, Date.now() - startedAt);
+            const frameIndex = Math.floor(elapsed / SUMMARY_FRAME_INTERVAL_MS) % frames.length;
+            const spinner = ctx.ui.theme.fg('accent', frames[frameIndex]!);
+            const requestInfo = requestModel ? ` · ${requestModel} ${requestThinking ?? 'off'}` : '';
+            return `${spinner} memory: ${progressText}${requestInfo} · ↑${formatTokens(summaryContextTokens)} ↓${formatTokens(summaryOutputTokens)} · ${formatElapsed()}`;
+        };
+        const renderProgress = () => {
+            if (!ctx.hasUI) return;
+            const lines = [progressLine()];
+            if (cancellable && !cancelRequested) {
+                lines.push('\x1b[2m  Esc 取消总结 · 后台运行，可继续对话\x1b[22m');
+            }
+            ctx.ui.setWidget('memory-progress', lines);
+        };
+        const showProgress = (message: string, info?: ProgressInfo) => {
+            progressText = message;
+            if (info?.contextTokens !== undefined) summaryContextTokens = info.contextTokens;
+            if (info?.outputTokens !== undefined) summaryOutputTokens = info.outputTokens;
+            if (info?.model !== undefined) requestModel = info.model;
+            if (info?.thinking !== undefined) requestThinking = info.thinking;
+            if (!cancelRequested && info?.cancellable !== undefined) cancellable = info.cancellable;
+            renderProgress();
+        };
+        const execute = async (): Promise<SummaryOutcome> => {
+            try {
+                const result = await commitIndexedMemory(ctx, showProgress, settings, controller.signal);
+                searchCaches.delete(ctx.sessionManager.getSessionId());
+                return { result };
+            } catch (e) {
+                if (controller.signal.aborted) return { result: '## Indexed Memory Commit\n\n总结已取消，未写入 indexed memory。' };
+                const message = e instanceof Error ? e.message : String(e);
+                return { error: `indexed memory 写入失败：${message}` };
+            }
+        };
+
+        const previousEditorFactory = ctx.mode === 'tui' ? ctx.ui.getEditorComponent() : undefined;
+        let cancelEditorFactory: EditorFactory | undefined;
+        if (ctx.mode === 'tui') {
+            cancelEditorFactory = (tui, theme, keybindings) => {
+                const editor = previousEditorFactory
+                    ? previousEditorFactory(tui, theme, keybindings)
+                    : new CustomEditor(tui, theme, keybindings);
+                const handleInput = editor.handleInput.bind(editor);
+                editor.handleInput = (data: string) => {
+                    if (cancellable && !cancelRequested && matchesKey(data, Key.escape)) {
+                        cancelRequested = true;
+                        cancellable = false;
+                        progressText = '正在取消……';
+                        controller.abort();
+                        renderProgress();
+                        return;
+                    }
+                    handleInput(data);
+                };
+                return editor;
+            };
+            ctx.ui.setEditorComponent(cancelEditorFactory);
+        }
+
+        const progressTimer = ctx.hasUI ? setInterval(renderProgress, SUMMARY_FRAME_INTERVAL_MS) : undefined;
+        showProgress('开始……');
+        let outcome: SummaryOutcome;
+        try {
+            outcome = await execute();
+        } finally {
+            if (progressTimer) clearInterval(progressTimer);
+            if (ctx.hasUI) ctx.ui.setWidget('memory-progress', undefined);
+            if (cancelEditorFactory && ctx.ui.getEditorComponent() === cancelEditorFactory) {
+                ctx.ui.setEditorComponent(previousEditorFactory);
+            }
+        }
+
+        if (outcome.result) {
+            const metadata: SummaryResultMetadata = {
+                model: requestModel ?? 'model ?',
+                thinking: requestThinking ?? 'off',
+                input: formatTokens(summaryContextTokens),
+                output: formatTokens(summaryOutputTokens),
+                elapsed: formatElapsed(),
+            };
+            if (settings.summarize.resultDisplay === 'message') {
+                pi.sendMessage({ customType: 'indexed-memory', content: outcome.result, display: true });
+            } else if (settings.summarize.resultDisplay === 'popup') {
+                await showSummaryResult(ctx, outcome.result, metadata);
+            }
+        } else if (outcome.error) sendText(outcome.error);
+    };
+
+    const enqueueSummary = (ctx: ExtensionContext): Promise<void> => {
+        summaryQueue = summaryQueue.catch(() => undefined).then(() => runSummary(ctx));
+        return summaryQueue;
+    };
+
     pi.on('before_agent_start', async (event) => {
+        const additions: string[] = [];
         const m = await memoryPrompt();
-        return m ? { systemPrompt: `${event.systemPrompt}\n\n${m}` } : undefined;
+        if (m) additions.push(m);
+        if (!settings.summarize.auto) additions.push('自动记忆总结已关闭；不要调用 memory_summarize。手动 /summarize 仍可使用。');
+        return additions.length ? { systemPrompt: `${event.systemPrompt}\n\n${additions.join('\n\n')}` } : undefined;
     });
 
     pi.on('message_end', (event, ctx) => {
         const text = userText(event.message);
-        if (text && text.trim() !== '/end') schedule(text, ctx);
+        if (text && text.trim() !== '/summarize') schedule(text, ctx);
+    });
+
+    pi.on('agent_settled', (_event, ctx) => {
+        settledQueue = settledQueue.catch(() => undefined).then(async () => {
+            if (!settings.summarize.auto) {
+                await clearSummaryRequest(ctx);
+                return;
+            }
+            const claimed = await claimSummaryRequest(ctx);
+            if (!claimed) return;
+            try {
+                await enqueueSummary(ctx);
+            } finally {
+                await finishSummaryRequest(claimed);
+            }
+        });
+    });
+
+    pi.on('session_shutdown', async (_event, ctx) => {
+        if (timer) clearTimeout(timer);
+        await clearSummaryRequest(ctx);
+        await settledQueue.catch(() => undefined);
+        await summaryQueue.catch(() => undefined);
     });
 
     pi.registerTool({
-        name: 'searchmemory',
-        label: '搜索核心记忆',
-        description: '搜索 indexed memory。只搜索 ~/.pi/agent/memory-index.md；默认只返回索引摘要，只有 includeDetails=true 时才读取命中的 1-3 个具体记忆文件。',
-        promptSnippet: '按需调用 searchmemory 搜索核心可索引记忆；不要搜索 memory.md 用户画像，也不要扫描 memories 目录。',
-        promptGuidelines: [
-            '当用户提到“之前、上次、继续、按之前、和之前一样、还记得”，或任务涉及代码生成、debug、架构决策、依赖版本、已有项目、错误信息、修改已有文件时，应优先调用 searchmemory。',
-            'searchmemory 只能搜索 memory-index.md；不要把 memory.md 用户画像当成 indexed memory 搜索目标。',
-            '默认只需要 summary；如果 summary 不足，再用 includeDetails=true 读取命中的 1-3 个具体记忆文件。',
-            '不要全量读取或扫描 ~/.pi/agent/memories/。',
-            'searchmemory 返回的是候选上下文；当它与当前仓库文件冲突时，以当前仓库文件为准。',
-        ],
-        parameters: SearchMemoryParams,
+        name: 'memory_search',
+        label: '搜索记忆',
+        description: '搜索 memory index，返回匹配的 index 项。',
+        parameters: MemorySearchParams,
         async execute(_id, params, _signal, _onUpdate, ctx) {
             const project = projectName(ctx, params.project);
-            const includeDetails = params.includeDetails === true;
             const cache = sessionSearchCache(ctx);
             const key = searchCacheKey(params.query, project);
             const cached = cache.get(key);
-            if (cached && (cached.hasDetails || !includeDetails)) {
+            if (cached) {
                 return { content: [{ type: 'text', text: duplicateSearchResult(cached) }], details: { index: MEMORY_INDEX_PATH, duplicate: true } };
             }
 
-            const result = await searchIndexedMemory(params.query, ctx, includeDetails, project);
-            cache.set(key, { query: params.query, project, hasDetails: includeDetails });
+            const result = await searchIndexedMemory(params.query, ctx, project);
+            cache.set(key, { query: params.query, project });
             return { content: [{ type: 'text', text: result }], details: { index: MEMORY_INDEX_PATH, duplicate: false } };
+        },
+        renderCall(args, theme, context) {
+            const project = (args.project?.trim() || basename(context.cwd || '') || 'global').toLowerCase();
+            const text = theme.fg('toolTitle', theme.bold('memory_search '))
+                + theme.fg('dim', `project=${JSON.stringify(project)} `)
+                + theme.fg('muted', `query=${JSON.stringify(args.query)}`);
+            const container = new Container();
+            container.addChild(new Text(text, 0, 0));
+            container.addChild(new Spacer(1));
+            return container;
         },
         renderResult(result) {
             const first = result.content[0];
@@ -98,37 +376,94 @@ const memoryExtension = (pi: ExtensionAPI) => {
         },
     });
 
-    pi.registerCommand('end', {
-        description: '结束当前任务并沉淀核心 indexed memory',
-        handler: async (_args, ctx) => {
-            const sendText = (content: string) => pi.sendMessage({ customType: 'text', content, display: true });
-            const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let frame = 0;
-            let progressText = '开始……';
-            let progressTimer: NodeJS.Timeout | undefined;
-            const renderProgress = () => {
-                if (!ctx.hasUI) return;
-                ctx.ui.setWidget('memory-progress', [`${frames[frame++ % frames.length]} memory: ${progressText}`]);
-            };
-            const showProgress = (message: string) => {
-                progressText = message;
-                renderProgress();
-            };
-
-            if (ctx.hasUI) progressTimer = setInterval(renderProgress, 120);
-            showProgress('开始……');
-            await ctx.waitForIdle();
-            try {
-                const result = await commitIndexedMemory(ctx, showProgress);
-                searchCaches.delete(ctx.sessionManager.getSessionId());
-                pi.sendMessage({ customType: 'indexed-memory', content: result, display: true });
-            } catch (e) {
-                const message = e instanceof Error ? e.message : String(e);
-                sendText(`indexed memory 写入失败：${message}`);
-            } finally {
-                if (progressTimer) clearInterval(progressTimer);
-                if (ctx.hasUI) ctx.ui.setWidget('memory-progress', undefined);
+    pi.registerTool({
+        name: 'memory_get',
+        label: '获取记忆',
+        description: '按名称读取记忆；与当前分支最近一次读取版本相同则提示复用，有更新才返回最新详情。',
+        parameters: MemoryGetParams,
+        async execute(_id, params, _signal, _onUpdate, ctx) {
+            const result = await getIndexedMemory(params.name);
+            const previous = result.found ? latestMemoryRead(ctx, result.name) : undefined;
+            if (previous && result.version === previous.version) {
+                return {
+                    content: [{ type: 'text', text: `## Get Memory Result\n\n记忆“${result.name}”与当前会话中最近一次读取的版本相同。请复用此前的 memory_get 结果。` }],
+                    details: { requested: params.name, name: result.name, file: result.file, found: true, version: result.version, duplicate: true, updated: false },
+                };
             }
+            const updatedText = previous
+                ? `## Get Memory Result\n\n检测到记忆“${result.name}”已更新，以下为最新内容。\n\n${result.text.replace(/^## Get Memory Result\n\n/, '')}`
+                : result.text;
+            return {
+                content: [{ type: 'text', text: updatedText }],
+                details: { requested: params.name, name: result.name, file: result.file, found: result.found, version: result.version, duplicate: false, updated: !!previous },
+            };
+        },
+        renderCall(args, theme) {
+            return new Text(
+                theme.fg('toolTitle', theme.bold('memory_get ')) + theme.fg('muted', `name=${JSON.stringify(args.name)}`),
+                0,
+                0,
+            );
+        },
+        renderResult() {
+            return new Container();
+        },
+    });
+
+    if (settings.summarize.auto) pi.registerTool({
+        name: 'memory_summarize',
+        label: '请求总结记忆',
+        description: '请求在本轮消息结束后总结并沉淀 indexed memory。',
+        parameters: MemorySummarizeParams,
+        async execute(_id, _params, _signal, _onUpdate, ctx) {
+            if (!settings.summarize.auto) return {
+                content: [{ type: 'text', text: '自动记忆总结已关闭；可使用 /summarize 手动总结。' }],
+                details: { queued: false, sessionId: ctx.sessionManager.getSessionId() },
+            };
+            await queueSummaryRequest(ctx);
+            return {
+                content: [{ type: 'text', text: '已请求在本轮消息结束后总结 indexed memory。' }],
+                details: { queued: true, sessionId: ctx.sessionManager.getSessionId() },
+            };
+        },
+        renderCall(_args, theme) {
+            return new Text(theme.fg('toolTitle', theme.bold('memory_summarize')), 0, 0);
+        },
+        renderResult() {
+            return new Container();
+        },
+    });
+
+    pi.registerCommand('memory_settings', {
+        description: '交互式配置 Memory',
+        handler: async (_args, ctx) => {
+            if (!ctx.hasUI) {
+                pi.sendMessage({ customType: 'text', content: '/memory_settings 仅支持交互式 UI。', display: true });
+                return;
+            }
+            await ctx.waitForIdle();
+            const previousAuto = settings.summarize.auto;
+            try {
+                const updated = await configureMemorySettings(ctx, settings);
+                if (!updated) return;
+                settings = updated;
+                const reloadHint = previousAuto !== updated.summarize.auto
+                    ? '；自动总结工具状态将在 /reload 后同步'
+                    : '';
+                ctx.ui.notify(`Memory 设置已保存${reloadHint}`, 'info');
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`Memory 设置保存失败：${message}`, 'error');
+            }
+        },
+    });
+
+    pi.registerCommand('summarize', {
+        description: '总结当前任务并沉淀核心 indexed memory',
+        handler: async (_args, ctx) => {
+            await ctx.waitForIdle();
+            await clearSummaryRequest(ctx);
+            void enqueueSummary(ctx);
         },
     });
 };

@@ -33,7 +33,15 @@ export type CommitMemory = IndexEntry & {
     evidence: string;
 };
 
-export type Progress = (message: string) => void;
+export type ProgressInfo = {
+    contextTokens?: number;
+    outputTokens?: number;
+    model?: string;
+    thinking?: string;
+    cancellable?: boolean;
+};
+
+export type Progress = (message: string, info?: ProgressInfo) => void;
 
 export type CompactResult = {
     entries: IndexEntry[];
@@ -45,5 +53,12 @@ export type CompactResult = {
 export type SearchCacheEntry = {
     query: string;
     project: string;
-    hasDetails: boolean;
+};
+
+export type GetMemoryResult = {
+    text: string;
+    name: string;
+    file?: string;
+    found: boolean;
+    version?: string;
 };

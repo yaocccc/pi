@@ -11,7 +11,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 - **Codex usage**: `/usage` uses Pi's currently resolved OpenAI Codex authorization to show the subscription plan, primary, secondary, and additional usage windows, remaining allowance, reset times, and credits.
 - **Structured questions**: the `ask_question` tool supports single choice, multiple choice, and custom input.
 - **Plan workflow**: `/plan` creates a checklist, waits for confirmation, executes its steps continuously, and performs a final check.
-- **Tiered memory**: automatically maintains user preferences, retrieves indexed memories through `searchmemory`, and persists reusable project knowledge with `/end`.
+- **Tiered memory**: automatically maintains user preferences, searches through `memory_search`, reads details through `memory_get`, lets the model queue end-of-turn persistence with `memory_summarize`, and retains manual `/summarize`.
 - **Sensitive output filtering**: redacts common API keys, tokens, private keys, and connection strings before tool results enter the model context.
 - **Request optimization**: enables the priority service tier for supported OpenAI Codex GPT-5.6 models.
 - **Packages**: integrates `pi-web-access` and `@ff-labs/pi-fff`.
@@ -26,12 +26,13 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 │   ├── context/         # /context usage breakdown and content previews
 │   ├── fast/            # Model request optimization
 │   ├── filter-output/   # Sensitive output filtering
-│   ├── memory/          # Tiered memory, memory tools, and /end
+│   ├── memory/          # Tiered memory, memory tools, and /summarize
 │   ├── plan/            # /plan workflow
 │   ├── subagents/       # Chinese Subagents workflows
 │   ├── usage/           # /usage Codex subscription usage
 │   └── ui/              # TUI customization
 ├── skills/              # Agent Skills
+├── memory-settings.json # Memory limits, summary model, and context settings
 ├── themes/pi.json       # Custom theme
 ├── keybindings.json     # Keybindings
 └── settings.json        # Global Pi settings
@@ -86,13 +87,16 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 | `/context` | Show the context breakdown and preview the System Prompt, Tools, Context Files, or Skills |
 | `/usage` | Show subscription usage, remaining allowance, and reset times for the current OpenAI Codex account |
 | `/plan [task]` | Create a checklist, confirm it, execute it continuously, and run a final check |
-| `/end` | Finish the task and persist reusable indexed memory |
+| `/summarize` | Summarize the task and persist reusable indexed memory |
+| `/memory_settings` | Interactively configure the memory limit, automatic summaries, model, thinking, notifications, and context sources |
 | `/reload` | Reload extensions, skills, themes, and keybindings |
 | `/login` | Configure provider authentication |
 | `/model` | Select a model |
 | `Ctrl+Y` | Open the session resume picker |
 
-`searchmemory`, `ask_question`, and `plan_check_result` are agent tools and do not need to be invoked manually.
+`memory_search`, `memory_get`, `memory_summarize`, `ask_question`, and `plan_check_result` are agent tools and do not need to be invoked manually.
+
+Use `/memory_settings` to edit the configuration interactively, or edit `memory-settings.json` directly. It configures the memory limit, automatic summaries, summary model, thinking level, result display, and inclusion of Tool Messages or thinking. `summarize.includeToolMessages` controls both Tool Calls and Tool Results; Memory Tool calls and results are always excluded. Subsequent summaries use the saved configuration immediately; after toggling automatic summaries, run `/reload` to synchronize `memory_summarize` tool registration. `summarize.resultDisplay` supports `message` (write to the conversation), `popup` (centered popup, default), and `none` (no notification). Missing files or fields use built-in defaults. `memory_get` compares the latest memory version with its most recent read in the active branch: unchanged content reuses the previous Tool Result, while updated content returns full fresh details. Context compaction or a branch summary permits a full reload. In TUI mode, summaries run in the background without blocking the editor or subsequent turns. Press `Esc` to cancel the model request; cancellation is disabled once writes begin to preserve index/detail consistency. The popup emphasizes results, memory titles, key fields, input/output context usage, and elapsed time.
 
 ## Privacy and Security
 
