@@ -6,6 +6,7 @@ import { MODES, PRESETS, loadRoutingConfig, validateTask } from "./config";
 import { registerWorkerWriteGuard } from "./guard";
 import { beginWorkerShutdown, executeTask, killAllChildren, resetWorkerRuntime } from "./process";
 import { batchRequiresSerial } from "./security";
+import { configureWorkerSettings } from "./settings-ui";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
 import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, renderWorkerDetails, sanitizeStructuredValue, serializePayload } from "./ui";
 
@@ -55,6 +56,24 @@ export default function workerExtension(pi: ExtensionAPI) {
 	}
 	resetWorkerRuntime();
 	pi.on("session_shutdown", async () => beginWorkerShutdown());
+	pi.registerCommand("worker_settings", {
+		description: "交互式配置 Worker",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) {
+				pi.sendMessage({ customType: "text", content: "/worker_settings 仅支持交互式 UI。", display: true });
+				return;
+			}
+			await ctx.waitForIdle();
+			try {
+				const loaded = loadRoutingConfig();
+				const updated = await configureWorkerSettings(ctx, loaded.config, loaded.path);
+				if (updated) ctx.ui.notify("Worker 设置已保存，后续任务立即生效", "info");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Worker 设置保存失败：${message}`, "error");
+			}
+		},
+	});
 	pi.registerTool({
 		name: "worker",
 		label: "Worker",

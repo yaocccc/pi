@@ -89,6 +89,7 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 | `/plan [task]` | Create a checklist, confirm it, execute it continuously, and run a final check |
 | `/summarize` | Summarize the task and persist reusable indexed memory |
 | `/memory_settings` | Interactively configure the memory limit, automatic summaries, model, thinking, notifications, and context sources |
+| `/worker_settings` | Interactively configure Worker models, thinking, concurrency, automatic delegation, timeout, and output limits |
 | `/reload` | Reload extensions, skills, themes, and keybindings |
 | `/login` | Configure provider authentication |
 | `/model` | Select a model |
@@ -97,6 +98,8 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 `memory_search`, `memory_get`, `memory_summarize`, `ask_question`, and `plan_check_result` are agent tools and do not need to be invoked manually.
 
 Use `/memory_settings` to edit the configuration interactively, or edit `memory-settings.json` directly. It configures the memory limit, automatic summaries, summary model, thinking level, result display, and inclusion of Tool Messages or thinking. `summarize.includeToolMessages` controls both Tool Calls and Tool Results; Memory Tool calls and results are always excluded. Subsequent summaries use the saved configuration immediately; after toggling automatic summaries, run `/reload` to synchronize `memory_summarize` tool registration. `summarize.resultDisplay` supports `message` (write to the conversation), `popup` (centered popup, default), and `none` (no notification). Missing files or fields use built-in defaults. `memory_get` compares the latest memory version with its most recent read in the active branch: unchanged content reuses the previous Tool Result, while updated content returns full fresh details. Context compaction or a branch summary permits a full reload. In TUI mode, summaries run in the background without blocking the editor or subsequent turns. Press `Esc` to cancel the model request; cancellation is disabled once writes begin to preserve index/detail consistency. The popup emphasizes results, memory titles, key fields, input/output context usage, and elapsed time.
+
+Use `/worker_settings` to configure the Fast, Normal, Deep, and Max models and thinking levels, concurrency, automatic delegation, timeout, and output limit interactively. You can also edit `worker-settings.json` directly. Saved settings apply to subsequent Worker tasks immediately.
 
 ## Privacy and Security
 
