@@ -80,6 +80,7 @@ const toolBackgroundBlankLine = (tool: CompactToolExecution, width: number): str
 const usesCompactToolDisplay = (toolName: string): boolean => toolName.startsWith('ctx_')
     || toolName.startsWith('ff')
     || toolName === 'read'
+    || toolName === 'find'
     || toolName === 'grep';
 
 const SENSITIVE_TOOL_ARG = /(?:api.?key|authorization|cookie|password|private.?key|secret|token)/i;
