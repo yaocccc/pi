@@ -2,14 +2,13 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { AGENT_DIR, DEFAULT_INDEX, DEFAULT_MEMORY, MAX_GET_MEMORY_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH, MEMORY_PATH } from './constants';
+import { AGENT_DIR, DEFAULT_INDEX, MAX_GET_MEMORY_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH } from './constants';
 import type { GetMemoryResult, IndexEntry, MemoryDetail, MemoryType, SearchCacheEntry } from './types';
 import { clamp, cleanValue, codeWords, exists, limitSummary, redactSensitive, saveText } from './utils';
 
 export const ensureIndexedMemory = async () => {
     await mkdir(AGENT_DIR, { recursive: true });
     await mkdir(MEMORIES_DIR, { recursive: true });
-    if (!await exists(MEMORY_PATH)) await saveText(MEMORY_PATH, DEFAULT_MEMORY);
     if (!await exists(MEMORY_INDEX_PATH)) await saveText(MEMORY_INDEX_PATH, DEFAULT_INDEX);
 };
 

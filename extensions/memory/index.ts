@@ -2,7 +2,7 @@ import { CustomEditor, type ExtensionAPI, type ExtensionContext } from '@earendi
 import { Box, Container, Key, matchesKey, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { basename } from 'node:path';
 import { commitIndexedMemory } from './commit';
-import { DEBOUNCE_MS, MemoryGetParams, MEMORY_INDEX_PATH, MemorySearchParams, MemorySummarizeParams } from './constants';
+import { MemoryGetParams, MEMORY_INDEX_PATH, MemorySearchParams, MemorySummarizeParams } from './constants';
 import {
     compactSearchDisplay,
     duplicateSearchResult,
@@ -13,12 +13,11 @@ import {
     searchCacheKey,
     searchIndexedMemory,
 } from './indexed';
-import { memoryPrompt, updateMemory } from './profile';
 import { readMemorySettings } from './settings';
 import { configureMemorySettings } from './settings-ui';
 import { claimSummaryRequest, clearSummaryRequest, finishSummaryRequest, queueSummaryRequest } from './summary-request';
 import type { ProgressInfo, SearchCacheEntry } from './types';
-import { asObj, textOf, userText } from './utils';
+import { asObj, textOf } from './utils';
 
 type EditorFactory = NonNullable<ReturnType<ExtensionContext['ui']['getEditorComponent']>>;
 type SummaryResultMetadata = {
@@ -33,9 +32,6 @@ const SUMMARY_FRAME_INTERVAL_MS = 120;
 
 const memoryExtension = async (pi: ExtensionAPI) => {
     let settings = await readMemorySettings();
-    let queue = Promise.resolve();
-    let pending: string[] = [];
-    let timer: NodeJS.Timeout | undefined;
     let summaryQueue = Promise.resolve();
     let settledQueue = Promise.resolve();
     const searchCaches = new Map<string, Map<string, SearchCacheEntry>>();
@@ -85,22 +81,6 @@ const memoryExtension = async (pi: ExtensionAPI) => {
             if (previousText) return { name: previousName, version: memoryVersion(previousText) };
         }
         return undefined;
-    };
-
-    const schedule = (input: string, ctx: ExtensionContext) => {
-        pending.push(input);
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-            const batch = pending.join('\n\n');
-            pending = [];
-            queue = queue.catch(() => undefined).then(async () => {
-                try {
-                    await updateMemory(batch, ctx);
-                } catch {
-                    // 自动更新静默失败，不打断主会话。
-                }
-            });
-        }, DEBOUNCE_MS);
     };
 
     const showSummaryResult = async (ctx: ExtensionContext, result: string, metadata?: SummaryResultMetadata): Promise<void> => {
@@ -306,19 +286,6 @@ const memoryExtension = async (pi: ExtensionAPI) => {
         return summaryQueue;
     };
 
-    pi.on('before_agent_start', async (event) => {
-        const additions: string[] = [];
-        const m = await memoryPrompt();
-        if (m) additions.push(m);
-        if (!settings.summarize.auto) additions.push('自动记忆总结已关闭；不要调用 memory_summarize。手动 /summarize 仍可使用。');
-        return additions.length ? { systemPrompt: `${event.systemPrompt}\n\n${additions.join('\n\n')}` } : undefined;
-    });
-
-    pi.on('message_end', (event, ctx) => {
-        const text = userText(event.message);
-        if (text && text.trim() !== '/summarize') schedule(text, ctx);
-    });
-
     pi.on('agent_settled', (_event, ctx) => {
         settledQueue = settledQueue.catch(() => undefined).then(async () => {
             if (!settings.summarize.auto) {
@@ -336,7 +303,6 @@ const memoryExtension = async (pi: ExtensionAPI) => {
     });
 
     pi.on('session_shutdown', async (_event, ctx) => {
-        if (timer) clearTimeout(timer);
         await clearSummaryRequest(ctx);
         await settledQueue.catch(() => undefined);
         await summaryQueue.catch(() => undefined);
