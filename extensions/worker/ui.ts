@@ -265,6 +265,15 @@ export function uiDuration(task: WorkerUiTask): string | undefined {
 	return `${Math.floor(elapsed / 60_000)}m${Math.floor((elapsed % 60_000) / 1000)}s`;
 }
 
+export function workerConclusion(task: WorkerUiTask): string | undefined {
+	if (task.status !== "completed" || !Array.isArray(task.result?.summary)) return undefined;
+	for (const item of task.result.summary) {
+		const conclusion = compactUiValue(item, UI_DETAIL_CAP);
+		if (conclusion) return conclusion;
+	}
+	return undefined;
+}
+
 export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme) {
 	let text = "";
 	for (const [position, task] of details.tasks.entries()) {
@@ -275,8 +284,12 @@ export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme) {
 		const runtime = [preset, usage, duration].filter(Boolean).join(" · ");
 		text += `${uiStatusIcon(task.status, theme)} ${theme.fg("accent", task.mode)}${runtime ? theme.fg("muted", ` · ${runtime}`) : ""}`;
 		text += `\n  ${theme.fg("dim", uiSnippet(task.objective, 110))}`;
+		const conclusion = workerConclusion(task);
 		for (const activity of task.activities.slice(-UI_RECENT_ACTIVITY_LIMIT)) {
 			text += `\n  ${uiActivityLine(activity, theme)}`;
+			if (conclusion && activity.id === "phase:finished" && activity.status === "completed") {
+				text += `${theme.fg("muted", "，结论: ")}${theme.fg("toolOutput", conclusion)}`;
+			}
 		}
 	}
 	return new Text(text, 0, 0);

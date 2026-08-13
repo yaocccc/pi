@@ -231,7 +231,6 @@ export async function runPiWorker(
 			let forceKillTimer: NodeJS.Timeout | undefined;
 			let forceSettleTimer: NodeJS.Timeout | undefined;
 			let timeout: NodeJS.Timeout;
-			setPhase("启动独立 Worker");
 			const child = spawn(invocation.command, invocation.args, {
 				cwd,
 				shell: false,
@@ -249,7 +248,6 @@ export async function runPiWorker(
 
 			});
 			activeChildren.add(child);
-			setPhase("Worker 执行中");
 			const finish = (exitCode: number, childClosed = true) => {
 				if (settled) return;
 				settled = true;
