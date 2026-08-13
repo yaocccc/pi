@@ -3,8 +3,8 @@
   "maxMemories": 100,
   "summarize": {
     "auto": true,
-    "model": "openai-codex/gpt-5.3-spark",
-    "thinking": "medium",
+    "model": "openai-codex/gpt-5.3-codex-spark",
+    "thinking": "high",
     "resultDisplay": "popup",
     "includeToolMessages": false,
     "includeThinking": false

@@ -34,7 +34,14 @@ export default function ui(pi: ExtensionAPI) {
         input: (traceUsage.input ?? 0) + (currentUsage.input ?? 0),
         output: (traceUsage.output ?? 0) + (currentUsage.output ?? 0),
     });
-    const refreshWorkingMessage = (ctx: ExtensionContext) => applyWorkingMessage(ctx, startedAt, getDisplayedUsage(), currentTurn);
+    const refreshWorkingMessage = (ctx: ExtensionContext) => {
+        const usage = getDisplayedUsage();
+        const elapsedSeconds = startedAt === undefined ? 0 : (Date.now() - startedAt) / 1000;
+        const tps = elapsedSeconds > 0 && (usage.output ?? 0) > 0
+            ? (usage.output ?? 0) / elapsedSeconds
+            : undefined;
+        applyWorkingMessage(ctx, startedAt, usage, currentTurn, tps);
+    };
 
     pi.on('session_start', (_event, ctx) => {
         setWorkingMessageActive(false);

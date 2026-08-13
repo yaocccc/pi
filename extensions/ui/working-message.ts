@@ -17,7 +17,7 @@ export const setWorkingMessageActive = (active: boolean): void => {
 
 export const getWorkingMessageLine = (): string | undefined => currentWorkingLine;
 
-export const workingMessage = (startedAt: number | undefined, usage: TokenUsage = {}, turn?: number): string => {
+export const workingMessage = (startedAt: number | undefined, usage: TokenUsage = {}, turn?: number, tps?: number): string => {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const usageText = [
@@ -27,12 +27,13 @@ export const workingMessage = (startedAt: number | undefined, usage: TokenUsage 
     const parts = [
         `Turn ${turn ?? 1}`,
         ...(usageText ? [usageText] : []),
+        ...(typeof tps === 'number' && Number.isFinite(tps) ? [`${tps.toFixed(1)} tps`] : []),
         formatElapsed(startedAt ? Date.now() - startedAt : 0),
     ];
     return parts.join(' · ');
 };
 
-export const applyWorkingMessage = (ctx: ExtensionContext, startedAt?: number, usage?: TokenUsage, turn?: number): void => {
+export const applyWorkingMessage = (ctx: ExtensionContext, startedAt?: number, usage?: TokenUsage, turn?: number, tps?: number): void => {
     // 内置 status 与 editor 之间固定经过 widget spacer；把 working 行并入 editor 才能消除其下方空行。
     ctx.ui.setWorkingVisible(false);
     if (!workingMessageActive) {
@@ -43,6 +44,6 @@ export const applyWorkingMessage = (ctx: ExtensionContext, startedAt?: number, u
     const elapsed = Math.max(0, Date.now() - workingAnimationStartedAt);
     const frameIndex = Math.floor(elapsed / WORKING_FRAME_INTERVAL_MS) % WORKING_FRAMES.length;
     const frame = WORKING_FRAMES[frameIndex]!;
-    const message = workingMessage(startedAt, usage, turn);
+    const message = workingMessage(startedAt, usage, turn, tps);
     currentWorkingLine = `${ctx.ui.theme.fg('accent', frame)} ${ctx.ui.theme.fg('muted', message)}`;
 };

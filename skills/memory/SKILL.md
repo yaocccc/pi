@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Autonomously search indexed memory with memory_search when a task likely depends on prior work, read a matched memory by name with memory_get only when needed, and request memory_summarize after completed work produces durable reusable knowledge. Do not use for routine self-contained edits or summaries.
+description: For complex tasks, proactively search indexed memory with memory_search before acting when prior project decisions, constraints, fixes, or conventions could affect the result—even if the user does not mention earlier work. Read a matched memory by name with memory_get only when needed, and request memory_summarize after completed work produces durable reusable knowledge. Skip search for routine self-contained edits, translations, summaries, and general informational questions.
 ---
 
 # Memory
@@ -9,31 +9,36 @@ Use indexed memory when the current task depends on prior reusable context, or w
 
 ## Rules
 
-1. Decide autonomously when prior memory is likely to affect the result, then call `memory_search`; do not wait for the user to request it and do not ask the user to run it.
-2. `memory_search` only searches `~/.pi/agent/memory-index.md` and returns matching index entries.
-3. Do not search `~/.pi/agent/memory.md`; it is user profile memory, not indexed memory.
-4. Do not scan `~/.pi/agent/memories/` directly.
-5. Review the index results first. If their summaries are sufficient, continue without loading details.
-6. When details are needed, call `memory_get` with the exact memory name returned by `memory_search`, omitting its leading four-digit index number.
-7. Read only the specific matched memory needed for the current task.
-8. Treat a successful `memory_get` result as session context: do not call it again for the same memory unless that memory may have changed. When called again, the tool compares the latest version with the most recent read in the current branch, returns full details only if changed, and otherwise instructs you to reuse the existing Tool Result.
-9. Prefer current project matches, then `global` matches.
-10. Search results are candidate context only; if they conflict with current repository files, current files win.
-11. Call `memory_summarize` exactly once at the end of the current task only when the completed result has durable reuse value.
-12. `memory_summarize` only queues a temporary request; it summarizes once after the current agent run fully settles, so finish the user-facing response normally.
-13. Never call `memory_summarize` more than once in the same user turn.
+1. Before acting on a complex task, proactively call `memory_search` once when prior project decisions, constraints, fixes, conventions, or attempted approaches have a reasonable chance of affecting the result. Do this even if the user does not mention prior work; if uncertain whether relevant project history exists, prefer searching.
+2. Make the initial search bounded and focused. Use the project name when known plus distinctive feature, module, symbol, error, technology, or intended-behavior terms. If no useful match is found, continue with the current repository and user request; do not repeatedly search with vague variations unless the task later reveals a specific missing fact.
+3. `memory_search` only searches `~/.pi/agent/memory-index.md` and returns matching index entries.
+4. Do not search `~/.pi/agent/memory.md`; it is user profile memory, not indexed memory.
+5. Do not scan `~/.pi/agent/memories/` directly.
+6. Review the index results first. If their summaries are sufficient, continue without loading details.
+7. When details are needed, call `memory_get` with the exact memory name returned by `memory_search`, omitting its leading four-digit index number.
+8. Read only the specific matched memory needed for the current task.
+9. Treat a successful `memory_get` result as session context: do not call it again for the same memory unless that memory may have changed. When called again, the tool compares the latest version with the most recent read in the current branch, returns full details only if changed, and otherwise instructs you to reuse the existing Tool Result.
+10. Prefer current project matches, then `global` matches.
+11. Search results are candidate context only; if they conflict with current repository files, current files win.
+12. Call `memory_summarize` exactly once at the end of the current task only when the completed result has durable reuse value.
+13. `memory_summarize` only queues a temporary request; it summarizes once after the current agent run fully settles, so finish the user-facing response normally.
+14. Never call `memory_summarize` more than once in the same user turn.
 
 ## When To Search
 
-Use before acting if the task includes any of these:
+Before acting, run one focused search for complex tasks such as:
 
-- “之前”, “上次”, “继续”, “按之前”, “和之前一样”, “还记得”
-- recurring debugging errors or a previously attempted fix
-- architecture or implementation decisions that may already have project history
-- dependency/library versions tied to an existing project
-- existing project behavior, conventions, constraints, or established workflows
+- implementing or changing substantial behavior in an existing project
+- debugging recurring, ambiguous, cross-module, or previously attempted problems
+- architecture, refactoring, migration, performance, security, or compatibility work
+- changes spanning multiple files, services, APIs, schemas, dependencies, or workflows
+- decisions that may be constrained by existing project behavior, conventions, or prior trade-offs
+- tasks containing “之前”, “上次”, “继续”, “按之前”, “和之前一样”, or “还记得”
+- any task where missing prior context could reasonably cause rework or an incompatible solution
 
-Do not search for routine self-contained edits, isolated code generation, first-time implementations with no prior context, or general informational questions.
+Complexity—not explicit wording—is the main trigger. Do not wait for the user to mention memory or prior work.
+
+Do not search for routine self-contained edits, translations, summaries of provided content, simple explanations, general informational questions, isolated code generation with no project history, or trivial mechanical changes whose result cannot reasonably depend on prior decisions.
 
 ## When To Summarize
 
