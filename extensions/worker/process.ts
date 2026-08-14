@@ -111,7 +111,7 @@ export function buildTaskPrompt(task: WorkerTask, route: Route, before: Workspac
 		preExistingUserChanges: existing,
 		execution: { preset: route.resolvedPreset, model: route.modelId, thinking: route.thinking },
 	};
-	return `执行以下单一 Worker 任务。不要创建或调用其他 Worker。\n\n任务契约：\n${JSON.stringify(contract, null, 2)}\n\n最终只返回一个 JSON 对象，不要 Markdown 代码围栏，不要隐藏思考过程，不要完整日志。格式：\n${JSON.stringify({ status: "completed | blocked | failed", summary: ["完成的工作"], changed_files: ["path"], validation: [{ command: "command", result: "passed | failed | not_run", details: "简要证据" }], acceptance: [{ criterion: "验收条件", result: "passed | failed | uncertain", evidence: "证据" }], findings: [], risks: [], out_of_scope: [], recommended_next_action: [] }, null, 2)}`;
+	return `执行以下单一 Worker 任务。不要创建或调用其他 Worker。\n\n任务契约：\n${JSON.stringify(contract, null, 2)}\n\n最终只返回一个 JSON 对象，不要 Markdown 代码围栏，不要隐藏思考过程，不要完整日志。summary 需用 2-4 条简洁但具体的文字说明主要工作或发现、验证结果和重要限制，每条应能独立理解。格式：\n${JSON.stringify({ status: "completed | blocked | failed", summary: ["具体结论"], changed_files: ["path"], validation: [{ command: "command", result: "passed | failed | not_run", details: "简要证据" }], acceptance: [{ criterion: "验收条件", result: "passed | failed | uncertain", evidence: "证据" }], findings: [], risks: [], out_of_scope: [], recommended_next_action: [] }, null, 2)}`;
 }
 
 export function extractText(message: any): string {
