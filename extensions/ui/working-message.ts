@@ -27,10 +27,10 @@ export const workingMessage = (startedAt: number | undefined, usage: TokenUsage 
     const parts = [
         `Turn ${turn ?? 1}`,
         ...(usageText ? [usageText] : []),
+        ...(typeof tps === 'number' && Number.isFinite(tps) ? [`${tps.toFixed(1)} TPS`] : []),
         ...(typeof firstTokenLatencyMs === 'number' && Number.isFinite(firstTokenLatencyMs)
             ? [`TTFT ${firstTokenLatencyMs < 1000 ? `${Math.round(firstTokenLatencyMs)}ms` : `${(firstTokenLatencyMs / 1000).toFixed(1)}s`}`]
             : []),
-        ...(typeof tps === 'number' && Number.isFinite(tps) ? [`${tps.toFixed(1)} tps`] : []),
         formatElapsed(startedAt ? Date.now() - startedAt : 0),
     ];
     return parts.join(' · ');
