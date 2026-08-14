@@ -29,6 +29,7 @@ export default function ui(pi: ExtensionAPI) {
     let traceUsage: TokenUsage = {};
     let currentUsage: TokenUsage = {};
     let currentTurn: number | undefined;
+    let firstTokenLatencyMs: number | undefined;
 
     const getDisplayedUsage = (): TokenUsage => ({
         input: (traceUsage.input ?? 0) + (currentUsage.input ?? 0),
@@ -40,7 +41,7 @@ export default function ui(pi: ExtensionAPI) {
         const tps = elapsedSeconds > 0 && (usage.output ?? 0) > 0
             ? (usage.output ?? 0) / elapsedSeconds
             : undefined;
-        applyWorkingMessage(ctx, startedAt, usage, currentTurn, tps);
+        applyWorkingMessage(ctx, startedAt, usage, currentTurn, tps, firstTokenLatencyMs);
     };
 
     pi.on('session_start', (_event, ctx) => {
@@ -59,6 +60,7 @@ export default function ui(pi: ExtensionAPI) {
         traceUsage = {};
         currentUsage = {};
         currentTurn = 1;
+        firstTokenLatencyMs = undefined;
         refreshWorkingMessage(ctx);
         timer = setInterval(() => refreshWorkingMessage(ctx), WORKING_FRAME_INTERVAL_MS);
     });
@@ -73,10 +75,14 @@ export default function ui(pi: ExtensionAPI) {
         if (event.message.role !== 'assistant') return;
         const reportedInput = event.message.usage.input;
         const reportedOutput = event.message.usage.output;
+        const currentOutput = Math.max(currentUsage.output ?? 0, reportedOutput, estimateTokens(event.message));
         currentUsage = {
             input: reportedInput > 0 ? reportedInput : currentUsage.input,
-            output: Math.max(currentUsage.output ?? 0, reportedOutput, estimateTokens(event.message)),
+            output: currentOutput,
         };
+        if (firstTokenLatencyMs === undefined && currentOutput > 0 && startedAt !== undefined) {
+            firstTokenLatencyMs = Date.now() - startedAt;
+        }
         refreshWorkingMessage(ctx);
     });
 
@@ -86,6 +92,9 @@ export default function ui(pi: ExtensionAPI) {
             input: (traceUsage.input ?? 0) + event.message.usage.input,
             output: (traceUsage.output ?? 0) + event.message.usage.output,
         };
+        if (firstTokenLatencyMs === undefined && event.message.usage.output > 0 && startedAt !== undefined) {
+            firstTokenLatencyMs = Date.now() - startedAt;
+        }
         currentUsage = {};
         refreshWorkingMessage(ctx);
     });
