@@ -4,6 +4,7 @@ import {
     type ExtensionCommandContext,
 } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { enablePopupMouseWheel, getMouseWheelDirection } from '../ui/mouse-wheel';
 
 type ContextColor =
     | 'syntaxFunction'
@@ -343,6 +344,8 @@ const collectBreakdown = (
     };
 };
 
+const MOUSE_WHEEL_SCROLL_LINES = 3;
+
 const showTextPreview = async (
     ctx: ExtensionCommandContext,
     title: string,
@@ -350,9 +353,11 @@ const showTextPreview = async (
     rawContent: string,
 ): Promise<void> => {
     const content = normalizePreviewText(rawContent);
+    let restoreMouseWheel: (() => void) | undefined;
 
-    await ctx.ui.custom(
-        (tui, theme, _keybindings, done) => {
+    try {
+        await ctx.ui.custom(
+            (tui, theme, _keybindings, done) => {
             let scrollOffset = 0;
             let pageSize = 1;
             let totalLines = 1;
@@ -371,6 +376,10 @@ const showTextPreview = async (
                     tui.requestRender();
                 }
             };
+            const scrollWithWheel = (direction: -1 | 1): void => {
+                scrollTo(scrollOffset + direction * MOUSE_WHEEL_SCROLL_LINES);
+            };
+            restoreMouseWheel = enablePopupMouseWheel(tui, scrollWithWheel);
 
             return {
                 invalidate() {
@@ -378,7 +387,10 @@ const showTextPreview = async (
                     cachedLines = undefined;
                 },
                 handleInput(data: string) {
-                    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
+                    const wheelDirection = getMouseWheelDirection(data);
+                    if (wheelDirection !== undefined) {
+                        scrollWithWheel(wheelDirection);
+                    } else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
                         done(undefined);
                     } else if (matchesKey(data, Key.up)) {
                         scrollTo(scrollOffset - 1);
@@ -420,17 +432,20 @@ const showTextPreview = async (
                             `${border('│')}${pad(` ${visible[index] ?? ''}`)}${border('│')}`,
                         ),
                         `${border('├')}${border('─'.repeat(inner))}${border('┤')}`,
-                        `${border('│')}${pad(theme.fg('dim', ` ${start}-${end} / ${totalLines} lines · Space next page · Esc back`))}${border('│')}`,
+                        `${border('│')}${pad(theme.fg('dim', ` ${start}-${end} / ${totalLines} lines · Wheel / ↑↓ scroll · Space next page · Esc back`))}${border('│')}`,
                         border(`╰${'─'.repeat(inner)}╯`),
                     ];
                 },
             };
         },
-        {
-            overlay: true,
-            overlayOptions: { anchor: 'center', width: '78%', minWidth: 48, maxHeight: '80%', margin: 2 },
-        },
-    );
+            {
+                overlay: true,
+                overlayOptions: { anchor: 'center', width: '78%', minWidth: 48, maxHeight: '80%', margin: 2 },
+            },
+        );
+    } finally {
+        restoreMouseWheel?.();
+    }
 };
 
 const showContext = async (
@@ -449,17 +464,38 @@ const showContext = async (
     let selectedPreviewIndex = 0;
 
     while (true) {
-        const action = await ctx.ui.custom(
-            (tui, theme, _keybindings, done) => {
+        let restoreMouseWheel: (() => void) | undefined;
+        const action = await (async () => {
+            try {
+                return await ctx.ui.custom(
+                    (tui, theme, _keybindings, done) => {
                 let rowOffset = 0;
                 let pageSize = 1;
                 let totalRows = 1;
                 let followSelection = true;
+                const scrollWithWheel = (direction: -1 | 1): void => {
+                    followSelection = false;
+                    const next = Math.max(
+                        0,
+                        Math.min(
+                            rowOffset + direction * MOUSE_WHEEL_SCROLL_LINES,
+                            Math.max(0, totalRows - pageSize),
+                        ),
+                    );
+                    if (next !== rowOffset) {
+                        rowOffset = next;
+                        tui.requestRender();
+                    }
+                };
+                restoreMouseWheel = enablePopupMouseWheel(tui, scrollWithWheel);
 
                 return {
                     invalidate() {},
                     handleInput(data: string) {
-                        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
+                        const wheelDirection = getMouseWheelDirection(data);
+                        if (wheelDirection !== undefined) {
+                            scrollWithWheel(wheelDirection);
+                        } else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
                             done(undefined);
                         } else if (matchesKey(data, Key.up) && visiblePreviews.length > 0) {
                             selectedPreviewIndex = (selectedPreviewIndex - 1 + visiblePreviews.length) % visiblePreviews.length;
@@ -539,8 +575,8 @@ const showContext = async (
                             ? `${rowOffset + 1}-${Math.min(totalRows, rowOffset + pageSize)} / ${totalRows} · `
                             : '';
                         const hint = visiblePreviews.length > 0
-                            ? `${range}Enter preview · Esc close`
-                            : `${range}Esc close`;
+                            ? `${range}Wheel scroll · Enter preview · Esc close`
+                            : `${range}Wheel scroll · Esc close`;
 
                         return [
                             border(`╭${'─'.repeat(inner)}╮`),
@@ -556,11 +592,15 @@ const showContext = async (
                     },
                 };
             },
-            {
-                overlay: true,
-                overlayOptions: { anchor: 'center', width: 66, minWidth: 48, maxHeight: '90%', margin: 1 },
-            },
-        );
+                    {
+                        overlay: true,
+                        overlayOptions: { anchor: 'center', width: 66, minWidth: 48, maxHeight: '90%', margin: 1 },
+                    },
+                );
+            } finally {
+                restoreMouseWheel?.();
+            }
+        })();
 
         if (!action) return;
         const preview = previewByKey.get(action as PreviewKey);

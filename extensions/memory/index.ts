@@ -15,6 +15,7 @@ import {
 } from './indexed';
 import { readMemorySettings } from './settings';
 import { configureMemorySettings } from './settings-ui';
+import { enablePopupMouseWheel, getMouseWheelDirection } from '../ui/mouse-wheel';
 import { claimSummaryRequest, clearSummaryRequest, finishSummaryRequest, queueSummaryRequest } from './summary-request';
 import type { ProgressInfo, SearchCacheEntry } from './types';
 import { asObj, textOf } from './utils';
@@ -29,6 +30,7 @@ type SummaryResultMetadata = {
 };
 
 const SUMMARY_FRAME_INTERVAL_MS = 120;
+const MOUSE_WHEEL_SCROLL_LINES = 3;
 
 const memoryExtension = async (pi: ExtensionAPI) => {
     let settings = await readMemorySettings();
@@ -92,10 +94,30 @@ const memoryExtension = async (pi: ExtensionAPI) => {
         const source = result.replace(/^## Indexed Memory Commit\s*/, '').trim() || '本轮无 indexed memory 写入。';
         let scrollOffset = 0;
         let maxOffset = 0;
-        await ctx.ui.custom(
-            (tui, theme, _keybindings, done) => ({
+        let restoreMouseWheel: (() => void) | undefined;
+        try {
+            await ctx.ui.custom(
+                (tui, theme, _keybindings, done) => {
+                    const scrollWithWheel = (direction: -1 | 1): void => {
+                        const next = Math.max(
+                            0,
+                            Math.min(maxOffset, scrollOffset + direction * MOUSE_WHEEL_SCROLL_LINES),
+                        );
+                        if (next !== scrollOffset) {
+                            scrollOffset = next;
+                            tui.requestRender();
+                        }
+                    };
+                    restoreMouseWheel = enablePopupMouseWheel(tui, scrollWithWheel);
+
+                    return {
                 invalidate() {},
                 handleInput(data: string) {
+                    const wheelDirection = getMouseWheelDirection(data);
+                    if (wheelDirection !== undefined) {
+                        scrollWithWheel(wheelDirection);
+                        return;
+                    }
                     if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c')) || matchesKey(data, Key.enter)) {
                         done(undefined);
                         return;
@@ -155,16 +177,20 @@ const memoryExtension = async (pi: ExtensionAPI) => {
                         ...(metadataRows.length ? [`${border('├')}${border('─'.repeat(inner))}${border('┤')}`] : []),
                         ...rows.map((row) => `${border('│')}${pad(` ${row}`)}${border('│')}`),
                         `${border('├')}${border('─'.repeat(inner))}${border('┤')}`,
-                        `${border('│')}${pad(theme.fg('dim', ' ↑/↓ 滚动 · Enter / Esc 关闭'))}${border('│')}`,
+                        `${border('│')}${pad(theme.fg('dim', ' ↑/↓ / 鼠标滚轮 滚动 · Enter / Esc 关闭'))}${border('│')}`,
                         border(`╰${'─'.repeat(inner)}╯`),
                     ];
                 },
-            }),
-            {
-                overlay: true,
-                overlayOptions: { anchor: 'center', width: 92, minWidth: 56, maxHeight: '90%', margin: 1 },
-            },
-        );
+                    };
+                },
+                {
+                    overlay: true,
+                    overlayOptions: { anchor: 'center', width: 92, minWidth: 56, maxHeight: '90%', margin: 1 },
+                },
+            );
+        } finally {
+            restoreMouseWheel?.();
+        }
     };
 
     const runSummary = async (ctx: ExtensionContext) => {
