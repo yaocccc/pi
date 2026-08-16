@@ -3,9 +3,21 @@ import { chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
-type CacheRecord = {
+type LegacyCacheRecord = {
     version: 1;
     translation: string;
+};
+
+export type TranslationMetrics = {
+    inputTokens: number;
+    outputTokens: number;
+    durationMs: number;
+};
+
+type CacheRecord = {
+    version: 2;
+    translation: string;
+    metrics: TranslationMetrics;
 };
 
 const CACHE_MODE = 0o700;
@@ -62,14 +74,14 @@ export class TranslationCache {
         }
     }
 
-    async set(text: string, translation: string): Promise<void> {
+    async set(text: string, translation: string, metrics: TranslationMetrics): Promise<void> {
         const key = this.key(text);
         this.memory.set(key, translation);
         await this.ensureDirectory();
 
         const destination = this.fileFor(key);
         const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
-        const record: CacheRecord = { version: 1, translation };
+        const record: CacheRecord = { version: 2, translation, metrics };
         try {
             await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: FILE_MODE, flag: "wx" });
             await chmod(temporary, FILE_MODE);
@@ -150,11 +162,23 @@ export class TranslationCache {
     }
 }
 
-const isCacheRecord = (value: unknown): value is CacheRecord =>
+const isNonNegativeNumber = (value: unknown): value is number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+const isTranslationMetrics = (value: unknown): value is TranslationMetrics =>
     Boolean(value)
     && typeof value === "object"
-    && (value as CacheRecord).version === 1
-    && typeof (value as CacheRecord).translation === "string";
+    && isNonNegativeNumber((value as TranslationMetrics).inputTokens)
+    && isNonNegativeNumber((value as TranslationMetrics).outputTokens)
+    && isNonNegativeNumber((value as TranslationMetrics).durationMs);
+
+const isCacheRecord = (value: unknown): value is LegacyCacheRecord | CacheRecord => {
+    if (!value || typeof value !== "object" || typeof (value as LegacyCacheRecord).translation !== "string") {
+        return false;
+    }
+    if ((value as LegacyCacheRecord).version === 1) return true;
+    return (value as CacheRecord).version === 2 && isTranslationMetrics((value as CacheRecord).metrics);
+};
 
 async function safeRemove(path: string): Promise<void> {
     try {

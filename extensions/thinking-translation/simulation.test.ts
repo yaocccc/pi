@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -25,6 +25,12 @@ type Request = {
 
 const delay = (milliseconds: number): Promise<void> =>
     new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const TEST_METRICS = {
+    inputTokens: 120,
+    outputTokens: 30,
+    durationMs: 450,
+};
 
 const harness = (idleMs = 15, maxThinkingLength = 200) => {
     const requests: Request[] = [];
@@ -214,6 +220,62 @@ test("structured translation preserves separate thinking segments", () => {
     assert.equal(parseTranslationResponse("第一段和第二段", 2), undefined);
 });
 
+test("cache stores translation token usage and request duration", async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "thinking-translation-metrics-test-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const cache = new TranslationCache(directory);
+
+    await cache.set("measured thought", "带指标的译文", TEST_METRICS);
+    const raw = JSON.parse(await readFile(
+        join(directory, `${cache.key("measured thought")}.json`),
+        "utf8",
+    ));
+    assert.deepEqual(raw, {
+        version: 2,
+        translation: "带指标的译文",
+        metrics: TEST_METRICS,
+    });
+    assert.equal(await cache.get("measured thought"), "带指标的译文");
+
+    const legacyText = "legacy thought";
+    await writeFile(
+        join(directory, `${cache.key(legacyText)}.json`),
+        '{"version":1,"translation":"旧版译文"}\n',
+    );
+    assert.equal(await new TranslationCache(directory).get(legacyText), "旧版译文");
+});
+
+test("translation caches provider token usage and total request duration", async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "thinking-translation-request-metrics-test-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const cache = new TranslationCache(directory);
+    const ctx = {
+        modelRegistry: {
+            hasConfiguredAuth: () => true,
+            complete: async () => ({
+                content: [{ type: "text", text: '["模型译文"]' }],
+                usage: { input: 37, output: 9 },
+                stopReason: "stop",
+            }),
+        },
+    };
+    const session = new TranslationSession(ctx as never, {} as never, 200, true, cache);
+    const translate = (session as unknown as {
+        translate(source: string, signal: AbortSignal): Promise<string | undefined>;
+    }).translate.bind(session);
+
+    assert.equal(await translate("model thought", new AbortController().signal), "模型译文");
+    const raw = JSON.parse(await readFile(
+        join(directory, `${cache.key("model thought")}.json`),
+        "utf8",
+    ));
+    assert.equal(raw.metrics.inputTokens, 37);
+    assert.equal(raw.metrics.outputTokens, 9);
+    assert.equal(Number.isInteger(raw.metrics.durationMs), true);
+    assert.equal(raw.metrics.durationMs >= 0, true);
+    session.shutdown();
+});
+
 test("cache insert prunes the oldest 50 files and throttles cleanup for ten minutes", async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "thinking-translation-prune-test-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
@@ -227,7 +289,7 @@ test("cache insert prunes the oldest 50 files and throttles cleanup for ten minu
     }));
 
     const cache = new TranslationCache(directory);
-    await cache.set("first trigger", "首次写入");
+    await cache.set("first trigger", "首次写入", TEST_METRICS);
     let files = (await readdir(directory)).filter((name) => name.endsWith(".json"));
     assert.equal(files.length, CACHE_MAX_FILES + 2 - CACHE_PRUNE_COUNT);
     for (const name of oldestNames.slice(0, CACHE_PRUNE_COUNT)) {
@@ -237,7 +299,7 @@ test("cache insert prunes the oldest 50 files and throttles cleanup for ten minu
     await Promise.all(Array.from({ length: CACHE_PRUNE_COUNT - 1 }, async (_, index) => {
         await writeFile(join(directory, `recent-${index}.json`), '{"version":1,"translation":"recent"}\n');
     }));
-    await cache.set("second trigger", "十分钟内再次写入");
+    await cache.set("second trigger", "十分钟内再次写入", TEST_METRICS);
     files = (await readdir(directory)).filter((name) => name.endsWith(".json"));
     assert.equal(files.length, CACHE_MAX_FILES + 2);
 });
@@ -246,8 +308,8 @@ test("history displays persistent cache hits and never requests translations for
     const directory = await mkdtemp(join(tmpdir(), "thinking-translation-test-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const cache = new TranslationCache(directory);
-    await cache.set("cached thought", "缓存译文");
-    await cache.set("first block\n\nsecond block", "被旧版本压平的译文");
+    await cache.set("cached thought", "缓存译文", TEST_METRICS);
+    await cache.set("first block\n\nsecond block", "被旧版本压平的译文", TEST_METRICS);
 
     let modelRequests = 0;
     const branch = [

@@ -187,6 +187,7 @@ export class TranslationSession implements TranslationDisplayStore {
         }
         if (!this.model || !this.ctx.modelRegistry.hasConfiguredAuth(this.model)) return undefined;
 
+        const requestStartedAt = performance.now();
         const response = await this.ctx.modelRegistry.complete(
             this.model,
             {
@@ -217,7 +218,11 @@ export class TranslationSession implements TranslationDisplayStore {
 
         // A cache filesystem failure must not suppress an otherwise valid
         // display-only result.
-        await this.cache.set(source, translation).catch(() => undefined);
+        await this.cache.set(source, translation, {
+            inputTokens: response.usage.input,
+            outputTokens: response.usage.output,
+            durationMs: Math.max(0, Math.round(performance.now() - requestStartedAt)),
+        }).catch(() => undefined);
         return signal.aborted || this.closed ? undefined : translation;
     }
 
