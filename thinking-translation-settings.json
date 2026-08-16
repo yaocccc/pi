@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "enabled": true,
+  "model": "openai-codex/gpt-5.3-codex-spark",
+  "maxThinkingLength": 200,
+  "reasoning": "minimal"
+}
