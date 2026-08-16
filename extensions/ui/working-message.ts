@@ -6,13 +6,15 @@ const WORKING_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', 
 export const WORKING_FRAME_INTERVAL_MS = 120;
 
 let workingMessageActive = false;
+let workingMessageCompleted = false;
 let workingAnimationStartedAt = 0;
 let currentWorkingLine: string | undefined;
 
 export const setWorkingMessageActive = (active: boolean): void => {
     if (active && !workingMessageActive) workingAnimationStartedAt = Date.now();
+    workingMessageCompleted = !active && workingMessageActive;
     workingMessageActive = active;
-    if (!active) currentWorkingLine = undefined;
+    if (!active && !workingMessageCompleted) currentWorkingLine = undefined;
 };
 
 export const getWorkingMessageLine = (): string | undefined => currentWorkingLine;
@@ -39,14 +41,15 @@ export const workingMessage = (startedAt: number | undefined, usage: TokenUsage 
 export const applyWorkingMessage = (ctx: ExtensionContext, startedAt?: number, usage?: TokenUsage, turn?: number, tps?: number, firstTokenLatencyMs?: number): void => {
     // 内置 status 与 editor 之间固定经过 widget spacer；把 working 行并入 editor 才能消除其下方空行。
     ctx.ui.setWorkingVisible(false);
-    if (!workingMessageActive) {
+    if (!workingMessageActive && !workingMessageCompleted) {
         currentWorkingLine = undefined;
         return;
     }
 
     const elapsed = Math.max(0, Date.now() - workingAnimationStartedAt);
     const frameIndex = Math.floor(elapsed / WORKING_FRAME_INTERVAL_MS) % WORKING_FRAMES.length;
-    const frame = WORKING_FRAMES[frameIndex]!;
+    const frame = workingMessageActive ? WORKING_FRAMES[frameIndex]! : '✓';
+    const frameColor = workingMessageActive ? 'accent' : 'success';
     const message = workingMessage(startedAt, usage, turn, tps, firstTokenLatencyMs);
-    currentWorkingLine = `${ctx.ui.theme.fg('accent', frame)} ${ctx.ui.theme.fg('muted', message)}`;
+    currentWorkingLine = `${ctx.ui.theme.fg(frameColor, frame)} ${ctx.ui.theme.fg('muted', message)}`;
 };
