@@ -5,7 +5,7 @@
     "auto": true,
     "model": "openai-codex/gpt-5.3-codex-spark",
     "thinking": "high",
-    "resultDisplay": "popup",
+    "resultDisplay": "message",
     "includeToolMessages": false,
     "includeThinking": false
   }
