@@ -95,9 +95,6 @@ const buildNotification = (
     return [
         `📁 *来自项目* · ${escapeMarkdownV2(projectName)}`,
         `💬 *来自会话* · ${escapeMarkdownV2(truncateSessionName(sessionLabel))}`,
-        '',
-        '━━━━━━━━━━━━━━━━━━━━',
-        '',
         formatSection('👤', '用户输入', userInput || '（无文本输入）'),
         '',
         formatSection('🤖', '最终回复', finalOutput || '（无最终文本输出）'),
