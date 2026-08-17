@@ -86,15 +86,19 @@ const buildNotification = (
     const assistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
     if (!userMessage || !assistantMessage) return undefined;
 
-    const firstUserInput = textFromContent(firstUserMessage?.content, true).trim();
+    const firstUserInput = textFromContent(firstUserMessage?.content, true).trim().replace(/\s+/gu, ' ');
     const userInput = textFromContent(userMessage.content, true).trim();
     const finalOutput = textFromContent(assistantMessage.content).trim();
     if (!userInput && !finalOutput) return undefined;
 
-    const sessionLabel = sessionName?.trim() || firstUserInput || '临时会话';
+    const namedSession = sessionName?.trim();
+    const sessionLabel = namedSession && namedSession !== '未命名会话'
+        ? namedSession
+        : firstUserInput || '临时会话';
     return [
         `📁 *来自项目* · ${escapeMarkdownV2(projectName)}`,
         `💬 *来自会话* · ${escapeMarkdownV2(truncateSessionName(sessionLabel))}`,
+        '',
         formatSection('👤', '用户输入', userInput || '（无文本输入）'),
         '',
         formatSection('🤖', '最终回复', finalOutput || '（无最终文本输出）'),
