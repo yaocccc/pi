@@ -79,21 +79,23 @@ const truncateSessionName = (name: string): string => {
 const buildNotification = (
     messages: Message[],
     projectName: string,
-    sessionName: string,
+    sessionName: string | undefined,
 ): string | undefined => {
+    const firstUserMessage = messages.find((message) => message.role === 'user');
     const userMessage = [...messages].reverse().find((message) => message.role === 'user');
     const assistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
     if (!userMessage || !assistantMessage) return undefined;
 
+    const firstUserInput = textFromContent(firstUserMessage?.content, true).trim();
     const userInput = textFromContent(userMessage.content, true).trim();
     const finalOutput = textFromContent(assistantMessage.content).trim();
     if (!userInput && !finalOutput) return undefined;
 
+    const sessionLabel = sessionName?.trim() || firstUserInput || '临时会话';
     return [
         `📁 *来自项目* · ${escapeMarkdownV2(projectName)}`,
-        `💬 *来自会话* · ${escapeMarkdownV2(truncateSessionName(sessionName))}`,
+        `💬 *来自会话* · ${escapeMarkdownV2(truncateSessionName(sessionLabel))}`,
         '',
-        '✅ *Pi Agent · 任务完成*',
         '━━━━━━━━━━━━━━━━━━━━',
         '',
         formatSection('👤', '用户输入', userInput || '（无文本输入）'),
@@ -234,7 +236,7 @@ export default (pi: ExtensionAPI) => {
         if (!ctx.hasUI) return;
 
         const projectName = basename(ctx.cwd) || ctx.cwd;
-        const sessionName = pi.getSessionName() ?? '未命名会话';
+        const sessionName = pi.getSessionName();
         const notification = buildNotification(event.messages, projectName, sessionName);
         if (notification) await sendToTelegram(notification, coordinator);
     });
