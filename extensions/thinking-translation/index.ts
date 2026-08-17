@@ -16,11 +16,13 @@ import {
     type TranslationStatus,
 } from "./state.ts";
 
-const TRANSLATION_SYSTEM_PROMPT = [
+const SINGLE_TRANSLATION_SYSTEM_PROMPT =
+    "Translate the user's text into natural Simplified Chinese. Return only the translation.";
+
+const MULTI_TRANSLATION_SYSTEM_PROMPT = [
     "The user sends a JSON array of text segments.",
-    "Translate every segment independently into natural Simplified Chinese.",
-    "Return only a valid JSON array of translated strings in the same order and with exactly the same length.",
-    "Do not merge segments, add commentary, labels, or markdown fences.",
+    "Translate each string independently into natural Simplified Chinese.",
+    "Return only a JSON array of strings in the same order and with the same length.",
 ].join(" ");
 
 const HISTORY_CACHE_CONCURRENCY = 8;
@@ -187,14 +189,20 @@ export class TranslationSession implements TranslationDisplayStore {
         }
         if (!this.model || !this.ctx.modelRegistry.hasConfiguredAuth(this.model)) return undefined;
 
+        const multipleSegments = segments.length > 1;
         const requestStartedAt = performance.now();
         const response = await this.ctx.modelRegistry.complete(
             this.model,
             {
-                systemPrompt: TRANSLATION_SYSTEM_PROMPT,
+                systemPrompt: multipleSegments
+                    ? MULTI_TRANSLATION_SYSTEM_PROMPT
+                    : SINGLE_TRANSLATION_SYSTEM_PROMPT,
                 messages: [{
                     role: "user",
-                    content: [{ type: "text", text: JSON.stringify(segments) }],
+                    content: [{
+                        type: "text",
+                        text: multipleSegments ? JSON.stringify(segments) : segments[0]!,
+                    }],
                     timestamp: Date.now(),
                 }],
             },

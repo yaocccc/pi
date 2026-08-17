@@ -245,18 +245,30 @@ test("cache stores translation token usage and request duration", async (t) => {
     assert.equal(await new TranslationCache(directory).get(legacyText), "旧版译文");
 });
 
-test("translation caches provider token usage and total request duration", async (t) => {
+test("translation selects compact single or structured multi-segment requests and caches metrics", async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "thinking-translation-request-metrics-test-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const cache = new TranslationCache(directory);
+    type TranslationRequest = {
+        systemPrompt: string;
+        messages: Array<{ content: Array<{ type: string; text: string }> }>;
+    };
+    const requests: TranslationRequest[] = [];
     const ctx = {
         modelRegistry: {
             hasConfiguredAuth: () => true,
-            complete: async () => ({
-                content: [{ type: "text", text: '["模型译文"]' }],
-                usage: { input: 37, output: 9 },
-                stopReason: "stop",
-            }),
+            complete: async (_model: unknown, request: TranslationRequest) => {
+                requests.push(request);
+                const input = request.messages[0]!.content[0]!.text;
+                return {
+                    content: [{
+                        type: "text",
+                        text: input.startsWith("[") ? '["第一段","第二段"]' : "模型译文",
+                    }],
+                    usage: { input: 37, output: 9 },
+                    stopReason: "stop",
+                };
+            },
         },
     };
     const session = new TranslationSession(ctx as never, {} as never, 200, true, cache);
@@ -265,6 +277,19 @@ test("translation caches provider token usage and total request duration", async
     }).translate.bind(session);
 
     assert.equal(await translate("model thought", new AbortController().signal), "模型译文");
+    assert.equal(requests[0]!.systemPrompt.includes("JSON"), false);
+    assert.equal(requests[0]!.messages[0]!.content[0]!.text, "model thought");
+
+    assert.equal(
+        await translate("first block\n\nsecond block", new AbortController().signal),
+        "第一段\n第二段",
+    );
+    assert.equal(requests[1]!.systemPrompt.includes("JSON array"), true);
+    assert.equal(
+        requests[1]!.messages[0]!.content[0]!.text,
+        '["first block","second block"]',
+    );
+
     const raw = JSON.parse(await readFile(
         join(directory, `${cache.key("model thought")}.json`),
         "utf8",
