@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import type { EventBus } from '@earendil-works/pi-coding-agent';
-import type TelegramBot from 'node-telegram-bot-api';
 import {
     ASK_QUESTION_ANSWER_EVENT,
     ASK_QUESTION_CANCEL_EVENT,
@@ -11,7 +10,11 @@ import {
     type TelegramQuestionOpenRequest,
     type TelegramQuestionSettlement,
 } from '../ask-question/telegram-bridge.ts';
-import type { RoutedTelegramCallback, TelegramCoordinator } from './coordinator.ts';
+import type {
+    RoutedTelegramCallback,
+    TelegramBotRpc,
+    TelegramRouteRegistrar,
+} from './client.ts';
 
 const CALLBACK_PREFIX = 'aq';
 const MAX_CALLBACK_BYTES = 64;
@@ -20,8 +23,6 @@ const MAX_QUESTION_MESSAGE_LENGTH = 4_095;
 type InlineKeyboardMarkup = {
     inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
 };
-
-type QuestionBot = Pick<TelegramBot, 'sendMessage' | 'editMessageReplyMarkup' | 'answerCallbackQuery'>;
 
 type LiveQuestion = {
     toolCallId: string;
@@ -36,9 +37,9 @@ type LiveQuestion = {
 };
 
 export interface TelegramQuestionManagerOptions {
-    bot: QuestionBot;
+    bot: TelegramBotRpc;
     chatId: string;
-    coordinator: Pick<TelegramCoordinator, 'registerRoute'>;
+    routes: TelegramRouteRegistrar;
     events: EventBus;
     onError?: (error: unknown) => void;
 }
@@ -153,7 +154,7 @@ export class TelegramQuestionManager {
                 return false;
             }
             this.questions.set(questionId, state);
-            this.options.coordinator.registerRoute(sent.chat.id, sent.message_id);
+            this.options.routes.registerRoute(sent.chat.id, sent.message_id);
             return true;
         } catch (error) {
             this.options.onError?.(error);

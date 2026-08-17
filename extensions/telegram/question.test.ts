@@ -9,7 +9,7 @@ import {
     type TelegramQuestionAnswerRequest,
     type TelegramQuestionSettlement,
 } from '../ask-question/telegram-bridge.ts';
-import type { RoutedTelegramCallback } from './coordinator.ts';
+import type { RoutedTelegramCallback } from './client.ts';
 import { buildTelegramQuestionText, TelegramQuestionManager } from './question.ts';
 
 const makeEvents = (): EventBus => createEventBus();
@@ -74,7 +74,7 @@ const setup = () => {
     const manager = new TelegramQuestionManager({
         bot: bot as any,
         chatId: 'configured-chat',
-        coordinator: { registerRoute: (chatId, messageId) => { routes.push([chatId, messageId]); } },
+        routes: { registerRoute: (chatId, messageId) => { routes.push([chatId, messageId]); } },
         events,
     });
     events.on(ASK_QUESTION_SETTLED_EVENT, (data) => manager.handleSettlement(data as TelegramQuestionSettlement));

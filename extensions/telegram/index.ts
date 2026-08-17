@@ -1,22 +1,18 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { basename } from 'node:path';
-import TelegramBot, { type CallbackQuery } from 'node-telegram-bot-api';
 import {
     ASK_QUESTION_SETTLED_EVENT,
     normalizeAskQuestionOptions,
     type TelegramQuestionSettlement,
 } from '../ask-question/telegram-bridge.ts';
-import { TelegramCoordinator } from './coordinator.ts';
+import { TelegramClient } from './client.ts';
 import { TelegramQuestionManager } from './question.ts';
 
 const TELEGRAM_MESSAGE_LIMIT = 3_900;
-const TELEGRAM_POLL_TIMEOUT_SECONDS = 1;
 const pollEnabled = /^(?:1|true|yes|on)$/iu.test(process.env.PI_TG_POLL?.trim() ?? '');
 
 const token = process.env.PI_TG_TOKEN?.trim();
 const chatId = process.env.PI_TG_CHAT?.trim();
-const bot = token ? new TelegramBot(token, { polling: false }) : undefined;
-if (bot) bot.options.polling = { params: { timeout: TELEGRAM_POLL_TIMEOUT_SECONDS } };
 
 type Message = {
     role: string;
@@ -80,13 +76,13 @@ const buildNotification = (
     messages: Message[],
     projectName: string,
     sessionName: string | undefined,
+    firstSessionUserInput: string | undefined,
 ): string | undefined => {
-    const firstUserMessage = messages.find((message) => message.role === 'user');
     const userMessage = [...messages].reverse().find((message) => message.role === 'user');
     const assistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
     if (!userMessage || !assistantMessage) return undefined;
 
-    const firstUserInput = textFromContent(firstUserMessage?.content, true).trim().replace(/\s+/gu, ' ');
+    const firstUserInput = firstSessionUserInput?.trim().replace(/\s+/gu, ' ') ?? '';
     const userInput = textFromContent(userMessage.content, true).trim();
     const finalOutput = textFromContent(assistantMessage.content).trim();
     if (!userInput && !finalOutput) return undefined;
@@ -107,14 +103,14 @@ const buildNotification = (
 
 const sendToTelegram = async (
     message: string,
-    coordinator?: TelegramCoordinator,
+    client?: TelegramClient,
 ): Promise<void> => {
-    if (!bot || !chatId || !message.trim()) return;
+    if (!client || !chatId || !message.trim()) return;
 
     try {
         for (const chunk of splitTelegramMessage(message)) {
-            const sent = await bot.sendMessage(chatId, chunk, { parse_mode: 'MarkdownV2' });
-            coordinator?.registerRoute(sent.chat.id, sent.message_id);
+            const sent = await client.sendMessage(chatId, chunk, { parse_mode: 'MarkdownV2' });
+            client.registerRoute(sent.chat.id, sent.message_id);
         }
     } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -124,7 +120,7 @@ const sendToTelegram = async (
 };
 
 export default (pi: ExtensionAPI) => {
-    let coordinator: TelegramCoordinator | undefined;
+    let client: TelegramClient | undefined;
     let questionManager: TelegramQuestionManager | undefined;
 
     const logTelegramError = (label: string, error: unknown): void => {
@@ -134,7 +130,7 @@ export default (pi: ExtensionAPI) => {
     };
     const logPollingError = (error: unknown): void => logTelegramError('轮询失败', error);
 
-    pi.events.on(ASK_QUESTION_SETTLED_EVENT, (data) => {
+    const disposeQuestionSettlement = pi.events.on(ASK_QUESTION_SETTLED_EVENT, (data) => {
         if (!data || typeof data !== 'object') return;
         const settlement = data as TelegramQuestionSettlement;
         if (typeof settlement.toolCallId !== 'string'
@@ -147,7 +143,7 @@ export default (pi: ExtensionAPI) => {
         if (event.toolName !== 'ask_question'
             || !ctx.hasUI
             || !pollEnabled
-            || !coordinator?.isRunning()
+            || !client
             || !questionManager) return;
         const input = event.input as { question?: unknown; options?: unknown; multiSelect?: unknown };
         if (typeof input.question !== 'string' || !Array.isArray(input.options)) return;
@@ -167,70 +163,40 @@ export default (pi: ExtensionAPI) => {
     });
 
     pi.on('session_start', (_event, ctx) => {
-        if (!ctx.hasUI || !bot || !token || !chatId || !pollEnabled || coordinator) return;
+        if (!ctx.hasUI || !token || !chatId || client) return;
 
-        let instance: TelegramCoordinator;
-        const handleMessage = (message: {
-            from?: { is_bot: boolean };
-            chat: { id: number };
-            text?: string;
-            reply_to_message?: { message_id: number };
-        }): void => {
-            const text = message.text;
-            if (!message.from || message.from.is_bot || !text?.trim() || !message.reply_to_message) return;
-            instance.dispatchReply(message.chat.id, message.reply_to_message.message_id, text);
-        };
-        const handleCallbackQuery = (query: CallbackQuery): void => {
-            const message = query.message;
-            if (!message || query.from.is_bot || !query.data) return;
-            instance.dispatchCallback(message.chat.id, message.message_id, {
-                callbackQueryId: query.id,
-                data: query.data,
-                userId: query.from.id,
-                userIsBot: query.from.is_bot,
-            });
-        };
-        const handlePollingError = (error: Error): void => logPollingError(error);
-
-        instance = new TelegramCoordinator({
+        const instance = new TelegramClient({
             token,
-            onLeaderStart: () => {
-                bot.on('message', handleMessage);
-                bot.on('callback_query', handleCallbackQuery);
-                bot.on('polling_error', handlePollingError);
-                void bot.startPolling().catch(logPollingError);
-            },
-            onLeaderStop: async () => {
-                bot.removeListener('message', handleMessage);
-                bot.removeListener('callback_query', handleCallbackQuery);
-                bot.removeListener('polling_error', handlePollingError);
-                if (bot.isPolling()) await bot.stopPolling({ cancel: true });
-            },
+            poll: pollEnabled,
             onReply: (text) => pi.sendUserMessage(text, { deliverAs: 'followUp' }),
             onCallback: async (callback) => {
-                await questionManager?.handleCallback(callback);
+                const manager = questionManager;
+                if (!manager) throw new Error('Telegram question manager unavailable');
+                await manager.handleCallback(callback);
             },
             onError: logPollingError,
         });
-        coordinator = instance;
-        questionManager = new TelegramQuestionManager({
-            bot,
-            chatId,
-            coordinator: instance,
-            events: pi.events,
-            onError: (error) => logTelegramError('问答 API 失败', error),
-        });
+        client = instance;
+        if (pollEnabled) {
+            questionManager = new TelegramQuestionManager({
+                bot: instance,
+                chatId,
+                routes: instance,
+                events: pi.events,
+                onError: (error) => logTelegramError('问答 API 失败', error),
+            });
+        }
         instance.start();
     });
 
-    pi.on('session_shutdown', async () => {
+    pi.on('session_shutdown', async (event) => {
+        disposeQuestionSettlement();
         const currentQuestions = questionManager;
-        const current = coordinator;
+        const current = client;
+        await currentQuestions?.shutdown();
         questionManager = undefined;
-        coordinator = undefined;
-        const coordinatorShutdown = current?.shutdown();
-        const questionShutdown = currentQuestions?.shutdown();
-        await Promise.all([coordinatorShutdown, questionShutdown]);
+        await current?.shutdown({ preserveRoutes: event.reason === 'reload' });
+        client = undefined;
     });
 
     pi.on('agent_end', async (event, ctx) => {
@@ -238,7 +204,18 @@ export default (pi: ExtensionAPI) => {
 
         const projectName = basename(ctx.cwd) || ctx.cwd;
         const sessionName = pi.getSessionName();
-        const notification = buildNotification(event.messages, projectName, sessionName);
-        if (notification) await sendToTelegram(notification, coordinator);
+        const firstSessionUserMessage = ctx.sessionManager.getBranch().find(
+            (entry) => entry.type === 'message' && entry.message.role === 'user',
+        );
+        const firstSessionUserInput = firstSessionUserMessage?.type === 'message'
+            ? textFromContent((firstSessionUserMessage.message as Message).content, true)
+            : undefined;
+        const notification = buildNotification(
+            event.messages,
+            projectName,
+            sessionName,
+            firstSessionUserInput,
+        );
+        if (notification) await sendToTelegram(notification, client);
     });
 };
