@@ -67,8 +67,8 @@ const formatSection = (icon: string, title: string, content: string): string => 
 
 const truncateSessionName = (name: string): string => {
     const characters = Array.from(name.trim());
-    return characters.length > 10
-        ? `${characters.slice(0, 10).join('')}…`
+    return characters.length > 20
+        ? `${characters.slice(0, 20).join('')}…`
         : characters.join('');
 };
 
