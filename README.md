@@ -2,47 +2,53 @@
 
 [English](README_EN.md)
 
-这是我的个人 [Pi Coding Agent](https://pi.dev) 配置，包含自定义扩展、主题、快捷键和工作流。仓库只保存可公开、可复用的配置源码；认证信息、模型密钥、会话记录和个人记忆均由 `.gitignore` 排除。
+这是我的个人 [Pi Coding Agent](https://pi.dev) 配置，包含自定义扩展、主题、快捷键和工作流。仓库用于保存可公开、可复用的配置源码；认证信息、模型密钥、会话记录和个人记忆不应提交，并应通过环境变量或被忽略的本地文件提供。
 
 ## 功能
 
 - **自定义界面**：启动 Logo、输入框、消息卡片、工作状态和精简 Footer。
-- **上下文检查**：`/context` 展示当前上下文窗口的分类占用，并可查看 System Prompt、Tools、Context Files 和 Skills 的具体内容；详情支持空格翻页。
+- **上下文检查**：`/context` 展示当前上下文窗口的分类占用，并可预览 System Prompt、Tools、Context Files、Skills、用户/Agent 消息和 Tool Call；详情支持空格翻页。
 - **Codex 用量**：`/usage` 使用 Pi 当前解析的 OpenAI Codex 认证，显示订阅计划、主/次及附加用量窗口、剩余额度、重置时间和 Credits。
 - **结构化提问**：`ask_question` 工具支持单选、多选和自由输入。
 - **Plan 工作流**：`/plan` 会生成一份 checklist，确认后按步骤连续执行并进行最终检查。
 - **分级记忆**：自动维护用户偏好；通过 `memory_search` 检索索引、`memory_get` 按需读取详情；模型可用 `memory_summarize` 请求在本轮结束后沉淀，也可手动执行 `/summarize`。
 - **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
-- **请求优化**：为支持的 OpenAI Codex GPT-5.6 模型设置 priority service tier。
+- **Fast 模式**：通过 `/fast` 为支持的 OpenAI Codex GPT-5.6 模型按需启用 priority service tier；当前默认关闭。
+- **Thinking 翻译**：将较短的 Thinking 内容翻译为简体中文，并使用本地持久缓存避免重复翻译。
+- **Telegram 集成**：可选的任务完成通知、远程追问和结构化问题回复。
 - **Worker 编排**：使用独立 Pi 进程并行调查、实现、测试和审查，支持模型分级路由与写入边界校验。
-- **扩展包**：集成 `pi-web-access` 和 `@ff-labs/pi-fff`。
+- **扩展包**：集成 `pi-web-access`、`@ff-labs/pi-fff` 和 `context-mode`。
 - **主题与快捷键**：自定义 `pi` 深色主题，并使用 `Ctrl+Y` 打开会话恢复界面。
 
 ## 目录结构
 
 ```text
 .
-├── extensions/          # TypeScript 扩展
-│   ├── ask-question/    # 结构化用户提问
-│   ├── context/         # /context 上下文占用与内容预览
-│   ├── fast/            # 模型请求优化
-│   ├── filter-output/   # 敏感信息过滤
-│   ├── memory/          # 分级记忆、记忆工具与 /summarize 命令
-│   ├── plan/            # /plan 工作流
-│   ├── subagents/       # 中文 Subagents 工作流
-│   ├── usage/           # /usage Codex 订阅用量
-│   ├── ui/              # TUI 定制
-│   └── worker/          # 通用 Worker 工具
-│       └── agents/      # Worker 执行契约
-├── skills/              # Agent Skills 与 Worker 编排规则
-├── memory-settings.json # Memory 容量、总结模型与上下文配置
-├── worker-settings.json # Worker 模型与并发配置
-├── themes/pi.json       # 自定义主题
-├── keybindings.json     # 快捷键
-└── settings.json        # Pi 全局设置
+├── extensions/                        # TypeScript 扩展
+│   ├── ask-question/                  # 结构化用户提问
+│   ├── context/                       # /context 占用与内容预览
+│   ├── fast/                          # 可选 priority service tier
+│   ├── filter-output/                 # 敏感工具结果过滤
+│   ├── memory/                        # 分级记忆、工具与 /summarize
+│   ├── plan/                          # /plan 工作流
+│   ├── telegram/                      # Telegram 通知与远程交互
+│   ├── thinking-translation/          # Thinking 中文翻译与缓存
+│   ├── ui/                            # TUI 定制
+│   ├── usage/                         # /usage Codex 订阅用量
+│   ├── worker/                        # 通用 Worker 工具
+│   │   └── agents/                    # Worker 执行契约
+│   └── herdr-agent-state.ts           # Herdr 管理的扩展状态
+├── skills/                            # Agent Skills 与 Worker 编排规则
+├── fast.json                          # Fast 模式开关
+├── memory-settings.json               # Memory 总结与上下文配置
+├── thinking-translation-settings.json # Thinking 翻译配置
+├── worker-settings.json               # Worker 模型、并发与限制
+├── themes/pi.json                     # 自定义主题
+├── keybindings.json                   # 快捷键
+└── settings.json                      # Pi 全局设置
 ```
 
-`auth.json`、`models.json`、`models-store.json`、`sessions/`、`memory.md`、`memory-index.md` 和 `memories/` 等本地文件不会提交到仓库。
+`auth.json`、`models.json`、`models-store.json`、`sessions/`、`memory.md`、`memory-index.md` 和 `memories/` 等本地文件由 `.gitignore` 排除。`.gitignore` 不会保护已经被 Git 跟踪的文件。
 
 ## 安装
 
@@ -88,12 +94,14 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 
 | 命令 | 说明 |
 | --- | --- |
-| `/context` | 查看上下文分类占用，并进入 System Prompt、Tools、Context Files 或 Skills 预览 |
+| `/context` | 查看上下文分类占用，并预览 System Prompt、Tools、Context Files、Skills 和消息内容 |
 | `/usage` | 查看当前 OpenAI Codex 账号的订阅用量、剩余额度和重置时间 |
 | `/plan [任务]` | 生成 checklist，确认后连续执行并最终检查 |
 | `/summarize` | 总结当前任务并沉淀可复用的 indexed memory |
 | `/memory_settings` | 交互式配置记忆上限、自动总结、模型、Thinking、通知及上下文来源 |
 | `/worker_settings` | 交互式配置 Worker 各档模型、Thinking、并发、自动委派、超时和输出上限 |
+| `/fast` | 切换支持模型的 priority service tier；状态保存在 `fast.json` |
+| `/thinking_translation` | 切换 Thinking 简体中文翻译 |
 | `/reload` | 重新加载扩展、Skill、主题和快捷键 |
 | `/login` | 配置 Provider 认证 |
 | `/model` | 选择模型 |
@@ -102,6 +110,27 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 `memory_search`、`memory_get`、`memory_summarize`、`ask_question`、`plan_check_result` 和 `worker` 是供 Agent 调用的工具，不需要手动执行。
 
 可通过 `/memory_settings` 交互式修改配置，也可直接编辑 `memory-settings.json`。配置项包括记忆数量上限、自动总结、总结模型、思考强度、结果展示方式以及是否包含 Tool Messages 和 Thinking。`summarize.includeToolMessages` 同时控制 Tool Call 与 Tool Result；Memory Tools 的调用和结果始终排除。保存后续总结会使用新配置；切换自动总结时需执行 `/reload` 以同步 `memory_summarize` Tool 的注册状态。`summarize.resultDisplay` 支持 `message`（写入会话）、`popup`（居中弹窗，默认）和 `none`（不通知）；文件或字段缺失时使用内置默认值。`memory_get` 会把最新记忆版本与当前分支最近一次读取结果进行比较：版本相同则提示复用原 Tool Result，内容有更新时才返回完整最新详情；上下文压缩或分支摘要后重新读取完整内容。TUI 总结在后台运行，不阻塞编辑器或后续会话；期间可按 `Esc` 取消模型请求，实际写入开始后为保证索引与详情一致性不再接受取消。弹窗会突出处理结果、记忆标题、关键字段、上下文输入/输出和耗时。
+
+## 可选运行时功能
+
+### Fast 与 Thinking 翻译
+
+`/fast` 修改 `fast.json` 中的开关。启用后只对 `openai-codex` Provider 的 `gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 请求添加 `service_tier: priority`；当前配置默认关闭。
+
+`/thinking_translation` 修改 `thinking-translation-settings.json` 中的开关。当前配置默认开启，使用配置的模型翻译不超过 200 个字符的 Thinking 内容，并将结果缓存到 `~/.pi/thinking-translations/`。
+
+### Telegram
+
+Telegram 集成只有在运行时提供 Bot Token 和目标 Chat ID 后才会连接：
+
+```bash
+export PI_TG_TOKEN='<bot-token>'
+export PI_TG_CHAT='<chat-id>'
+# 可选：启用轮询、远程追问和结构化问题回复
+export PI_TG_POLL=true
+```
+
+配置后，任务结束通知会包含项目名、会话名、首条用户输入和最终回复。`PI_TG_POLL` 默认关闭；启用后，Telegram 回复可作为后续用户消息送入当前 Pi 会话。不要将真实 Token 写入源码、README 或已跟踪的配置文件。
 
 ## Worker
 
@@ -123,9 +152,11 @@ git status --short --ignored
 git diff --cached
 ```
 
-`.gitignore` 只能阻止尚未被 Git 跟踪的文件。若敏感文件曾经提交过，需要先将其从 Git 索引和历史中移除，并立即轮换相关密钥。
+`.gitignore` 只能阻止尚未被 Git 跟踪的文件。若敏感文件曾经提交过，需要先将其从 Git 索引和历史中移除，并立即轮换相关密钥。`filter-output` 只过滤进入模型上下文的工具结果，不能替代凭据管理，也不会阻止其他扩展主动发送数据。
 
 `/context` 的详情只显示在本地 TUI，不会写入会话或额外发送给模型。`/usage` 不直接读取凭据文件，只使用 Pi 解析后的运行时认证，并仅向官方 `https://chatgpt.com` 用量接口发送 Bearer Authorization；自定义或代理 Origin 会被拒绝。
+
+启用 Telegram 后，项目名、会话名、首条用户输入和最终回复会发送至 Telegram；启用轮询后，远程回复会进入当前会话。启用 Thinking 翻译后，符合长度限制的 Thinking 内容会发送给 `thinking-translation-settings.json` 指定的模型，翻译结果会缓存在 `~/.pi/thinking-translations/`。使用这些功能前请确认数据接收方和模型符合你的隐私要求。
 
 默认忽略的内容包括：
 

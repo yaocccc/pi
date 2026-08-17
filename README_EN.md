@@ -2,43 +2,53 @@
 
 [中文](README.md)
 
-This is my personal [Pi Coding Agent](https://pi.dev) configuration, including custom extensions, themes, keybindings, and workflows. The repository only stores public and reusable configuration source code. Credentials, model secrets, sessions, and personal memories are excluded by `.gitignore`.
+This is my personal [Pi Coding Agent](https://pi.dev) configuration, including custom extensions, themes, keybindings, and workflows. The repository is intended for public, reusable configuration source code. Credentials, model secrets, sessions, and personal memories must not be committed; provide them through environment variables or ignored local files.
 
 ## Features
 
 - **Custom UI**: startup logo, editor, message cards, working status, and a compact footer.
-- **Context inspection**: `/context` shows the current context-window breakdown and previews the System Prompt, Tools, Context Files, and Skills; detail views support Space for page-down navigation.
+- **Context inspection**: `/context` shows the current context-window breakdown and previews the System Prompt, Tools, Context Files, Skills, user/agent messages, and tool calls; detail views support Space for page-down navigation.
 - **Codex usage**: `/usage` uses Pi's currently resolved OpenAI Codex authorization to show the subscription plan, primary, secondary, and additional usage windows, remaining allowance, reset times, and credits.
 - **Structured questions**: the `ask_question` tool supports single choice, multiple choice, and custom input.
 - **Plan workflow**: `/plan` creates a checklist, waits for confirmation, executes its steps continuously, and performs a final check.
 - **Tiered memory**: automatically maintains user preferences, searches through `memory_search`, reads details through `memory_get`, lets the model queue end-of-turn persistence with `memory_summarize`, and retains manual `/summarize`.
 - **Sensitive output filtering**: redacts common API keys, tokens, private keys, and connection strings before tool results enter the model context.
-- **Request optimization**: enables the priority service tier for supported OpenAI Codex GPT-5.6 models.
-- **Packages**: integrates `pi-web-access` and `@ff-labs/pi-fff`.
+- **Fast mode**: `/fast` optionally enables the priority service tier for supported OpenAI Codex GPT-5.6 models; it is disabled by default.
+- **Thinking translation**: translates short thinking content into Simplified Chinese and uses a persistent local cache to avoid duplicate translations.
+- **Telegram integration**: optional completion notifications, remote follow-ups, and structured-question replies.
+- **Worker orchestration**: runs investigation, implementation, testing, and review in isolated Pi processes with model-tier routing and write-boundary checks.
+- **Packages**: integrates `pi-web-access`, `@ff-labs/pi-fff`, and `context-mode`.
 - **Theme and keybinding**: includes the custom dark `pi` theme and binds `Ctrl+Y` to the session resume picker.
 
 ## Structure
 
 ```text
 .
-├── extensions/          # TypeScript extensions
-│   ├── ask-question/    # Structured user questions
-│   ├── context/         # /context usage breakdown and content previews
-│   ├── fast/            # Model request optimization
-│   ├── filter-output/   # Sensitive output filtering
-│   ├── memory/          # Tiered memory, memory tools, and /summarize
-│   ├── plan/            # /plan workflow
-│   ├── subagents/       # Chinese Subagents workflows
-│   ├── usage/           # /usage Codex subscription usage
-│   └── ui/              # TUI customization
-├── skills/              # Agent Skills
-├── memory-settings.json # Memory limits, summary model, and context settings
-├── themes/pi.json       # Custom theme
-├── keybindings.json     # Keybindings
-└── settings.json        # Global Pi settings
+├── extensions/                        # TypeScript extensions
+│   ├── ask-question/                  # Structured user questions
+│   ├── context/                       # /context usage and content previews
+│   ├── fast/                          # Optional priority service tier
+│   ├── filter-output/                 # Sensitive tool-result filtering
+│   ├── memory/                        # Tiered memory, tools, and /summarize
+│   ├── plan/                          # /plan workflow
+│   ├── telegram/                      # Telegram notifications and interaction
+│   ├── thinking-translation/          # Chinese thinking translation and cache
+│   ├── ui/                            # TUI customization
+│   ├── usage/                         # /usage Codex subscription usage
+│   ├── worker/                        # General-purpose Worker tool
+│   │   └── agents/                    # Worker execution contract
+│   └── herdr-agent-state.ts           # Herdr-managed extension state
+├── skills/                            # Agent Skills and Worker orchestration
+├── fast.json                          # Fast-mode toggle
+├── memory-settings.json               # Memory summary and context settings
+├── thinking-translation-settings.json # Thinking translation settings
+├── worker-settings.json               # Worker models, concurrency, and limits
+├── themes/pi.json                     # Custom theme
+├── keybindings.json                   # Keybindings
+└── settings.json                      # Global Pi settings
 ```
 
-Local files such as `auth.json`, `models.json`, `models-store.json`, `sessions/`, `memory.md`, `memory-index.md`, and `memories/` are not committed.
+Local files such as `auth.json`, `models.json`, `models-store.json`, `sessions/`, `memory.md`, `memory-index.md`, and `memories/` are excluded by `.gitignore`. `.gitignore` does not protect files that are already tracked by Git.
 
 ## Installation
 
@@ -84,22 +94,56 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 
 | Command | Description |
 | --- | --- |
-| `/context` | Show the context breakdown and preview the System Prompt, Tools, Context Files, or Skills |
+| `/context` | Show the context breakdown and preview prompts, tools, context files, skills, and message content |
 | `/usage` | Show subscription usage, remaining allowance, and reset times for the current OpenAI Codex account |
 | `/plan [task]` | Create a checklist, confirm it, execute it continuously, and run a final check |
 | `/summarize` | Summarize the task and persist reusable indexed memory |
 | `/memory_settings` | Interactively configure the memory limit, automatic summaries, model, thinking, notifications, and context sources |
 | `/worker_settings` | Interactively configure Worker models, thinking, concurrency, automatic delegation, timeout, and output limits |
+| `/fast` | Toggle the priority service tier for supported models; state is stored in `fast.json` |
+| `/thinking_translation` | Toggle Simplified Chinese thinking translation |
 | `/reload` | Reload extensions, skills, themes, and keybindings |
 | `/login` | Configure provider authentication |
 | `/model` | Select a model |
 | `Ctrl+Y` | Open the session resume picker |
 
-`memory_search`, `memory_get`, `memory_summarize`, `ask_question`, and `plan_check_result` are agent tools and do not need to be invoked manually.
+`memory_search`, `memory_get`, `memory_summarize`, `ask_question`, `plan_check_result`, and `worker` are agent tools and do not need to be invoked manually.
 
 Use `/memory_settings` to edit the configuration interactively, or edit `memory-settings.json` directly. It configures the memory limit, automatic summaries, summary model, thinking level, result display, and inclusion of Tool Messages or thinking. `summarize.includeToolMessages` controls both Tool Calls and Tool Results; Memory Tool calls and results are always excluded. Subsequent summaries use the saved configuration immediately; after toggling automatic summaries, run `/reload` to synchronize `memory_summarize` tool registration. `summarize.resultDisplay` supports `message` (write to the conversation), `popup` (centered popup, default), and `none` (no notification). Missing files or fields use built-in defaults. `memory_get` compares the latest memory version with its most recent read in the active branch: unchanged content reuses the previous Tool Result, while updated content returns full fresh details. Context compaction or a branch summary permits a full reload. In TUI mode, summaries run in the background without blocking the editor or subsequent turns. Press `Esc` to cancel the model request; cancellation is disabled once writes begin to preserve index/detail consistency. The popup emphasizes results, memory titles, key fields, input/output context usage, and elapsed time.
 
-Use `/worker_settings` to configure the Fast, Normal, Deep, and Max models and thinking levels, concurrency, automatic delegation, timeout, and output limit interactively. You can also edit `worker-settings.json` directly. Saved settings apply to subsequent Worker tasks immediately.
+## Optional Runtime Features
+
+### Fast and Thinking Translation
+
+`/fast` updates the toggle in `fast.json`. When enabled, it adds `service_tier: priority` only to requests for `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` on the `openai-codex` provider. The current configuration defaults to disabled.
+
+`/thinking_translation` updates the toggle in `thinking-translation-settings.json`. The current configuration defaults to enabled, translates thinking content of at most 200 characters with the configured model, and caches results under `~/.pi/thinking-translations/`.
+
+### Telegram
+
+The Telegram integration connects only when a Bot Token and target Chat ID are provided at runtime:
+
+```bash
+export PI_TG_TOKEN='<bot-token>'
+export PI_TG_CHAT='<chat-id>'
+# Optional: enable polling, remote follow-ups, and structured-question replies
+export PI_TG_POLL=true
+```
+
+Completion notifications include the project name, session name, first user input, and final response. `PI_TG_POLL` is disabled by default; when enabled, Telegram replies can be delivered to the active Pi session as follow-up user messages. Never place a real token in source code, a README, or any tracked configuration file.
+
+## Worker
+
+`worker` runs tasks in isolated, sessionless Pi subprocesses. Fast, Normal, and Deep are automatic complexity tiers; Max is an execution-strength tier used only when explicitly requested by the user. Deep is the highest automatic tier. Full model IDs and thinking levels are configured in `worker-settings.json`.
+
+Workers retain the normal tool set and load global extensions, while `PI_WORKER_DEPTH` prevents recursive delegation. Read-only tasks may run concurrently; batches containing writes run sequentially. Write tasks must declare allowed paths, and the subprocess validates `allowedPaths`, `forbiddenPaths`, and the working-directory boundary before `edit` or `write`. Use `/worker_settings` or edit `worker-settings.json` directly to configure models, thinking levels, concurrency, automatic delegation, timeout, and output limits. Saved settings apply to subsequent Worker tasks immediately.
+
+The main Worker files are:
+
+- `extensions/worker/index.ts`: tool entry point and orchestration; adjacent modules handle routing, processes, safety checks, and TUI behavior.
+- `skills/worker-orchestration/SKILL.md`: main-agent rules for decomposition, delegation, review, and acceptance.
+- `extensions/worker/agents/worker.md`: Worker execution rules and structured result format.
+- `worker-settings.json`: models, thinking levels, concurrency, timeout, and final-output limit.
 
 ## Privacy and Security
 
@@ -110,9 +154,11 @@ git status --short --ignored
 git diff --cached
 ```
 
-`.gitignore` only protects files that are not already tracked. If a sensitive file has ever been committed, remove it from the Git index and history, then rotate the affected credentials immediately.
+`.gitignore` only protects files that are not already tracked. If a sensitive file has ever been committed, remove it from the Git index and history, then rotate the affected credentials immediately. `filter-output` only redacts tool results entering the model context; it is not a substitute for credential management and does not prevent other extensions from sending data.
 
 `/context` details are shown only in the local TUI and are not written to the session or sent to the model again. `/usage` does not read credential files directly: it uses Pi's resolved runtime authorization and sends only Bearer Authorization to the official `https://chatgpt.com` usage endpoint; custom or proxy origins are rejected.
+
+When Telegram is enabled, the project name, session name, first user input, and final response are sent to Telegram. With polling enabled, remote replies enter the active session. When thinking translation is enabled, thinking content within the configured length limit is sent to the model selected in `thinking-translation-settings.json`, and translations are cached under `~/.pi/thinking-translations/`. Verify that these recipients and models satisfy your privacy requirements before enabling either feature.
 
 Ignored data includes:
 
