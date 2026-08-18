@@ -23,14 +23,14 @@ test("目录覆盖可用的 Impeccable Commands、别名和管理指令", () => 
 	assert.equal(findImpeccableCommand("  HoOkS   StAtUs ")?.command, "hooks status");
 });
 
-test("需要目标的指令生成中文占位模板", () => {
+test("菜单可标记目标，但生成的指令不附加输入提示", () => {
 	const shape = findImpeccableCommand("shape");
 	assert.ok(shape);
 	assert.equal(shape.invocation, "shape [目标]");
-	assert.equal(buildImpeccablePrompt(shape), "/skill:impeccable shape [请填写：目标]");
+	assert.equal(buildImpeccablePrompt(shape), "/skill:impeccable shape ");
 });
 
-test("不需要目标的指令只生成命令并保留末尾空格", () => {
+test("所有指令都只生成命令并保留末尾空格", () => {
 	const live = findImpeccableCommand("live");
 	assert.ok(live);
 	assert.equal(buildImpeccablePrompt(live), "/skill:impeccable live ");

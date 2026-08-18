@@ -28,12 +28,7 @@ const halfBlockLine = (width: number, position: "top" | "bottom"): string =>
 
 function insertPrompt(ctx: ExtensionContext, command: ImpeccableCommand): void {
 	ctx.ui.setEditorText(buildImpeccablePrompt(command));
-	ctx.ui.notify(
-		command.needsTarget
-			? `已写入 Impeccable 的 ${command.command} 模板，请补充目标后提交。`
-			: `已写入 Impeccable 的 ${command.command} 指令，可直接提交。`,
-		"info",
-	);
+	ctx.ui.notify(`已写入 Impeccable 的 ${command.command} 指令，可继续编辑后提交。`, "info");
 }
 
 async function showCommandSelector(ctx: ExtensionContext): Promise<ImpeccableCommand | undefined> {

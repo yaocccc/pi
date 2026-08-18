@@ -73,9 +73,7 @@ export function findImpeccableCommand(input: string): ImpeccableCommand | undefi
 
 /** Build the editable prompt placed into Pi's main editor; this function has no UI dependencies. */
 export function buildImpeccablePrompt(command: ImpeccableCommand): string {
-	return command.needsTarget
-		? `${IMPECCABLE_SKILL_COMMAND} ${command.command} [请填写：目标]`
-		: `${IMPECCABLE_SKILL_COMMAND} ${command.command} `;
+	return `${IMPECCABLE_SKILL_COMMAND} ${command.command} `;
 }
 
 export function availableCommandNames(): string {

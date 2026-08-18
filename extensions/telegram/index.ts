@@ -105,9 +105,9 @@ const sendToTelegram = async (message: string): Promise<void> => {
             await bot.sendMessage(chatId, chunk, { parse_mode: 'MarkdownV2' });
         }
     } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        const sanitized = token ? detail.replaceAll(token, '[redacted]') : detail;
-        console.error(`[telegram] 发送消息失败: ${sanitized}`);
+        // const detail = error instanceof Error ? error.message : String(error);
+        // const sanitized = token ? detail.replaceAll(token, '[redacted]') : detail;
+        // console.error(`[telegram] 发送消息失败: ${sanitized}`);
     }
 };
 
