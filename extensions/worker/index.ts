@@ -2,10 +2,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { MODES, PRESETS, loadRoutingConfig, validateTask } from "./config";
+import { MODES, PRESETS, WRITE_MODES, loadRoutingConfig, validateTask } from "./config";
 import { registerWorkerWriteGuard } from "./guard";
 import { beginWorkerShutdown, executeTask, killAllChildren, resetWorkerRuntime } from "./process";
-import { batchRequiresSerial } from "./security";
+import { mapWithConflicts, workerTasksConflict } from "./security";
 import { configureWorkerSettings } from "./settings-ui";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
 import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, renderWorkerDetails, sanitizeStructuredValue, serializePayload } from "./ui";
@@ -33,21 +33,6 @@ export const InputSchema = Type.Object({
 	tasks: Type.Optional(Type.Array(TaskSchema, { minItems: 1, maxItems: 12 })),
 	manual: Type.Optional(Type.Boolean()),
 });
-
-export async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let cursor = 0;
-	async function runner() {
-		while (true) {
-			const index = cursor++;
-			if (index >= items.length) return;
-			try { results[index] = await fn(items[index], index); }
-			catch (error) { results[index] = { status: "failed", summary: [error instanceof Error ? error.message : String(error)] } as R; }
-		}
-	}
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner));
-	return results;
-}
 
 export default function workerExtension(pi: ExtensionAPI) {
 	if (Number(process.env.PI_WORKER_DEPTH || "0") >= 1) {
@@ -101,8 +86,7 @@ export default function workerExtension(pi: ExtensionAPI) {
 			if (!loaded.config.automaticDelegationEnabled && !input.manual) {
 				return respond(JSON.stringify({ status: "blocked", summary: ["自动委派已在 worker-settings.json 中关闭；手动调用请设置 manual: true"] }, null, 2), { status: "blocked" });
 			}
-			let limit = loaded.config.maxConcurrentWorkers;
-			if (batchRequiresSerial(tasks)) limit = 1;
+			const limit = loaded.config.maxConcurrentWorkers;
 			const uiDetails: WorkerUiDetails = {
 				kind: "worker-ui",
 				startedAt: Date.now(),
@@ -127,7 +111,7 @@ export default function workerExtension(pi: ExtensionAPI) {
 				details: cloneUiDetails(uiDetails),
 			});
 			emitUi(`准备执行 ${tasks.length} 个 Worker 任务`);
-			const results = await mapWithLimit(tasks, limit, async (task, index) => {
+			const results = await mapWithConflicts(tasks, limit, (left, right) => workerTasksConflict(left, right, ctx.cwd), async (task, index, overlapContext) => {
 				const uiTask = uiDetails.tasks[index]!;
 				uiTask.status = "running";
 				uiTask.startedAt = Date.now();
@@ -135,18 +119,25 @@ export default function workerExtension(pi: ExtensionAPI) {
 				emitUi(`${task.mode} 开始`);
 				let item: Record<string, any>;
 				try {
+					const hadConcurrentWriter = () => WRITE_MODES.has(task.mode) && [...overlapContext.overlappingIndices]
+						.some((otherIndex) => WRITE_MODES.has(tasks[otherIndex].mode));
 					item = await executeTask(task, loaded.config, loaded.warnings, ctx, signal, (patch) => {
 						Object.assign(uiTask, patch);
 						emitUi(`${task.mode} ${uiTask.phase}`);
-					});
+					}, hadConcurrentWriter);
 				} catch (error) {
 					item = {
 						status: "failed",
 						summary: [error instanceof Error ? error.message : String(error)],
-						changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: ["主 Agent 检查异常"],
+						changed_files: [], observed_changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: ["主 Agent 检查异常"],
 					};
 				}
-				item = compactWorkerResult(sanitizeStructuredValue(item) as Record<string, any>);
+				const sanitizedItem = sanitizeStructuredValue(item) as Record<string, any>;
+				const observedChangedFiles = Array.isArray(sanitizedItem.observed_changed_files) ? sanitizedItem.observed_changed_files : [];
+				item = compactWorkerResult(sanitizedItem);
+				// compactWorkerResult predates this compatibility field; restore the full
+				// raw observation so out-of-boundary changes are not silently hidden.
+				item.observed_changed_files = observedChangedFiles;
 				uiTask.result = item;
 				uiTask.status = item.status === "completed" || item.status === "blocked" || item.status === "failed" ? item.status : "failed";
 				uiTask.phase = uiTask.status === "completed" ? "已完成" : uiTask.status === "blocked" ? "已阻塞" : "执行失败";

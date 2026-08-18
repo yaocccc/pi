@@ -161,7 +161,9 @@ Bot Token 由扩展配置提供。任务结束通知包含项目、会话、本�
 
 ## Worker
 
-`worker` 使用独立、无会话的 Pi 子进程执行任务，支持 Fast、Normal、Deep 三档自动复杂度路由，以及仅由用户显式请求的 Max 执行强度。Deep 是自动路由的最高任务级别。每个档位的完整模型 ID 和 thinking 直接配置在 `worker-settings.json`。Worker 不限制工具列表，并会加载全局扩展，因此后续扩展提供的工具也可直接使用；`PI_WORKER_DEPTH` 仍会阻止 Worker 递归委派。只读任务可并行；批量任务包含写入时会顺序执行。写入任务必须声明允许路径；Worker 子进程会在 `edit` 和 `write` 执行前校验 `allowedPaths`、`forbiddenPaths` 与工作目录边界，并仅使用轻量 Git 状态记录生成变更摘要。可通过 `/worker_settings` 交互式调整各档模型与 Thinking、并发、自动委派、超时和输出上限，也可直接编辑 `worker-settings.json`；保存后续 Worker 任务会立即使用新配置。
+`worker` 使用独立、无会话的 Pi 子进程执行任务，支持 Fast、Normal、Deep 三档自动复杂度路由，以及仅由用户显式请求的 Max 执行强度。Deep 是自动路由的最高任务级别。每个档位的完整模型 ID 和 thinking 直接配置在 `worker-settings.json`。Worker 不限制工具列表，并会加载全局扩展，因此后续扩展提供的工具也可直接使用；`PI_WORKER_DEPTH` 仍会阻止 Worker 递归委派。
+
+批量调度在 `maxConcurrentWorkers` 内运行并保持输入结果顺序：只读任务可相互并行；读写互斥；写任务仅在各自 `task.cwd` 与全部 `allowedPaths` 规范化到主工作区后能证明不重叠时并行。无 glob 的路径（即使当前是目录）只表示精确路径；目录后代必须写成 `dir/**`。相同路径、路径节点的祖先/后代关系、重叠的显式子树或 glob 静态目录前缀、符号链接别名以及根级、悬空符号链接或无法静态解析的 glob 均保守视为冲突；调度器可越过被冲突阻塞的队首任务运行后续独立任务。写入任务必须声明允许路径；Worker 子进程会在 `edit` 和 `write` 执行前校验 `allowedPaths`、`forbiddenPaths` 与工作目录边界。只有与兄弟写任务真实重叠的任务才会把 `changed_files` 限制到其规范化声明范围；串行任务保留完整原始 delta。所有结果另以 `observed_changed_files` 暴露完整快照观察路径；共享 Git worktree 下无法证明范围外路径由哪个任务产生，相关说明会写入 `risks`。可通过 `/worker_settings` 交互式调整各档模型与 Thinking、并发、自动委派、超时和输出上限，也可直接编辑 `worker-settings.json`；保存后续 Worker 任务会立即使用新配置。
 
 Worker 的主要文件为：
 

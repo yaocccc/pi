@@ -6,7 +6,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { agentDir, resolveRoute, resolveTaskCwd } from "./config";
 import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard";
-import { changedSince, snapshotWorkspace } from "./security";
+import { attributeChangedFiles, changedSince, snapshotWorkspace } from "./security";
 import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkerUsage, WorkspaceSnapshot } from "./types";
 import { UI_ACTIVITY_LIMIT, UI_DETAIL_CAP, addWorkerUsage, appendUiActivity, emptyWorkerUsage, estimateMessageTokens, messageUsage, publicThinking, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./ui";
 
@@ -443,7 +443,7 @@ export function failureDetails(category: string, reason: string) {
 	};
 }
 
-export async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: string[], ctx: ExtensionContext, signal: AbortSignal | undefined, onProgress?: (patch: Partial<WorkerUiTask>) => void): Promise<Record<string, any>> {
+export async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: string[], ctx: ExtensionContext, signal: AbortSignal | undefined, onProgress?: (patch: Partial<WorkerUiTask>) => void, hadConcurrentWriter: () => boolean = () => false): Promise<Record<string, any>> {
 	const cwd = resolveTaskCwd(ctx.cwd, task.cwd);
 	let route: Route;
 	onProgress?.({ status: "running", phase: "解析模型路由" });
@@ -454,7 +454,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		const failure = failureDetails("route_or_contract", reason);
-		return { status: "blocked", execution: baseExecution(task, null, 0, warnings), failure, summary: [reason], changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
+		return { status: "blocked", execution: baseExecution(task, null, 0, warnings), failure, summary: [reason], changed_files: [], observed_changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
 	}
 	let before: WorkspaceSnapshot | null = null;
 	try {
@@ -463,7 +463,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		const failure = failureDetails("workspace_snapshot", reason);
-		return { status: "blocked", execution: baseExecution(task, route, 0, warnings), failure, summary: [reason], changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
+		return { status: "blocked", execution: baseExecution(task, route, 0, warnings), failure, summary: [reason], changed_files: [], observed_changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
 	}
 	const systemPrompt = workerPromptBody();
 	onProgress?.({ status: "running", resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, attempt: 1, phase: "启动 Worker" });
@@ -481,10 +481,13 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	onProgress?.({ phase: "校验结果与修改范围", activities: child.activities, toolCalls: child.toolCalls, usage: child.usage });
 	const parsed = parseStructuredResult(child.assistantText);
 	const delta = before ? await changedSince(before, signal) : { changed: [] as string[] };
-	const changedFiles = delta.changed;
+	// Evaluate overlap after the snapshot delta: the scheduler mutates this
+	// execution context when a sibling starts after this task.
+	const attribution = attributeChangedFiles(task, ctx.cwd, delta.changed, hadConcurrentWriter());
 	const actualMismatch = Boolean(child.actualProvider && child.actualModel && `${child.actualProvider}/${child.actualModel}` !== route.modelId);
 	let status: "completed" | "blocked" | "failed" = parsed?.status === "completed" || parsed?.status === "blocked" || parsed?.status === "failed" ? parsed.status : "failed";
-	const risks = Array.isArray(parsed?.risks) ? parsed.risks : [];
+	const risks = Array.isArray(parsed?.risks) ? [...parsed.risks] : [];
+	if (attribution.attributedToDeclaredPaths) risks.unshift("任务与兄弟写任务真实重叠并共享 Git worktree；changed_files 已按本任务规范化 allowedPaths 取交集。observed_changed_files 保留快照观察到的完整原始 delta，其中范围外变化的来源无法由共享 worktree 快照证明。");
 	if (runtimeShuttingDown || child.aborted || child.timedOut || child.exitCode !== 0 || child.errorMessage || !parsed || actualMismatch) status = isBlockedFailure(child) ? "blocked" : "failed";
 	if (actualMismatch) risks.push(`实际模型 ${child.actualProvider}/${child.actualModel} 与请求 ${route.modelId} 不一致`);
 	if (child.truncated) risks.push("Worker 事件输出超过上限，已截断");
@@ -510,7 +513,8 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 		execution: { ...baseExecution(task, route, 1, warnings), actual_model_id: child.actualProvider && child.actualModel ? `${child.actualProvider}/${child.actualModel}` : route.modelId, actual_thinking: route.thinking, usage: child.usage, exit_code: child.exitCode, timed_out: child.timedOut, cancelled: child.aborted || runtimeShuttingDown },
 		failure,
 		summary,
-		changed_files: changedFiles,
+		changed_files: attribution.changedFiles,
+		observed_changed_files: attribution.observedChangedFiles,
 		validation: Array.isArray(parsed?.validation) ? parsed.validation : [],
 		acceptance: Array.isArray(parsed?.acceptance) ? parsed.acceptance : [],
 		findings: Array.isArray(parsed?.findings) ? parsed.findings : [],

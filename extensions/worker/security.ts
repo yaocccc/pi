@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { WRITE_MODES } from "./config";
-import type { CommandResult, WorkerTask, WorkspaceSnapshot } from "./types";
+import { resolveTaskCwd, WRITE_MODES } from "./config.ts";
+import type { CommandResult, WorkerTask, WorkspaceSnapshot } from "./types.ts";
 
 export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 30_000;
 export const GIT_COMMAND_KILL_GRACE_MS = 1_000;
@@ -40,10 +40,186 @@ export function matchesAny(file: string, patterns: string[]): boolean {
 	return patterns.some((pattern) => globToRegExp(pattern).test(normalized));
 }
 
-export function batchRequiresSerial(tasks: WorkerTask[]): boolean {
-	// All tasks observe the same Git worktree. A concurrent writer can otherwise
-	// be attributed to a read-only sibling or race another writer's snapshot.
-	return tasks.length > 1 && tasks.some((task) => WRITE_MODES.has(task.mode));
+export interface WriteBoundary {
+	unknown: boolean;
+	ranges: Array<{ root: string; kind: "exact" | "subtree"; relativePattern?: string }>;
+}
+
+function pathExists(filePath: string): boolean {
+	try { fs.lstatSync(filePath); return true; }
+	catch { return false; }
+}
+
+/** Resolve symlinks in the longest existing prefix while retaining a not-yet-created suffix. */
+export function canonicalizePotentialPath(filePath: string): string | null {
+	const absolute = path.resolve(filePath);
+	let ancestor = absolute;
+	while (!pathExists(ancestor)) {
+		const parent = path.dirname(ancestor);
+		if (parent === ancestor) return null;
+		ancestor = parent;
+	}
+	try {
+		return path.resolve(fs.realpathSync(ancestor), path.relative(ancestor, absolute));
+	} catch {
+		// A dangling symlink or any other realpath failure makes independence
+		// unprovable. Do not fall back to a lexical path and risk a false negative.
+		return null;
+	}
+}
+
+function isSameOrAncestor(ancestor: string, candidate: string): boolean {
+	const relative = path.relative(ancestor, candidate);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Convert allowedPaths to a conservative workspace-coordinate boundary.
+ * A root-level or unsupported glob is deliberately unknown and conflicts with every writer.
+ */
+export function declaredWriteBoundary(task: WorkerTask, baseCwd: string): WriteBoundary {
+	if (!WRITE_MODES.has(task.mode) || !task.allowedPaths?.length) return { unknown: true, ranges: [] };
+	let cwd: string;
+	try { cwd = resolveTaskCwd(baseCwd, task.cwd); }
+	catch { return { unknown: true, ranges: [] }; }
+	const ranges: WriteBoundary["ranges"] = [];
+	for (const rawPattern of task.allowedPaths) {
+		const pattern = rawPattern.trim().replaceAll("\\", "/").replace(/^\.\/+/, "").replace(/\/+$/, "") || ".";
+		// globToRegExp only has defined semantics for * and ?. Treat other common
+		// glob syntax as unknown rather than claiming two tasks are independent.
+		if (/[\[\]{}]/.test(pattern)) return { unknown: true, ranges: [] };
+		const segments = pattern.split("/");
+		const wildcardIndex = segments.findIndex((segment) => /[*?]/.test(segment));
+		if (wildcardIndex === 0) return { unknown: true, ranges: [] };
+		if (wildcardIndex > 0) {
+			const root = canonicalizePotentialPath(path.resolve(cwd, ...segments.slice(0, wildcardIndex)));
+			if (!root) return { unknown: true, ranges: [] };
+			ranges.push({ root, kind: "subtree", relativePattern: segments.slice(wildcardIndex).join("/") });
+			continue;
+		}
+		const root = canonicalizePotentialPath(path.resolve(cwd, pattern));
+		if (!root) return { unknown: true, ranges: [] };
+		// This deliberately matches the write guard: a literal such as "src" only
+		// matches that exact path. Callers must declare "src/**" for its subtree.
+		ranges.push({ root, kind: "exact" });
+	}
+	return { unknown: false, ranges };
+}
+
+function rangesOverlap(left: WriteBoundary["ranges"][number], right: WriteBoundary["ranges"][number]): boolean {
+	// Scheduling is deliberately stricter than exact guard matching: changing an
+	// ancestor node can affect a declared descendant even when the literal path
+	// itself does not grant write access to the descendant.
+	return isSameOrAncestor(left.root, right.root) || isSameOrAncestor(right.root, left.root);
+}
+
+export function workerTasksConflict(left: WorkerTask, right: WorkerTask, baseCwd: string): boolean {
+	const leftWrites = WRITE_MODES.has(left.mode);
+	const rightWrites = WRITE_MODES.has(right.mode);
+	if (!leftWrites && !rightWrites) return false;
+	// Read tasks do not declare a complete read set, so no read/write independence
+	// can be proven within a shared worktree.
+	if (leftWrites !== rightWrites) return true;
+	const leftBoundary = declaredWriteBoundary(left, baseCwd);
+	const rightBoundary = declaredWriteBoundary(right, baseCwd);
+	if (leftBoundary.unknown || rightBoundary.unknown) return true;
+	return leftBoundary.ranges.some((leftRange) => rightBoundary.ranges.some((rightRange) => rangesOverlap(leftRange, rightRange)));
+}
+
+export function filterChangedFilesToBoundary(task: WorkerTask, baseCwd: string, changedFiles: string[]): string[] {
+	const boundary = declaredWriteBoundary(task, baseCwd);
+	if (boundary.unknown) return [];
+	let cwd: string;
+	try { cwd = resolveTaskCwd(baseCwd, task.cwd); }
+	catch { return []; }
+	return changedFiles.filter((file) => {
+		const candidate = canonicalizePotentialPath(path.resolve(cwd, file));
+		if (!candidate) return false;
+		return boundary.ranges.some((range) => {
+			if (range.kind === "exact") return range.root === candidate;
+			const relative = path.relative(range.root, candidate).replaceAll("\\", "/");
+			if (!relative || relative.startsWith("../") || path.isAbsolute(relative)) return false;
+			return matchesAny(relative, [range.relativePattern!]);
+		});
+	});
+}
+
+export interface ChangedFilesAttribution {
+	changedFiles: string[];
+	observedChangedFiles: string[];
+	attributedToDeclaredPaths: boolean;
+}
+
+/** Keep the raw snapshot observation even when concurrent attribution is needed. */
+export function attributeChangedFiles(
+	task: WorkerTask,
+	baseCwd: string,
+	observedChangedFiles: string[],
+	hadConcurrentWriter: boolean,
+): ChangedFilesAttribution {
+	const observed = [...observedChangedFiles];
+	return {
+		changedFiles: hadConcurrentWriter ? filterChangedFilesToBoundary(task, baseCwd, observed) : [...observed],
+		observedChangedFiles: observed,
+		attributedToDeclaredPaths: hadConcurrentWriter,
+	};
+}
+
+export interface ConflictExecutionContext {
+	/** Mutable for the lifetime of the task so earlier starters see later overlap. */
+	readonly overlappingIndices: ReadonlySet<number>;
+}
+
+/** Ordered, failure-isolated scheduler that scans past a conflicting queue head. */
+export async function mapWithConflicts<T, R>(
+	items: T[],
+	limit: number,
+	conflicts: (left: T, right: T) => boolean,
+	fn: (item: T, index: number, execution: ConflictExecutionContext) => Promise<R>,
+): Promise<R[]> {
+	if (items.length === 0) return [];
+	const results = new Array<R>(items.length);
+	const pending = items.map(() => true);
+	const active = new Set<number>();
+	const contexts = items.map(() => ({ overlappingIndices: new Set<number>() }));
+	let remaining = items.length;
+	const concurrency = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
+	return await new Promise<R[]>((resolve) => {
+		const schedule = () => {
+			if (remaining === 0) { resolve(results); return; }
+			while (active.size < concurrency) {
+				let selected = -1;
+				for (let index = 0; index < items.length; index++) {
+					if (!pending[index]) continue;
+					const compatibleWithActive = [...active].every((running) => !conflicts(items[index], items[running]));
+					const preservesConflictOrder = pending.slice(0, index).every((isPending, earlier) =>
+						!isPending || !conflicts(items[index], items[earlier]));
+					if (compatibleWithActive && preservesConflictOrder) { selected = index; break; }
+				}
+				if (selected < 0) return;
+				pending[selected] = false;
+				for (const running of active) {
+					contexts[selected].overlappingIndices.add(running);
+					contexts[running].overlappingIndices.add(selected);
+				}
+				active.add(selected);
+				let execution: Promise<R>;
+				try { execution = Promise.resolve(fn(items[selected], selected, contexts[selected])); }
+				catch (error) { execution = Promise.reject(error); }
+				execution
+					.then((result) => { results[selected] = result; })
+					.catch((error) => {
+						results[selected] = { status: "failed", summary: [error instanceof Error ? error.message : String(error)] } as R;
+					})
+					.finally(() => {
+						active.delete(selected);
+						remaining--;
+						schedule();
+					});
+			}
+		};
+		schedule();
+	});
 }
 
 export async function runCommand(command: string, args: string[], cwd: string, options: RunCommandOptions = {}): Promise<CommandResult> {
