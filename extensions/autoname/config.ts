@@ -16,6 +16,12 @@ const validModel = (value: unknown): value is string =>
 const validReasoning = (value: unknown): value is ReasoningStrength =>
     typeof value === "string" && reasoningStrengths.has(value as ReasoningStrength);
 
+const validCooldownSeconds = (value: unknown): value is number =>
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 0
+    && value <= Math.floor(Number.MAX_SAFE_INTEGER / 1_000);
+
 export const autonameConfigPath = (): string => join(getAgentDir(), "autoname.json");
 
 /** Read on every settled turn so hand edits take effect without an extension reload. */
@@ -25,6 +31,10 @@ export async function loadAutonameConfig(path = autonameConfigPath()): Promise<A
         if (!isRecord(raw)) return { ...DEFAULT_CONFIG };
         return {
             enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.enabled,
+            notify: typeof raw.notify === "boolean" ? raw.notify : DEFAULT_CONFIG.notify,
+            cooldownSeconds: validCooldownSeconds(raw.cooldownSeconds)
+                ? raw.cooldownSeconds
+                : DEFAULT_CONFIG.cooldownSeconds,
             model: validModel(raw.model) ? raw.model : DEFAULT_CONFIG.model,
             reasoning: validReasoning(raw.reasoning) ? raw.reasoning : DEFAULT_CONFIG.reasoning,
         };

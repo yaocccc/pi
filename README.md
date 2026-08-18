@@ -13,9 +13,10 @@
 - **Plan 工作流**：`/plan` 会生成一份 checklist，确认后按步骤连续执行并进行最终检查。
 - **分级记忆**：自动维护用户偏好；通过 `memory_search` 检索索引、`memory_get` 按需读取详情；模型可用 `memory_summarize` 请求在本轮结束后沉淀，也可手动执行 `/summarize`。
 - **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
-- **Fast 模式**：通过 `/fast` 为支持的 OpenAI Codex GPT-5.6 模型按需启用 priority service tier；当前默认关闭。
+- **Fast 模式**：通过 `/fast` 为支持的 OpenAI Codex GPT-5.6 模型按需启用 priority service tier；内置缺省为关闭，仓库当前 `fast.json` 已启用。
 - **Thinking 翻译**：将较短的 Thinking 内容翻译为简体中文，并使用本地持久缓存避免重复翻译。
-- **Telegram 通知**：可选地将任务输入和最终回复发送到指定聊天。
+- **自动会话命名**：`autoname` 在交互式会话的 Agent 完全 settled 后，使用配置模型判断是否保留或更新简洁的中文会话标题。
+- **Telegram 通知**：可选地将结构化提问、任务输入和最终回复发送到指定聊天。
 - **Worker 编排**：使用独立 Pi 进程并行调查、实现、测试和审查，支持模型分级路由与写入边界校验。
 - **扩展包**：集成 `pi-web-access`、`@ff-labs/pi-fff` 和 `context-mode`。
 - **主题与快捷键**：自定义 `pi` 深色主题，并使用 `Ctrl+Y` 打开会话恢复界面。
@@ -26,6 +27,7 @@
 .
 ├── extensions/                        # TypeScript 扩展
 │   ├── ask-question/                  # 结构化用户提问
+│   ├── autoname/                      # 自动会话命名
 │   ├── context/                       # /context 占用与内容预览
 │   ├── fast/                          # 可选 priority service tier
 │   ├── filter-output/                 # 敏感工具结果过滤
@@ -39,6 +41,7 @@
 │   │   └── agents/                    # Worker 执行契约
 │   └── herdr-agent-state.ts           # Herdr 管理的扩展状态
 ├── skills/                            # Agent Skills 与 Worker 编排规则
+├── autoname.json                      # 自动会话命名配置
 ├── fast.json                          # Fast 模式开关
 ├── memory-settings.json               # Memory 总结与上下文配置
 ├── thinking-translation-settings.json # Thinking 翻译配置
@@ -102,6 +105,7 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 | `/worker_settings` | 交互式配置 Worker 各档模型、Thinking、并发、自动委派、超时和输出上限 |
 | `/fast` | 切换支持模型的 priority service tier；状态保存在 `fast.json` |
 | `/thinking_translation` | 切换 Thinking 简体中文翻译 |
+| `/autonameall` | 一次性为所有包含用户文本的未命名历史会话批量生成中文名称 |
 | `/reload` | 重新加载扩展、Skill、主题和快捷键 |
 | `/login` | 配置 Provider 认证 |
 | `/model` | 选择模型 |
@@ -115,19 +119,40 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 
 ### Fast 与 Thinking 翻译
 
-`/fast` 修改 `fast.json` 中的开关。启用后只对 `openai-codex` Provider 的 `gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 请求添加 `service_tier: priority`；当前配置默认关闭。
+`/fast` 修改 `fast.json` 中的开关。启用后只对 `openai-codex` Provider 的 `gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 请求添加 `service_tier: priority`；内置缺省为关闭，仓库当前 `fast.json` 已启用。
 
 `/thinking_translation` 修改 `thinking-translation-settings.json` 中的开关。当前配置默认开启，使用配置的模型翻译不超过 200 个字符的 Thinking 内容，并将结果缓存到 `~/.pi/thinking-translations/`。
+
+### 自动会话命名
+
+`autoname` 仅在有 UI 的会话中运行，并在每次 `agent_settled` 后检查是否需要命名。它只向命名模型发送活动分支中的用户文本、Assistant 文本和现有会话名，不发送 Thinking、Tool Call、Tool Result、Skills 或 Pi System Prompt。手动设置的会话名不会被覆盖；对于未命名或之前由扩展生成的名称，模型必须返回 `keep` 或 `rename`，新标题要求为简洁中文。
+
+当前仓库配置位于 `autoname.json`：
+
+```json
+{
+  "enabled": true,
+  "notify": true,
+  "cooldownSeconds": 600,
+  "model": "openai-codex/gpt-5.3-codex-spark",
+  "reasoning": "minimal"
+}
+```
+
+`enabled` 控制功能总开关，`notify` 控制名称更新通知。`cooldownSeconds` 以秒为单位，默认 600 秒；设为 `0` 可关闭冷却。每次实际发起命名请求时，扩展都会把时间写入当前会话的 Custom Entry，因此 `/reload` 或恢复会话后仍会遵守当前分支的冷却窗口。`model` 可使用完整的 `provider/model`，也可设为 `auto` 以沿用主会话模型；内置默认值为 `auto`，仓库当前配置则显式使用 `openai-codex/gpt-5.3-codex-spark`。`reasoning` 指定命名请求的思考强度。配置会在每次检查时重新读取，无需 `/reload`；名称实际更新时，通知会显示命名请求的上下文 Token 消耗和耗时。
+
+`/autonameall` 是一次性的历史会话补全命令。它会扫描所有项目的会话，跳过已经命名或不含用户文本的记录，并按顺序使用 `autoname.json` 中的模型和思考强度为其余会话强制生成中文名称。该显式命令不受自动命名开关和冷却窗口限制，也不会改动已有名称；每个实际请求仍会写入冷却记录，避免随后恢复会话时立即再次自动命名。命令结束后会汇报已命名、跳过、失败数量和总耗时。
 
 ### Telegram 通知
 
 Telegram 扩展只负责发送任务通知，不启用 Polling 或远程回复。配置目标 Chat ID 后即可使用：
 
 ```bash
+export PI_TG_TOKEN='<bot-token>'
 export PI_TG_CHAT='<chat-id>'
 ```
 
-Bot Token 由扩展配置提供。通知包含项目、会话、本轮用户输入和最终回复；发送失败只记录错误，不中断 Agent。
+Bot Token 由扩展配置提供。任务结束通知包含项目、会话、本轮用户输入和最终回复；调用 `ask_question` 时还会发送问题和选项，并标记为等待用户回复。发送失败只记录错误，不中断 Agent。
 
 ## Worker
 
@@ -153,7 +178,7 @@ git diff --cached
 
 `/context` 的详情只显示在本地 TUI，不会写入会话或额外发送给模型。`/usage` 不直接读取凭据文件，只使用 Pi 解析后的运行时认证，并仅向官方 `https://chatgpt.com` 用量接口发送 Bearer Authorization；自定义或代理 Origin 会被拒绝。
 
-启用 Telegram 通知后，项目名、会话名、本轮用户输入和最终回复会发送至目标聊天。启用 Thinking 翻译后，符合长度限制的 Thinking 内容会发送给 `thinking-translation-settings.json` 指定的模型，翻译结果会缓存在 `~/.pi/thinking-translations/`。使用这些功能前请确认数据接收方和模型符合你的隐私要求。
+启用 Telegram 通知后，项目名、会话名、本轮用户输入、最终回复，以及 `ask_question` 的问题和选项会发送至目标聊天。启用 Thinking 翻译后，符合长度限制的 Thinking 内容会发送给 `thinking-translation-settings.json` 指定的模型，翻译结果会缓存在 `~/.pi/thinking-translations/`。启用自动会话命名后，活动分支中的用户文本、Assistant 文本和现有会话名会发送给 `autoname.json` 指定的模型；执行 `/autonameall` 时，这一范围会扩展到所有项目中符合条件的未命名历史会话。冷却记录仅作为对应会话的 Custom Entry 保存，不进入模型上下文。使用这些功能前请确认数据接收方和模型符合你的隐私要求。
 
 默认忽略的内容包括：
 

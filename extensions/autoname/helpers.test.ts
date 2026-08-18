@@ -3,7 +3,9 @@ import test from "node:test";
 import {
     extractNamingMessages,
     hasConversationPair,
+    isAutonameCoolingDown,
     isExtensionOwnedName,
+    latestAutonameAttemptAt,
     latestAutonameProvenance,
     parseNamingDecision,
     validateName,
@@ -50,4 +52,16 @@ test("provenance is read from the active branch and protects manual names", () =
     assert.deepEqual(latestAutonameProvenance(branch), { version: 1, kind: "set-name", name: "Current title" });
     assert.equal(isExtensionOwnedName("Current title", branch), true);
     assert.equal(isExtensionOwnedName("Manual title", branch), false);
+});
+
+test("cooldown uses the latest persisted autoname attempt", () => {
+    const now = 1_000_000;
+    const branch = [
+        { type: "custom", customType: "autoname", data: { version: 1, kind: "attempt", startedAt: now - 20_000 } },
+        { type: "custom", customType: "autoname", data: { version: 1, kind: "attempt", startedAt: now - 5_000 } },
+    ];
+    assert.equal(latestAutonameAttemptAt(branch), now - 5_000);
+    assert.equal(isAutonameCoolingDown(branch, 10, now), true);
+    assert.equal(isAutonameCoolingDown(branch, 5, now), false);
+    assert.equal(isAutonameCoolingDown(branch, 0, now), false);
 });

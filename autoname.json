@@ -1,5 +1,7 @@
 {
   "enabled": true,
-  "model": "auto",
+  "notify": true,
+  "cooldownSeconds": 600,
+  "model": "openai-codex/gpt-5.3-codex-spark",
   "reasoning": "minimal"
 }

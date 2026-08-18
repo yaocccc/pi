@@ -13,9 +13,10 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 - **Plan workflow**: `/plan` creates a checklist, waits for confirmation, executes its steps continuously, and performs a final check.
 - **Tiered memory**: automatically maintains user preferences, searches through `memory_search`, reads details through `memory_get`, lets the model queue end-of-turn persistence with `memory_summarize`, and retains manual `/summarize`.
 - **Sensitive output filtering**: redacts common API keys, tokens, private keys, and connection strings before tool results enter the model context.
-- **Fast mode**: `/fast` optionally enables the priority service tier for supported OpenAI Codex GPT-5.6 models; it is disabled by default.
+- **Fast mode**: `/fast` optionally enables the priority service tier for supported OpenAI Codex GPT-5.6 models; its built-in fallback is disabled, while the repository's current `fast.json` enables it.
 - **Thinking translation**: translates short thinking content into Simplified Chinese and uses a persistent local cache to avoid duplicate translations.
-- **Telegram notifications**: optionally sends task input and the final response to a configured chat.
+- **Automatic session naming**: `autoname` uses a configured model after an interactive agent turn has fully settled to decide whether to retain or update a concise Chinese session title.
+- **Telegram notifications**: optionally sends structured questions, task input, and final responses to a configured chat.
 - **Worker orchestration**: runs investigation, implementation, testing, and review in isolated Pi processes with model-tier routing and write-boundary checks.
 - **Packages**: integrates `pi-web-access`, `@ff-labs/pi-fff`, and `context-mode`.
 - **Theme and keybinding**: includes the custom dark `pi` theme and binds `Ctrl+Y` to the session resume picker.
@@ -26,6 +27,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 .
 ├── extensions/                        # TypeScript extensions
 │   ├── ask-question/                  # Structured user questions
+│   ├── autoname/                      # Automatic session naming
 │   ├── context/                       # /context usage and content previews
 │   ├── fast/                          # Optional priority service tier
 │   ├── filter-output/                 # Sensitive tool-result filtering
@@ -39,6 +41,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 │   │   └── agents/                    # Worker execution contract
 │   └── herdr-agent-state.ts           # Herdr-managed extension state
 ├── skills/                            # Agent Skills and Worker orchestration
+├── autoname.json                      # Automatic session-naming configuration
 ├── fast.json                          # Fast-mode toggle
 ├── memory-settings.json               # Memory summary and context settings
 ├── thinking-translation-settings.json # Thinking translation settings
@@ -102,6 +105,7 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 | `/worker_settings` | Interactively configure Worker models, thinking, concurrency, automatic delegation, timeout, and output limits |
 | `/fast` | Toggle the priority service tier for supported models; state is stored in `fast.json` |
 | `/thinking_translation` | Toggle Simplified Chinese thinking translation |
+| `/autonameall` | One-time batch naming for every unnamed historical session that contains user text |
 | `/reload` | Reload extensions, skills, themes, and keybindings |
 | `/login` | Configure provider authentication |
 | `/model` | Select a model |
@@ -115,19 +119,40 @@ Use `/memory_settings` to edit the configuration interactively, or edit `memory-
 
 ### Fast and Thinking Translation
 
-`/fast` updates the toggle in `fast.json`. When enabled, it adds `service_tier: priority` only to requests for `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` on the `openai-codex` provider. The current configuration defaults to disabled.
+`/fast` updates the toggle in `fast.json`. When enabled, it adds `service_tier: priority` only to requests for `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` on the `openai-codex` provider. Its built-in fallback is disabled, while the repository's current `fast.json` enables it.
 
 `/thinking_translation` updates the toggle in `thinking-translation-settings.json`. The current configuration defaults to enabled, translates thinking content of at most 200 characters with the configured model, and caches results under `~/.pi/thinking-translations/`.
+
+### Automatic Session Naming
+
+`autoname` runs only in sessions with a UI and checks whether naming is needed after every `agent_settled` event. It sends only user text, assistant text, and the existing session name from the active branch to the naming model; thinking blocks, tool calls, tool results, skills, and Pi's system prompt are excluded. User-assigned names are never overwritten. For an unnamed session or a title previously generated by the extension, the model must return either `keep` or `rename`, and any new title must be concise and written in Chinese.
+
+The repository's current configuration is stored in `autoname.json`:
+
+```json
+{
+  "enabled": true,
+  "notify": true,
+  "cooldownSeconds": 600,
+  "model": "openai-codex/gpt-5.3-codex-spark",
+  "reasoning": "minimal"
+}
+```
+
+`enabled` is the feature-wide toggle, while `notify` controls rename notifications. `cooldownSeconds` is expressed in seconds and defaults to 600; set it to `0` to disable cooldown. Whenever a naming request is actually started, the extension stores its timestamp as a Custom Entry in the current session, so `/reload` and resumed sessions continue to enforce the cooldown on the active branch. `model` accepts a full `provider/model` value or `auto` to reuse the main session model. The built-in default is `auto`; the repository's current configuration explicitly selects `openai-codex/gpt-5.3-codex-spark`. `reasoning` selects the reasoning effort for the naming request. The file is re-read on every check, so edits do not require `/reload`. When a name changes, the notification includes the naming request's context-token usage and elapsed time.
+
+`/autonameall` is a one-time historical backfill command. It scans sessions from every project, skips records that already have a name or contain no user text, and sequentially uses the model and reasoning effort in `autoname.json` to force a Chinese name for every remaining session. This explicit command is not gated by the automatic-naming toggle or cooldown, and it never changes an existing name. Each actual request still records a cooldown timestamp so that resuming the session does not immediately trigger another automatic naming request. At completion, the command reports renamed, skipped, and failed counts plus total elapsed time.
 
 ### Telegram Notifications
 
 The Telegram extension only sends task notifications. It does not enable polling or remote replies. Configure the target Chat ID to use it:
 
 ```bash
+export PI_TG_TOKEN='<bot-token>'
 export PI_TG_CHAT='<chat-id>'
 ```
 
-The extension provides the Bot Token configuration. Notifications contain the project, session, current user input, and final response. Send failures are logged without interrupting the agent.
+The extension provides the Bot Token configuration. End-of-task notifications contain the project, session, current user input, and final response. When `ask_question` is called, it also sends the question and options, marked as awaiting the user's reply. Send failures are logged without interrupting the agent.
 
 ## Worker
 
@@ -155,7 +180,7 @@ git diff --cached
 
 `/context` details are shown only in the local TUI and are not written to the session or sent to the model again. `/usage` does not read credential files directly: it uses Pi's resolved runtime authorization and sends only Bearer Authorization to the official `https://chatgpt.com` usage endpoint; custom or proxy origins are rejected.
 
-When Telegram notifications are enabled, the project name, session name, current user input, and final response are sent to the target chat. When thinking translation is enabled, thinking content within the configured length limit is sent to the model selected in `thinking-translation-settings.json`, and translations are cached under `~/.pi/thinking-translations/`. Verify that these recipients and models satisfy your privacy requirements before enabling either feature.
+When Telegram notifications are enabled, the project name, session name, current user input, final response, and the question and options passed to `ask_question` are sent to the target chat. When thinking translation is enabled, thinking content within the configured length limit is sent to the model selected in `thinking-translation-settings.json`, and translations are cached under `~/.pi/thinking-translations/`. When automatic session naming is enabled, user text, assistant text, and the existing session name from the active branch are sent to the model selected in `autoname.json`; running `/autonameall` expands that scope to every eligible unnamed historical session across all projects. Cooldown records remain local Custom Entries in their corresponding sessions and do not enter model context. Verify that these recipients and models satisfy your privacy requirements before enabling these features.
 
 Ignored data includes:
 

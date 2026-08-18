@@ -6,12 +6,16 @@ export type ReasoningStrength = "minimal" | "low" | "medium" | "high" | "xhigh" 
 
 export type AutonameConfig = {
     enabled: boolean;
+    notify: boolean;
+    cooldownSeconds: number;
     model: string;
     reasoning: ReasoningStrength;
 };
 
 export const DEFAULT_CONFIG: AutonameConfig = {
     enabled: true,
+    notify: true,
+    cooldownSeconds: 600,
     model: "auto",
     reasoning: "minimal",
 };
@@ -136,6 +140,28 @@ export function latestAutonameProvenance(entries: readonly unknown[]): AutonameP
 
 export function isExtensionOwnedName(name: string | undefined, entries: readonly unknown[]): boolean {
     return name !== undefined && latestAutonameProvenance(entries)?.name === name;
+}
+
+export function latestAutonameAttemptAt(entries: readonly unknown[]): number | undefined {
+    for (let index = entries.length - 1; index >= 0; index--) {
+        const entry = entries[index];
+        if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== AUTONAME_ENTRY_TYPE || !isRecord(entry.data)) continue;
+        const data = entry.data;
+        if (data.version === 1 && data.kind === "attempt" && typeof data.startedAt === "number") {
+            return data.startedAt;
+        }
+    }
+    return undefined;
+}
+
+export function isAutonameCoolingDown(
+    entries: readonly unknown[],
+    cooldownSeconds: number,
+    now = Date.now(),
+): boolean {
+    if (cooldownSeconds <= 0) return false;
+    const startedAt = latestAutonameAttemptAt(entries);
+    return startedAt !== undefined && now < startedAt + cooldownSeconds * 1_000;
 }
 
 export function responseText(content: readonly unknown[]): string {
