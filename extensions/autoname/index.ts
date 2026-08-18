@@ -53,6 +53,12 @@ const formatDuration = (durationMs: number): string => durationMs < 1_000
     ? `${Math.round(durationMs)} 毫秒`
     : `${(durationMs / 1_000).toFixed(1)} 秒`;
 
+const formatCompactTokens = (tokens: number): string => tokens >= 1_000_000
+    ? `${(tokens / 1_000_000).toFixed(1)}m`
+    : tokens >= 1_000
+        ? `${(tokens / 1_000).toFixed(1)}k`
+        : Math.round(tokens).toString();
+
 const extractNamingContext = (branch: readonly unknown[], currentName: string | undefined, cooldownSeconds: number) => {
     const messages = extractNamingMessages(branch);
     if (!hasConversationPair(messages) || isAutonameCoolingDown(branch, cooldownSeconds)) return undefined;
@@ -288,7 +294,7 @@ export default function autoname(pi: ExtensionAPI): void {
             pi.appendEntry(AUTONAME_ENTRY_TYPE, { version: 1, kind: "set-name", name: proposed.name });
             if (config.notify) {
                 ctx.ui.notify(
-                    `会话已自动命名：${proposed.name}\n上下文消耗：${proposed.contextTokens.toLocaleString()} tokens · 耗时：${formatDuration(proposed.durationMs)}`,
+                    `会话已自动命名：${proposed.name} [${formatCompactTokens(proposed.contextTokens)} ${(proposed.durationMs / 1_000).toFixed(1)}s]`,
                     "info",
                 );
             }
