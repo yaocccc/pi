@@ -15,7 +15,7 @@
 - **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
 - **Fast 模式**：通过 `/fast` 为支持的 OpenAI Codex GPT-5.6 模型按需启用 priority service tier；当前默认关闭。
 - **Thinking 翻译**：将较短的 Thinking 内容翻译为简体中文，并使用本地持久缓存避免重复翻译。
-- **Telegram 集成**：可选的任务完成通知、远程追问和结构化问题回复。
+- **Telegram 通知**：可选地将任务输入和最终回复发送到指定聊天。
 - **Worker 编排**：使用独立 Pi 进程并行调查、实现、测试和审查，支持模型分级路由与写入边界校验。
 - **扩展包**：集成 `pi-web-access`、`@ff-labs/pi-fff` 和 `context-mode`。
 - **主题与快捷键**：自定义 `pi` 深色主题，并使用 `Ctrl+Y` 打开会话恢复界面。
@@ -31,7 +31,7 @@
 │   ├── filter-output/                 # 敏感工具结果过滤
 │   ├── memory/                        # 分级记忆、工具与 /summarize
 │   ├── plan/                          # /plan 工作流
-│   ├── telegram/                      # Telegram 通知与远程交互
+│   ├── telegram/                      # Telegram 任务通知
 │   ├── thinking-translation/          # Thinking 中文翻译与缓存
 │   ├── ui/                            # TUI 定制
 │   ├── usage/                         # /usage Codex 订阅用量
@@ -119,18 +119,15 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 
 `/thinking_translation` 修改 `thinking-translation-settings.json` 中的开关。当前配置默认开启，使用配置的模型翻译不超过 200 个字符的 Thinking 内容，并将结果缓存到 `~/.pi/thinking-translations/`。
 
-### Telegram
+### Telegram 通知
 
-Telegram 集成只有在运行时提供 Bot Token 和目标 Chat ID 后才会连接：
+Telegram 扩展只负责发送任务通知，不启用 Polling 或远程回复。配置目标 Chat ID 后即可使用：
 
 ```bash
-export PI_TG_TOKEN='<bot-token>'
 export PI_TG_CHAT='<chat-id>'
-# 可选：启用轮询、远程追问和结构化问题回复
-export PI_TG_POLL=true
 ```
 
-配置后，任务结束通知会包含项目名、会话名、首条用户输入和最终回复。`PI_TG_POLL` 默认关闭；启用后，Telegram 回复可作为后续用户消息送入当前 Pi 会话。不要将真实 Token 写入源码、README 或已跟踪的配置文件。
+Bot Token 由扩展配置提供。通知包含项目、会话、本轮用户输入和最终回复；发送失败只记录错误，不中断 Agent。
 
 ## Worker
 
@@ -156,7 +153,7 @@ git diff --cached
 
 `/context` 的详情只显示在本地 TUI，不会写入会话或额外发送给模型。`/usage` 不直接读取凭据文件，只使用 Pi 解析后的运行时认证，并仅向官方 `https://chatgpt.com` 用量接口发送 Bearer Authorization；自定义或代理 Origin 会被拒绝。
 
-启用 Telegram 后，项目名、会话名、首条用户输入和最终回复会发送至 Telegram；启用轮询后，远程回复会进入当前会话。启用 Thinking 翻译后，符合长度限制的 Thinking 内容会发送给 `thinking-translation-settings.json` 指定的模型，翻译结果会缓存在 `~/.pi/thinking-translations/`。使用这些功能前请确认数据接收方和模型符合你的隐私要求。
+启用 Telegram 通知后，项目名、会话名、本轮用户输入和最终回复会发送至目标聊天。启用 Thinking 翻译后，符合长度限制的 Thinking 内容会发送给 `thinking-translation-settings.json` 指定的模型，翻译结果会缓存在 `~/.pi/thinking-translations/`。使用这些功能前请确认数据接收方和模型符合你的隐私要求。
 
 默认忽略的内容包括：
 

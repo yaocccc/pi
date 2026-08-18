@@ -2,6 +2,16 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { truncateToWidth, visibleWidth, type Component } from '@earendil-works/pi-tui';
 import type { FooterData } from './types.ts';
 
+function formatContextTokens(count: number): string {
+    if (count < 1_000) return Math.round(count).toString();
+    if (count < 1_000_000) {
+        const precision = count < 10_000 ? 1 : 0;
+        return `${Number((count / 1_000).toFixed(precision))}K`;
+    }
+    const precision = count < 10_000_000 ? 1 : 0;
+    return `${Number((count / 1_000_000).toFixed(precision))}M`;
+}
+
 export class NoCostFooter implements Component {
     constructor(
         private ctx: ExtensionContext,
@@ -16,7 +26,10 @@ export class NoCostFooter implements Component {
         if (home && pwd.startsWith(home)) pwd = `~${pwd.slice(home.length)}`;
         if (branch) pwd += ` (${branch})`;
         const usage = this.ctx.getContextUsage?.();
-        const contextText = usage ? `${usage.percent?.toFixed?.(1) ?? '?'}%` : '';
+        const contextDetails = usage?.tokens !== null && usage?.tokens !== undefined
+            ? ` (${formatContextTokens(usage.tokens)}/${formatContextTokens(usage.contextWindow)})`
+            : '';
+        const contextText = usage ? `${usage.percent?.toFixed?.(1) ?? '?'}%${contextDetails}` : '';
 
         const model = this.ctx.model as any;
         const modelText = model?.name || model?.id || 'no-model';

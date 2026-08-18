@@ -1,17 +1,18 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
-import {
-    AskQuestionTelegramBridge,
-    normalizeAskQuestionOptions,
-    type AskQuestionResult,
-} from './telegram-bridge.ts';
 
 interface AskQuestionDetails {
     question: string;
     options: string[];
     answer: string | string[] | null;
     multiSelect: boolean;
+    wasCustom?: boolean;
+    customAnswers?: string[];
+}
+
+interface AskQuestionResult {
+    answers: string[];
     wasCustom?: boolean;
     customAnswers?: string[];
 }
@@ -37,6 +38,20 @@ const AskQuestionParams = Type.Object({
     multiSelect: Type.Optional(Type.Boolean({ description: '是否允许多选。true 时界面显示复选框，用户可勾选多项后提交。' })),
 });
 
+const normalizeOptions = (options: string[]): string[] => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    for (const option of options) {
+        const label = option.replace(/[\r\n\t]+/g, ' ').trim();
+        if (!label || seen.has(label)) continue;
+        seen.add(label);
+        result.push(label);
+    }
+
+    return result.slice(0, 8);
+};
+
 const formatList = (values: string[]): string => values.join('、');
 
 const padToWidth = (text: string, width: number): string => {
@@ -54,8 +69,6 @@ const halfBlockLine = (width: number, position: 'top' | 'bottom'): string => TEX
 const invisibleBorder = (text: string): string => TEXTAREA_FG + text + RESET_FG;
 
 const askQuestion = (pi: ExtensionAPI) => {
-    const telegramBridge = new AskQuestionTelegramBridge(pi.events);
-
     pi.registerTool({
         name: 'ask_question',
         label: '提问用户',
@@ -70,34 +83,19 @@ const askQuestion = (pi: ExtensionAPI) => {
         parameters: AskQuestionParams,
 
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-            const options = normalizeAskQuestionOptions(params.options);
+            const options = normalizeOptions(params.options);
             const multiSelect = params.multiSelect === true;
-            const noninteractiveResult = () => ({
-                content: [{ type: 'text' as const, text: `需要询问用户：${params.question}\n${multiSelect ? '可多选：' : '选项：'}${options.join(' / ')}` }],
-                details: { question: params.question, options, answer: null, multiSelect } as AskQuestionDetails,
-            });
 
-            if (!ctx.hasUI) return noninteractiveResult();
-
-            let result: AskQuestionResult | null;
-            if (ctx.mode !== 'tui') {
-                const pendingTelegramAnswer = telegramBridge.wait(_toolCallId, _signal);
-                if (!pendingTelegramAnswer) return noninteractiveResult();
-                try {
-                    result = await pendingTelegramAnswer;
-                } finally {
-                    telegramBridge.cancel(_toolCallId);
-                }
-            } else {
-                const allOptions: DisplayOption[] = [...options.map((label) => ({ label })), { label: '自己输入…', isCustom: true }];
-                let finishFromTelegram: ((answer: AskQuestionResult) => void) | undefined;
-                const detachTelegram = telegramBridge.onAnswer(_toolCallId, (answer) => finishFromTelegram?.(answer));
-                try {
-                    result = await ctx.ui.custom<AskQuestionResult | null>((tui, theme, _keybindings, done) => {
-                finishFromTelegram = done;
-                const finishLocally = (answer: AskQuestionResult | null) => {
-                    if (telegramBridge.settleLocally(_toolCallId)) done(answer);
+            if (!ctx.hasUI) {
+                return {
+                    content: [{ type: 'text', text: `需要询问用户：${params.question}\n${multiSelect ? '可多选：' : '选项：'}${options.join(' / ')}` }],
+                    details: { question: params.question, options, answer: null, multiSelect } as AskQuestionDetails,
                 };
+            }
+
+            const allOptions: DisplayOption[] = [...options.map((label) => ({ label })), { label: '自己输入…', isCustom: true }];
+
+            const result = await ctx.ui.custom<AskQuestionResult | null>((tui, theme, _keybindings, done) => {
                 let selectedIndex = 0;
                 let inputMode = false;
                 let warning: string | undefined;
@@ -140,7 +138,7 @@ const askQuestion = (pi: ExtensionAPI) => {
                         return;
                     }
 
-                    finishLocally({
+                    done({
                         answers,
                         customAnswers: [...customAnswers],
                         wasCustom: selectedAnswers.length === 0 && customAnswers.length > 0,
@@ -169,7 +167,7 @@ const askQuestion = (pi: ExtensionAPI) => {
                         openCustomInput();
                         return;
                     }
-                    finishLocally({ answers: [option.label], wasCustom: false });
+                    done({ answers: [option.label], wasCustom: false });
                 };
 
                 editor.onSubmit = (value) => {
@@ -190,7 +188,7 @@ const askQuestion = (pi: ExtensionAPI) => {
                         return;
                     }
 
-                    finishLocally({ answers: [answer], wasCustom: true });
+                    done({ answers: [answer], wasCustom: true });
                 };
 
                 const handleInput = (data: string) => {
@@ -233,7 +231,7 @@ const askQuestion = (pi: ExtensionAPI) => {
                         return;
                     }
                     if (matchesKey(data, Key.escape)) {
-                        finishLocally(null);
+                        done(null);
                     }
                 };
 
@@ -314,14 +312,7 @@ const askQuestion = (pi: ExtensionAPI) => {
                     },
                     handleInput,
                 };
-                    });
-                } finally {
-                    finishFromTelegram = undefined;
-                    detachTelegram();
-                    telegramBridge.settleLocally(_toolCallId);
-                    telegramBridge.release(_toolCallId);
-                }
-            }
+            });
 
             if (!result) {
                 return {
@@ -371,7 +362,7 @@ const askQuestion = (pi: ExtensionAPI) => {
         },
 
         renderCall(args, theme) {
-            const options = Array.isArray(args.options) ? normalizeAskQuestionOptions(args.options as string[]) : [];
+            const options = Array.isArray(args.options) ? normalizeOptions(args.options as string[]) : [];
             const multiSelect = args.multiSelect === true;
             const prefix = multiSelect ? '[多选] ' : '';
             const optionSummary = [...options.map((option) => `${multiSelect ? '[ ] ' : ''}${option}`), '自己输入…'].join('  ');
@@ -400,10 +391,6 @@ const askQuestion = (pi: ExtensionAPI) => {
             }
             return new Text(theme.fg('success', '✓ ') + theme.fg('accent', details.answer), 0, 0);
         },
-    });
-
-    pi.on('session_shutdown', () => {
-        telegramBridge.dispose();
     });
 
     pi.on('before_agent_start', (event, ctx) => {

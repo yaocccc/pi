@@ -15,7 +15,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 - **Sensitive output filtering**: redacts common API keys, tokens, private keys, and connection strings before tool results enter the model context.
 - **Fast mode**: `/fast` optionally enables the priority service tier for supported OpenAI Codex GPT-5.6 models; it is disabled by default.
 - **Thinking translation**: translates short thinking content into Simplified Chinese and uses a persistent local cache to avoid duplicate translations.
-- **Telegram integration**: optional completion notifications, remote follow-ups, and structured-question replies.
+- **Telegram notifications**: optionally sends task input and the final response to a configured chat.
 - **Worker orchestration**: runs investigation, implementation, testing, and review in isolated Pi processes with model-tier routing and write-boundary checks.
 - **Packages**: integrates `pi-web-access`, `@ff-labs/pi-fff`, and `context-mode`.
 - **Theme and keybinding**: includes the custom dark `pi` theme and binds `Ctrl+Y` to the session resume picker.
@@ -31,7 +31,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 │   ├── filter-output/                 # Sensitive tool-result filtering
 │   ├── memory/                        # Tiered memory, tools, and /summarize
 │   ├── plan/                          # /plan workflow
-│   ├── telegram/                      # Telegram notifications and interaction
+│   ├── telegram/                      # Telegram task notifications
 │   ├── thinking-translation/          # Chinese thinking translation and cache
 │   ├── ui/                            # TUI customization
 │   ├── usage/                         # /usage Codex subscription usage
@@ -119,18 +119,15 @@ Use `/memory_settings` to edit the configuration interactively, or edit `memory-
 
 `/thinking_translation` updates the toggle in `thinking-translation-settings.json`. The current configuration defaults to enabled, translates thinking content of at most 200 characters with the configured model, and caches results under `~/.pi/thinking-translations/`.
 
-### Telegram
+### Telegram Notifications
 
-The Telegram integration connects only when a Bot Token and target Chat ID are provided at runtime:
+The Telegram extension only sends task notifications. It does not enable polling or remote replies. Configure the target Chat ID to use it:
 
 ```bash
-export PI_TG_TOKEN='<bot-token>'
 export PI_TG_CHAT='<chat-id>'
-# Optional: enable polling, remote follow-ups, and structured-question replies
-export PI_TG_POLL=true
 ```
 
-Completion notifications include the project name, session name, first user input, and final response. `PI_TG_POLL` is disabled by default; when enabled, Telegram replies can be delivered to the active Pi session as follow-up user messages. Never place a real token in source code, a README, or any tracked configuration file.
+The extension provides the Bot Token configuration. Notifications contain the project, session, current user input, and final response. Send failures are logged without interrupting the agent.
 
 ## Worker
 
@@ -158,7 +155,7 @@ git diff --cached
 
 `/context` details are shown only in the local TUI and are not written to the session or sent to the model again. `/usage` does not read credential files directly: it uses Pi's resolved runtime authorization and sends only Bearer Authorization to the official `https://chatgpt.com` usage endpoint; custom or proxy origins are rejected.
 
-When Telegram is enabled, the project name, session name, first user input, and final response are sent to Telegram. With polling enabled, remote replies enter the active session. When thinking translation is enabled, thinking content within the configured length limit is sent to the model selected in `thinking-translation-settings.json`, and translations are cached under `~/.pi/thinking-translations/`. Verify that these recipients and models satisfy your privacy requirements before enabling either feature.
+When Telegram notifications are enabled, the project name, session name, current user input, and final response are sent to the target chat. When thinking translation is enabled, thinking content within the configured length limit is sent to the model selected in `thinking-translation-settings.json`, and translations are cached under `~/.pi/thinking-translations/`. Verify that these recipients and models satisfy your privacy requirements before enabling either feature.
 
 Ignored data includes:
 
