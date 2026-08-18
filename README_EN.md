@@ -11,6 +11,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 - **Codex usage**: `/usage` uses Pi's currently resolved OpenAI Codex authorization to show the subscription plan, primary, secondary, and additional usage windows, remaining allowance, reset times, and credits.
 - **Structured questions**: the `ask_question` tool supports single choice, multiple choice, and custom input.
 - **Plan workflow**: `/plan` creates a checklist, waits for confirmation, executes its steps continuously, and performs a final check.
+- **Smart commits**: `/commit` stages all current changes, generates a concise English Conventional Commit message from the staged diff, and commits it.
 - **Tiered memory**: automatically maintains user preferences, searches through `memory_search`, reads details through `memory_get`, lets the model queue end-of-turn persistence with `memory_summarize`, and retains manual `/summarize`.
 - **Sensitive output filtering**: redacts common API keys, tokens, private keys, and connection strings before tool results enter the model context.
 - **Fast mode**: `/fast` optionally enables the priority service tier for supported OpenAI Codex GPT-5.6 models; its built-in fallback is disabled, while the repository's current `fast.json` enables it.
@@ -29,6 +30,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 │   ├── ask-question/                  # Structured user questions
 │   ├── autoname/                      # Automatic session naming
 │   ├── context/                       # /context usage and content previews
+│   ├── commit/                        # /commit smart commits
 │   ├── fast/                          # Optional priority service tier
 │   ├── filter-output/                 # Sensitive tool-result filtering
 │   ├── memory/                        # Tiered memory, tools, and /summarize
@@ -100,6 +102,7 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 | `/context` | Show the context breakdown and preview prompts, tools, context files, skills, and message content |
 | `/usage` | Show subscription usage, remaining allowance, and reset times for the current OpenAI Codex account |
 | `/plan [task]` | Create a checklist, confirm it, execute it continuously, and run a final check |
+| `/commit` | Stage all changes, generate a Conventional Commit message from the staged diff, and commit |
 | `/summarize` | Summarize the task and persist reusable indexed memory |
 | `/memory_settings` | Interactively configure the memory limit, automatic summaries, model, thinking, notifications, and context sources |
 | `/worker_settings` | Interactively configure Worker models, thinking, concurrency, automatic delegation, timeout, and output limits |
@@ -112,6 +115,8 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 | `Ctrl+Y` | Open the session resume picker |
 
 `memory_search`, `memory_get`, `memory_summarize`, `ask_question`, `plan_check_result`, and `worker` are agent tools and do not need to be invoked manually.
+
+`/commit` first runs `git add -A`, sends the complete staged diff directly to the active model to generate a one-line English Conventional Commit message, and then runs `git commit`. It does not start an agent tool loop. Before running it, make sure every working-tree change belongs in the same commit.
 
 Use `/memory_settings` to edit the configuration interactively, or edit `memory-settings.json` directly. It configures the memory limit, automatic summaries, summary model, thinking level, result display, and inclusion of Tool Messages or thinking. `summarize.includeToolMessages` controls both Tool Calls and Tool Results; Memory Tool calls and results are always excluded. Subsequent summaries use the saved configuration immediately; after toggling automatic summaries, run `/reload` to synchronize `memory_summarize` tool registration. `summarize.resultDisplay` supports `message` (write to the conversation), `popup` (centered popup, default), and `none` (no notification). Missing files or fields use built-in defaults. `memory_get` compares the latest memory version with its most recent read in the active branch: unchanged content reuses the previous Tool Result, while updated content returns full fresh details. Context compaction or a branch summary permits a full reload. In TUI mode, summaries run in the background without blocking the editor or subsequent turns. Press `Esc` to cancel the model request; cancellation is disabled once writes begin to preserve index/detail consistency. The popup emphasizes results, memory titles, key fields, input/output context usage, and elapsed time.
 
@@ -178,7 +183,7 @@ git diff --cached
 
 `.gitignore` only protects files that are not already tracked. If a sensitive file has ever been committed, remove it from the Git index and history, then rotate the affected credentials immediately. `filter-output` only redacts tool results entering the model context; it is not a substitute for credential management and does not prevent other extensions from sending data.
 
-`/context` details are shown only in the local TUI and are not written to the session or sent to the model again. `/usage` does not read credential files directly: it uses Pi's resolved runtime authorization and sends only Bearer Authorization to the official `https://chatgpt.com` usage endpoint; custom or proxy origins are rejected.
+`/context` details are shown only in the local TUI and are not written to the session or sent to the model again. `/usage` does not read credential files directly: it uses Pi's resolved runtime authorization and sends only Bearer Authorization to the official `https://chatgpt.com` usage endpoint; custom or proxy origins are rejected. When `/commit` runs, the current staged diff is sent to the selected model to generate the commit message.
 
 When Telegram notifications are enabled, the project name, session name, current user input, final response, and the question and options passed to `ask_question` are sent to the target chat. When thinking translation is enabled, thinking content within the configured length limit is sent to the model selected in `thinking-translation-settings.json`, and translations are cached under `~/.pi/thinking-translations/`. When automatic session naming is enabled, user text, assistant text, and the existing session name from the active branch are sent to the model selected in `autoname.json`; running `/autonameall` expands that scope to every eligible unnamed historical session across all projects. Cooldown records remain local Custom Entries in their corresponding sessions and do not enter model context. Verify that these recipients and models satisfy your privacy requirements before enabling these features.
 
