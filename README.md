@@ -104,7 +104,7 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 | `/plan [任务]` | 生成 checklist，确认后连续执行并最终检查 |
 | `/commit` | 暂存全部改动，根据 staged diff 生成 Conventional Commit 信息并提交 |
 | `/summarize` | 总结当前任务并沉淀可复用的 indexed memory |
-| `/memory_settings` | 交互式配置记忆上限、自动总结、模型、Thinking、通知及上下文来源 |
+| `/memory_settings` | 交互式配置记忆上限、自动总结、模型、Thinking 及通知 |
 | `/worker_settings` | 交互式配置 Worker 各档模型、Thinking、并发、自动委派、超时和输出上限 |
 | `/fast` | 切换支持模型的 priority service tier；状态保存在 `fast.json` |
 | `/thinking_translation` | 切换 Thinking 简体中文翻译 |
@@ -118,7 +118,7 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 
 `/commit` 会先执行 `git add -A`，再将完整的 staged diff 直接交给当前模型生成一行英文 Conventional Commit 信息，最后执行 `git commit`。该命令不启动 Agent 工具循环；执行前请确认工作区中的全部改动都应包含在同一次提交中。
 
-可通过 `/memory_settings` 交互式修改配置，也可直接编辑 `memory-settings.json`。配置项包括记忆数量上限、自动总结、总结模型、思考强度、结果展示方式以及是否包含 Tool Messages 和 Thinking。`summarize.includeToolMessages` 同时控制 Tool Call 与 Tool Result；Memory Tools 的调用和结果始终排除。保存后续总结会使用新配置；切换自动总结时需执行 `/reload` 以同步 `memory_summarize` Tool 的注册状态。`summarize.resultDisplay` 支持 `message`（写入会话）、`popup`（居中弹窗，默认）和 `none`（不通知）；文件或字段缺失时使用内置默认值。`memory_get` 会把最新记忆版本与当前分支最近一次读取结果进行比较：版本相同则提示复用原 Tool Result，内容有更新时才返回完整最新详情；上下文压缩或分支摘要后重新读取完整内容。TUI 总结在后台运行，不阻塞编辑器或后续会话；期间可按 `Esc` 取消模型请求，实际写入开始后为保证索引与详情一致性不再接受取消。弹窗会突出处理结果、记忆标题、关键字段、上下文输入/输出和耗时。
+可通过 `/memory_settings` 交互式修改配置，也可直接编辑 `memory-settings.json`。配置项包括记忆数量上限、自动总结、总结模型、思考强度和结果展示方式。总结上下文固定仅使用用户输入与模型的最终文本输出，不包含 Thinking、Tool Call 或 Tool Result。保存后续总结会使用新配置；切换自动总结时需执行 `/reload` 以同步 `memory_summarize` Tool 的注册状态。`summarize.resultDisplay` 支持 `message`（写入会话）、`popup`（居中弹窗，默认）和 `none`（不通知）；文件或字段缺失时使用内置默认值。`memory_get` 会把最新记忆版本与当前分支最近一次读取结果进行比较：版本相同则提示复用原 Tool Result，内容有更新时才返回完整最新详情；上下文压缩或分支摘要后重新读取完整内容。TUI 总结在后台运行，不阻塞编辑器或后续会话；期间可按 `Esc` 取消模型请求，实际写入开始后为保证索引与详情一致性不再接受取消。弹窗会突出处理结果、记忆标题、关键字段、上下文输入/输出和耗时。
 
 ## 可选运行时功能
 

@@ -495,103 +495,16 @@ const memoryMarkdown = (m: CommitMemory): string => redactSensitive([
     m.updated ?? today(),
 ].join('\n'));
 
-const thinkingText = (content: unknown): string => {
-    if (!Array.isArray(content)) return '';
-    return content.map((part) => {
-        const block = asObj(part);
-        return block?.type === 'thinking' && typeof block.thinking === 'string' ? block.thinking : '';
-    }).filter(Boolean).join('\n').trim();
-};
-
-const EXCLUDED_SUMMARY_TOOLS = new Set(['memory_search', 'memory_get', 'memory_summarize']);
-const MAX_SUMMARY_TOOL_MESSAGE_CHARS = 4_000;
-const SENSITIVE_TOOL_ARGUMENT_KEYS = new Set([
-    'apikey',
-    'authorization',
-    'cookie',
-    'clientsecret',
-    'dbpassword',
-    'exchangesecret',
-    'mnemonic',
-    'password',
-    'passwd',
-    'privatekey',
-    'pwd',
-    'recoveryphrase',
-    'seed',
-    'seedphrase',
-    'secret',
-    'signingsecret',
-]);
-
-const sensitiveToolArgumentKey = (key: string): boolean => {
-    const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
-    return SENSITIVE_TOOL_ARGUMENT_KEYS.has(normalized) || normalized === 'token' || normalized.endsWith('token');
-};
-
-const sanitizeToolArguments = (value: unknown, seen = new WeakSet<object>()): unknown => {
-    if (typeof value === 'string') return redactSensitive(value);
-    if (!value || typeof value !== 'object') return value;
-    if (seen.has(value)) return '<CIRCULAR>';
-    seen.add(value);
-    if (Array.isArray(value)) {
-        const result = value.map((item) => sanitizeToolArguments(item, seen));
-        seen.delete(value);
-        return result;
-    }
-    const object = asObj(value);
-    if (!object) return String(value);
-    const result = Object.fromEntries(Object.entries(object).map(([key, item]) => [
-        key,
-        sensitiveToolArgumentKey(key) ? '<REDACTED>' : sanitizeToolArguments(item, seen),
-    ]));
-    seen.delete(value);
-    return result;
-};
-
-const toolCallMessages = (content: unknown): string[] => {
-    if (!Array.isArray(content)) return [];
-    return content.map((part) => {
-        const block = asObj(part);
-        if (block?.type !== 'toolCall') return '';
-        const rawToolName = String(block.name ?? 'unknown');
-        if (EXCLUDED_SUMMARY_TOOLS.has(rawToolName)) return '';
-        let args: string;
-        try {
-            args = JSON.stringify(sanitizeToolArguments(block.arguments), null, 2) ?? '';
-        } catch {
-            args = '<UNSERIALIZABLE>';
-        }
-        return `[tool-call:${redactSensitive(rawToolName)}]\n${clamp(args, MAX_SUMMARY_TOOL_MESSAGE_CHARS)}`;
-    }).filter(Boolean);
-};
-
-const sessionConversation = (ctx: ExtensionContext, settings: MemorySettings): string => {
+const sessionConversation = (ctx: ExtensionContext): string => {
     const leaf = ctx.sessionManager.getLeafId();
     const entries = leaf ? ctx.sessionManager.getBranch(leaf) : ctx.sessionManager.getEntries();
     return entries.map((entry: any) => {
         if (entry.type !== 'message') return '';
         const role = entry.message?.role;
+        if (role !== 'user' && role !== 'assistant') return '';
+        if (role === 'assistant' && entry.message?.stopReason === 'toolUse') return '';
         const text = textOf(entry.message?.content);
-        if (role === 'user') return text ? `[user]\n${redactSensitive(text)}` : '';
-        if (role === 'assistant') {
-            const parts: string[] = [];
-            if (text) parts.push(`[assistant]\n${redactSensitive(text)}`);
-            if (settings.summarize.includeThinking) {
-                const thinking = thinkingText(entry.message?.content);
-                if (thinking) parts.push(`[assistant-thinking]\n${redactSensitive(thinking)}`);
-            }
-            if (settings.summarize.includeToolMessages) parts.push(...toolCallMessages(entry.message?.content));
-            return parts.join('\n\n');
-        }
-        if (role === 'toolResult' && settings.summarize.includeToolMessages && text) {
-            const rawToolName = String(entry.message?.toolName ?? 'unknown');
-            if (EXCLUDED_SUMMARY_TOOLS.has(rawToolName)) return '';
-            const toolName = redactSensitive(rawToolName);
-            const status = entry.message?.isError ? 'error' : 'ok';
-            return `[tool-result:${toolName} status=${status}]\n${clamp(redactSensitive(text), MAX_SUMMARY_TOOL_MESSAGE_CHARS)}`;
-        }
-        return '';
+        return text ? `[${role}]\n${redactSensitive(text)}` : '';
     }).filter(Boolean).join('\n\n');
 };
 
@@ -609,7 +522,7 @@ export const commitIndexedMemory = async (
 
     const index = await readIndex();
     const project = projectName(ctx);
-    const conversation = sessionConversation(ctx, settings);
+    const conversation = sessionConversation(ctx);
     if (!conversation.trim()) return '## Indexed Memory Commit\n\n当前会话没有可总结内容。';
 
     const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: commitPrompt(conversation, index, project) }], timestamp: 0 }];

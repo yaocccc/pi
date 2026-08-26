@@ -12,8 +12,6 @@ type MenuKey =
     | 'model'
     | 'thinking'
     | 'resultDisplay'
-    | 'includeToolMessages'
-    | 'includeThinking'
     | 'save'
     | 'cancel';
 
@@ -38,7 +36,6 @@ const RESULT_DISPLAY_CHOICES: Choice<MemoryResultDisplay>[] = [
 
 const displayName = (value: MemoryResultDisplay): string => RESULT_DISPLAY_CHOICES.find((choice) => choice.value === value)?.label ?? value;
 const enabledName = (value: boolean): string => value ? '开启' : '关闭';
-const includedName = (value: boolean): string => value ? '包含' : '排除';
 
 const choose = async <T extends string>(
     ctx: ExtensionContext,
@@ -100,8 +97,6 @@ const menuItems = (settings: MemorySettings): Array<{ key: MenuKey; label: strin
     { key: 'model', label: `总结模型 · ${settings.summarize.model}` },
     { key: 'thinking', label: `Thinking · ${settings.summarize.thinking}` },
     { key: 'resultDisplay', label: `结果通知 · ${displayName(settings.summarize.resultDisplay)}` },
-    { key: 'includeToolMessages', label: `Tool Messages · ${includedName(settings.summarize.includeToolMessages)}` },
-    { key: 'includeThinking', label: `Thinking 内容 · ${includedName(settings.summarize.includeThinking)}` },
     { key: 'save', label: '保存并退出' },
     { key: 'cancel', label: '取消' },
 ];
@@ -148,14 +143,6 @@ export const configureMemorySettings = async (
             draft.summarize.thinking = await choose(ctx, '总结 Thinking', THINKING_CHOICES, draft.summarize.thinking);
         } else if (key === 'resultDisplay') {
             draft.summarize.resultDisplay = await choose(ctx, '结果通知', RESULT_DISPLAY_CHOICES, draft.summarize.resultDisplay);
-        } else if (key === 'includeToolMessages') {
-            draft.summarize.includeToolMessages = await chooseBoolean(
-                ctx,
-                '总结上下文包含 Tool Call 和 Tool Result（Memory Tools 始终排除）',
-                draft.summarize.includeToolMessages,
-            );
-        } else if (key === 'includeThinking') {
-            draft.summarize.includeThinking = await chooseBoolean(ctx, '总结上下文包含 Thinking', draft.summarize.includeThinking);
         }
     }
 };

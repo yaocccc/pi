@@ -15,8 +15,6 @@ export type MemorySettings = {
         model: string;
         thinking: MemoryThinking;
         resultDisplay: MemoryResultDisplay;
-        includeToolMessages: boolean;
-        includeThinking: boolean;
     };
 };
 
@@ -27,8 +25,6 @@ export const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
         model: 'auto',
         thinking: 'auto',
         resultDisplay: 'popup',
-        includeToolMessages: false,
-        includeThinking: false,
     },
 };
 
@@ -53,11 +49,6 @@ export const readMemorySettings = async (): Promise<MemorySettings> => {
                 model: stringOr(summarize?.model, DEFAULT_MEMORY_SETTINGS.summarize.model),
                 thinking: THINKING_VALUES.has(thinking) ? thinking : DEFAULT_MEMORY_SETTINGS.summarize.thinking,
                 resultDisplay: RESULT_DISPLAY_VALUES.has(resultDisplay) ? resultDisplay : DEFAULT_MEMORY_SETTINGS.summarize.resultDisplay,
-                includeToolMessages: boolOr(
-                    summarize?.includeToolMessages,
-                    boolOr(summarize?.includeToolResults, DEFAULT_MEMORY_SETTINGS.summarize.includeToolMessages),
-                ),
-                includeThinking: boolOr(summarize?.includeThinking, DEFAULT_MEMORY_SETTINGS.summarize.includeThinking),
             },
         };
     } catch {
