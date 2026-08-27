@@ -514,6 +514,11 @@ export const commitIndexedMemory = async (
     configuredSettings?: MemorySettings,
     signal?: AbortSignal,
 ): Promise<string> => {
+    const startedAt = Date.now();
+    const elapsed = (): string => {
+        const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1_000));
+        return `${Math.floor(totalSeconds / 60)}m${totalSeconds % 60}s`;
+    };
     progress('准备记忆文件……');
     await ensureIndexedMemory();
     const settings = configuredSettings ?? await readMemorySettings();
@@ -663,7 +668,7 @@ export const commitIndexedMemory = async (
     return [
         '## Indexed Memory Commit',
         '',
-        `已处理 ${committed.length} 条 indexed memory：新增 ${committed.filter((x) => x.action === '新增').length} 条，更新 ${committed.filter((x) => x.action === '更新').length} 条。`,
+        `已处理 ${committed.length} 条 indexed memory：新增 ${committed.filter((x) => x.action === '新增').length} 条，更新 ${committed.filter((x) => x.action === '更新').length} 条。耗时 ${elapsed()}。`,
         '',
         ...committed.map(({ memory: m, action }, i) => `${i + 1}. ${action}：${m.title}\n   - file: \`${m.file}\`\n   - summary: ${m.summary}\n   - when_to_use: ${m.whenToUse}\n   - content:\n${clamp(m.content, 800).split('\n').map((line) => `     ${line}`).join('\n')}`),
         ...(compacted ? ['', `压缩结果：合并 ${compacted.merged} 条，删除 ${compacted.removed.length} 条，当前索引 ${renderedIndex.length} 字符（上限 ${MAX_INDEX_CHARS}）。`] : []),
