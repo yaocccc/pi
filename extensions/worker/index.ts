@@ -3,6 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { MODES, PRESETS, WRITE_MODES, loadRoutingConfig, validateTask } from "./config";
+import { WORKER_USAGE_EVENT, type WorkerUsageSnapshot } from "./events";
 import { registerWorkerWriteGuard } from "./guard";
 import { beginWorkerShutdown, executeTask, killAllChildren, resetWorkerRuntime } from "./process";
 import { mapWithConflicts, workerTasksConflict } from "./security";
@@ -64,7 +65,7 @@ export default function workerExtension(pi: ExtensionAPI) {
 		label: "Worker",
 		description: TOOL_DESCRIPTION,
 		parameters: InputSchema,
-		async execute(_toolCallId, input: WorkerToolInput, signal, onUpdate, ctx) {
+		async execute(toolCallId, input: WorkerToolInput, signal, onUpdate, ctx) {
 			const respond = (text: string, details: unknown) => ({
 				content: [{ type: "text" as const, text }],
 				details,
@@ -106,6 +107,14 @@ export default function workerExtension(pi: ExtensionAPI) {
 					usage: emptyWorkerUsage(),
 				})),
 			};
+			const emitTaskUsage = (task: WorkerUiDetails["tasks"][number]) => {
+				const snapshot: WorkerUsageSnapshot = {
+					taskId: `${toolCallId}:${task.index}`,
+					input: task.usage.input,
+					output: task.usage.output,
+				};
+				pi.events.emit(WORKER_USAGE_EVENT, snapshot);
+			};
 			const emitUi = (message: string) => onUpdate?.({
 				content: [{ type: "text", text: message }],
 				details: cloneUiDetails(uiDetails),
@@ -123,6 +132,7 @@ export default function workerExtension(pi: ExtensionAPI) {
 						.some((otherIndex) => WRITE_MODES.has(tasks[otherIndex].mode));
 					item = await executeTask(task, loaded.config, loaded.warnings, ctx, signal, (patch) => {
 						Object.assign(uiTask, patch);
+						emitTaskUsage(uiTask);
 						emitUi(`${task.mode} ${uiTask.phase}`);
 					}, hadConcurrentWriter);
 				} catch (error) {
@@ -150,6 +160,7 @@ export default function workerExtension(pi: ExtensionAPI) {
 					uiTask.attempt = execution.attempt ?? uiTask.attempt;
 					if (execution.usage) uiTask.usage = { ...execution.usage };
 				}
+				emitTaskUsage(uiTask);
 				uiDetails.completed++;
 				emitUi(`${task.mode} ${uiTask.phase}`);
 				return item;

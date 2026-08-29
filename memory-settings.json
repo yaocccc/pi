@@ -3,7 +3,7 @@
   "maxMemories": 100,
   "summarize": {
     "auto": true,
-    "model": "openai-codex/gpt-5.3-codex-spark",
+    "model": "openai-codex/gpt-5.6-luna",
     "thinking": "high",
     "resultDisplay": "message"
   }

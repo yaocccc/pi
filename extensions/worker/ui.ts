@@ -231,8 +231,8 @@ export function formatTokenCount(value: number): string {
 
 export function workerUsageText(usage: WorkerUsage, active = false): string {
 	const turn = usage.turns || (active ? 1 : 0);
-	const parts = [turn ? `Turn ${turn}` : undefined, usage.input ? `↑${formatTokenCount(usage.input)}` : undefined, usage.output ? `↓${formatTokenCount(usage.output)}` : undefined].filter(Boolean);
-	return parts.join(" · ");
+	const tokenUsage = [usage.input ? `↑${formatTokenCount(usage.input)}` : undefined, usage.output ? `↓${formatTokenCount(usage.output)}` : undefined].filter(Boolean).join(" ");
+	return [turn ? `Turn ${turn}` : undefined, tokenUsage || undefined].filter(Boolean).join(" · ");
 }
 
 export function cloneUiDetails(details: WorkerUiDetails): WorkerUiDetails {

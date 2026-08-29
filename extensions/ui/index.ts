@@ -1,9 +1,11 @@
 import { estimateTokens, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { WORKER_USAGE_EVENT } from '../worker/events.ts';
 import { TextAreaEditor } from './editor.ts';
 import { NoCostFooter } from './footer.ts';
 import { StartupHeader } from './header.ts';
 import { patchCollapsedThinkingPreview, patchCompactToolDisplay, patchFinalResponseSeparator, patchFullscreenScrollbar, patchMergeConsecutiveTools, patchPaddedBackgroundHalfBlocks, patchThinkingSpacing, patchUserMessageHalfBlocks } from './patches.ts';
 import type { TokenUsage } from './types.ts';
+import { combineTokenUsage, WorkerUsageTracker } from './worker-usage.ts';
 import { applyWorkingMessage, setWorkingMessageActive, WORKING_FRAME_INTERVAL_MS } from './working-message.ts';
 
 export { TextAreaEditor } from './editor.ts';
@@ -30,21 +32,26 @@ export default function ui(pi: ExtensionAPI) {
     let currentUsage: TokenUsage = {};
     let currentTurn: number | undefined;
     let firstTokenLatencyMs: number | undefined;
+    const workerUsage = new WorkerUsageTracker();
 
-    const getDisplayedUsage = (): TokenUsage => ({
+    const getMainUsage = (): TokenUsage => ({
         input: (traceUsage.input ?? 0) + (currentUsage.input ?? 0),
         output: (traceUsage.output ?? 0) + (currentUsage.output ?? 0),
     });
     const refreshWorkingMessage = (ctx: ExtensionContext) => {
-        const usage = getDisplayedUsage();
+        const mainUsage = getMainUsage();
+        const displayedUsage = combineTokenUsage(mainUsage, workerUsage.total());
         const elapsedSeconds = startedAt === undefined ? 0 : (Date.now() - startedAt) / 1000;
-        const tps = elapsedSeconds > 0 && (usage.output ?? 0) > 0
-            ? (usage.output ?? 0) / elapsedSeconds
+        const tps = elapsedSeconds > 0 && (mainUsage.output ?? 0) > 0
+            ? (mainUsage.output ?? 0) / elapsedSeconds
             : undefined;
-        applyWorkingMessage(ctx, startedAt, usage, currentTurn, tps, firstTokenLatencyMs);
+        applyWorkingMessage(ctx, startedAt, displayedUsage, currentTurn, tps, firstTokenLatencyMs);
     };
 
+    pi.events.on(WORKER_USAGE_EVENT, (data) => workerUsage.update(data));
+
     pi.on('session_start', (_event, ctx) => {
+        workerUsage.reset();
         setWorkingMessageActive(false);
         patchFullscreenScrollbar();
         refreshWorkingMessage(ctx);
@@ -54,6 +61,7 @@ export default function ui(pi: ExtensionAPI) {
     });
 
     pi.on('agent_start', (_event, ctx) => {
+        workerUsage.reset();
         setWorkingMessageActive(true);
         if (timer) clearInterval(timer);
         startedAt = Date.now();
