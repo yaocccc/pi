@@ -32,9 +32,9 @@ test("worker details display the complete objective", () => {
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, turns: 0 },
 		}],
 	};
-	const theme = { fg: (_color: string, text: string) => text } as unknown as Theme;
+	const theme = { fg: (color: string, text: string) => color === "toolOutput" ? `<toolOutput>${text}</toolOutput>` : text } as unknown as Theme;
 	const rendered = renderWorkerDetails(details, theme).render(1_000).join("\n");
 
 	assert.match(rendered, /目标结束/);
-	assert.ok(rendered.includes(objective));
+	assert.ok(rendered.includes(`<toolOutput>${objective}</toolOutput>`));
 });

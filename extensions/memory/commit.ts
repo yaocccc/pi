@@ -26,7 +26,14 @@ const summaryRuntime = async (ctx: ExtensionContext, settings: MemorySettings) =
     };
 };
 
-const commitPrompt = (conversation: string, index: string, project: string): string =>
+const renderCommitIndex = (entries: IndexEntry[]): string => entries.map((entry) => JSON.stringify({
+    file: entry.file,
+    project: redactSensitive(entry.project),
+    keywords: entry.keywords.map(redactSensitive),
+    summary: limitSummary(redactSensitive(entry.summary)),
+})).join('\n');
+
+const commitPrompt = (conversation: string, entries: IndexEntry[], project: string): string =>
     `你是 indexed memory commit 子 agent。请从本轮会话中提取值得长期保存的核心 coding/debug/架构记忆。\n\n` +
     `规则：\n` +
     `1. /summarize 不代表一定要写入 memory；没有长期价值时输出 {"memories":[]}。\n` +
@@ -45,7 +52,7 @@ const commitPrompt = (conversation: string, index: string, project: string): str
     `14. 只输出 JSON，不要 Markdown，不要解释。\n\n` +
     `JSON 格式：\n` +
     `{"memories":[{"title":"","type":"solution|decision|mistake|convention|note","project":"","tags":[""],"keywords":[""],"summary":"","when_to_use":"","constraints":["最多 3 条，没有则空数组"],"content":"","evidence":"","file":"semantic-memory-name.md"}]}\n\n` +
-    `<existing_index>\n${clamp(index, MAX_INDEX_CHARS)}\n</existing_index>\n\n` +
+    `<existing_index>\n${clamp(renderCommitIndex(entries), MAX_INDEX_CHARS)}\n</existing_index>\n\n` +
     `<conversation>\n${clampTail(conversation, MAX_COMMIT_CHARS)}\n</conversation>`;
 
 const jsonFromText = (text: string): unknown => {
@@ -522,15 +529,15 @@ export const commitIndexedMemory = async (
     progress('准备记忆文件……');
     await ensureIndexedMemory();
     const settings = configuredSettings ?? await readMemorySettings();
-    const runtime = await summaryRuntime(ctx, settings);
-    if (!runtime) return '## Indexed Memory Commit\n\n总结模型不可用或认证失败，未写入 indexed memory。';
-
     const index = await readIndex();
+    let entries = parseIndex(index);
     const project = projectName(ctx);
     const conversation = sessionConversation(ctx);
     if (!conversation.trim()) return '## Indexed Memory Commit\n\n当前会话没有可总结内容。';
 
-    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: commitPrompt(conversation, index, project) }], timestamp: 0 }];
+    const runtime = await summaryRuntime(ctx, settings);
+    if (!runtime) return '## Indexed Memory Commit\n\n总结模型不可用或认证失败，未写入 indexed memory。';
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: commitPrompt(conversation, entries, project) }], timestamp: 0 }];
     const requestInfo = {
         contextTokens: estimateTokens(messages[0]),
         model: `${runtime.model.provider}/${runtime.model.id}`,
@@ -564,7 +571,6 @@ export const commitIndexedMemory = async (
     }
     const parsedObj = asObj(parsed);
     const rawMemories = Array.isArray(parsedObj?.memories) ? parsedObj.memories as unknown[] : [];
-    let entries = parseIndex(index);
     const committed: Array<{ memory: CommitMemory; action: '新增' | '更新' }> = [];
     const diskFiles = await readdir(MEMORIES_DIR).catch(() => []);
     const reservedFiles = new Set([...diskFiles, ...entries.map((entry) => fileNameFromRef(entry.file)).filter((file): file is string => !!file)]);

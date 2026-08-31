@@ -282,7 +282,7 @@ export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme) {
 		const runtime = [preset, usage, duration].filter(Boolean).join(" · ");
 		text += `${uiStatusIcon(task.status, theme)} ${theme.fg("accent", task.mode)}${runtime ? theme.fg("muted", ` · ${runtime}`) : ""}`;
 		const objective = sanitizeUiText(task.objective).replace(/\s+/g, " ").trim();
-		text += `\n  ${theme.fg("dim", objective)}`;
+		text += `\n  ${theme.fg("toolOutput", objective)}`;
 		const conclusions = workerConclusions(task);
 		for (const activity of task.activities.slice(-UI_RECENT_ACTIVITY_LIMIT)) {
 			text += `\n  ${uiActivityLine(activity, theme)}`;
