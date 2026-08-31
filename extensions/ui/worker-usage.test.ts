@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { combineTokenUsage, WorkerUsageTracker } from "./worker-usage.ts";
+import { calculateTps, combineTokenUsage, WorkerUsageTracker } from "./worker-usage.ts";
 
-test("combined usage adds worker input and output to the main arrows", () => {
-    assert.deepEqual(
-        combineTokenUsage({ input: 22_000, output: 5_000 }, { input: 30_000, output: 3_000 }),
-        { input: 52_000, output: 8_000 },
-    );
+test("combined usage adds worker input and output to the main arrows and TPS", () => {
+    const combined = combineTokenUsage({ input: 22_000, output: 5_000 }, { input: 30_000, output: 3_000 });
+    assert.deepEqual(combined, { input: 52_000, output: 8_000 });
+    assert.equal(calculateTps(combined, 10), 800);
 });
 
 test("worker usage snapshots replace per task and sum concurrent tasks", () => {

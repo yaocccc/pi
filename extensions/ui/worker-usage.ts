@@ -6,6 +6,9 @@ export const combineTokenUsage = (main: TokenUsage, workers: TokenUsage): Requir
     output: (main.output ?? 0) + (workers.output ?? 0),
 });
 
+export const calculateTps = (usage: TokenUsage, elapsedSeconds: number): number | undefined =>
+    elapsedSeconds > 0 && (usage.output ?? 0) > 0 ? (usage.output ?? 0) / elapsedSeconds : undefined;
+
 export class WorkerUsageTracker {
     private readonly snapshots = new Map<string, TokenUsage>();
 

@@ -5,7 +5,7 @@ import { NoCostFooter } from './footer.ts';
 import { StartupHeader } from './header.ts';
 import { patchCollapsedThinkingPreview, patchCompactToolDisplay, patchFinalResponseSeparator, patchFullscreenScrollbar, patchMergeConsecutiveTools, patchPaddedBackgroundHalfBlocks, patchThinkingSpacing, patchUserMessageHalfBlocks } from './patches.ts';
 import type { TokenUsage } from './types.ts';
-import { combineTokenUsage, WorkerUsageTracker } from './worker-usage.ts';
+import { calculateTps, combineTokenUsage, WorkerUsageTracker } from './worker-usage.ts';
 import { applyWorkingMessage, setWorkingMessageActive, WORKING_FRAME_INTERVAL_MS } from './working-message.ts';
 
 export { TextAreaEditor } from './editor.ts';
@@ -42,9 +42,7 @@ export default function ui(pi: ExtensionAPI) {
         const mainUsage = getMainUsage();
         const displayedUsage = combineTokenUsage(mainUsage, workerUsage.total());
         const elapsedSeconds = startedAt === undefined ? 0 : (Date.now() - startedAt) / 1000;
-        const tps = elapsedSeconds > 0 && (mainUsage.output ?? 0) > 0
-            ? (mainUsage.output ?? 0) / elapsedSeconds
-            : undefined;
+        const tps = calculateTps(displayedUsage, elapsedSeconds);
         applyWorkingMessage(ctx, startedAt, displayedUsage, currentTurn, tps, firstTokenLatencyMs);
     };
 
