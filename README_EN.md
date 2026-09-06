@@ -10,7 +10,6 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 - **Context inspection**: `/context` shows the current context-window breakdown and previews the System Prompt, Tools, Context Files, Skills, user/agent messages, and tool calls; detail views support Space for page-down navigation.
 - **Codex usage**: `/usage` uses Pi's currently resolved OpenAI Codex authorization to show the subscription plan, primary, secondary, and additional usage windows, remaining allowance, reset times, and credits.
 - **Structured questions**: the `ask_question` tool supports single choice, multiple choice, and custom input.
-- **Plan workflow**: `/plan` creates a checklist, waits for confirmation, executes its steps continuously, and performs a final check.
 - **Smart commits**: `/commit` stages all current changes, generates a concise English Conventional Commit message from the staged diff, and commits it.
 - **Tiered memory**: automatically maintains user preferences, searches through `memory_search`, reads details through `memory_get`, lets the model queue end-of-turn persistence with `memory_summarize`, and retains manual `/summarize`.
 - **Sensitive output filtering**: redacts common API keys, tokens, private keys, and connection strings before tool results enter the model context.
@@ -34,7 +33,6 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration, including c
 │   ├── fast/                          # Optional priority service tier
 │   ├── filter-output/                 # Sensitive tool-result filtering
 │   ├── memory/                        # Tiered memory, tools, and /summarize
-│   ├── plan/                          # /plan workflow
 │   ├── telegram/                      # Telegram task notifications
 │   ├── thinking-translation/          # Chinese thinking translation and cache
 │   ├── ui/                            # TUI customization
@@ -61,7 +59,6 @@ Local files such as `auth.json`, `models.json`, `models-store.json`, `sessions/`
 
 - Node.js 22+
 - [Pi Coding Agent](https://github.com/earendil-works/pi)
-- Optional: [fd](https://github.com/sharkdp/fd) for file completion in the `/plan` editor
 
 Install Pi:
 
@@ -101,7 +98,6 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 | --- | --- |
 | `/context` | Show the context breakdown and preview prompts, tools, context files, skills, and message content |
 | `/usage` | Show subscription usage, remaining allowance, and reset times for the current OpenAI Codex account |
-| `/plan [task]` | Create a checklist, confirm it, execute it continuously, and run a final check |
 | `/commit` | Stage all changes, generate a Conventional Commit message from the staged diff, and commit |
 | `/summarize` | Summarize the task and persist reusable indexed memory |
 | `/memory_settings` | Interactively configure the memory limit, automatic summaries, model, thinking, and notifications |
@@ -114,7 +110,7 @@ After changing extensions, skills, themes, or keybindings, run `/reload` in Pi.
 | `/model` | Select a model |
 | `Ctrl+Y` | Open the session resume picker |
 
-`memory_search`, `memory_get`, `memory_summarize`, `ask_question`, `plan_check_result`, and `worker` are agent tools and do not need to be invoked manually.
+`memory_search`, `memory_get`, `memory_summarize`, `ask_question`, and `worker` are agent tools and do not need to be invoked manually.
 
 `/commit` first runs `git add -A`, sends the complete staged diff directly to the active model to generate a one-line English Conventional Commit message, and then runs `git commit`. It does not start an agent tool loop. Before running it, make sure every working-tree change belongs in the same commit.
 

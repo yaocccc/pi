@@ -10,7 +10,6 @@
 - **上下文检查**：`/context` 展示当前上下文窗口的分类占用，并可预览 System Prompt、Tools、Context Files、Skills、用户/Agent 消息和 Tool Call；详情支持空格翻页。
 - **Codex 用量**：`/usage` 使用 Pi 当前解析的 OpenAI Codex 认证，显示订阅计划、主/次及附加用量窗口、剩余额度、重置时间和 Credits。
 - **结构化提问**：`ask_question` 工具支持单选、多选和自由输入。
-- **Plan 工作流**：`/plan` 会生成一份 checklist，确认后按步骤连续执行并进行最终检查。
 - **智能提交**：`/commit` 暂存当前全部改动，根据 staged diff 生成简洁的英文 Conventional Commit 信息并提交。
 - **分级记忆**：自动维护用户偏好；通过 `memory_search` 检索索引、`memory_get` 按需读取详情；模型可用 `memory_summarize` 请求在本轮结束后沉淀，也可手动执行 `/summarize`。
 - **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
@@ -34,7 +33,6 @@
 │   ├── fast/                          # 可选 priority service tier
 │   ├── filter-output/                 # 敏感工具结果过滤
 │   ├── memory/                        # 分级记忆、工具与 /summarize
-│   ├── plan/                          # /plan 工作流
 │   ├── telegram/                      # Telegram 任务通知
 │   ├── thinking-translation/          # Thinking 中文翻译与缓存
 │   ├── ui/                            # TUI 定制
@@ -61,7 +59,6 @@
 
 - Node.js 22+
 - [Pi Coding Agent](https://github.com/earendil-works/pi)
-- 可选：[fd](https://github.com/sharkdp/fd)，用于 `/plan` 输入框的文件补全
 
 安装 Pi：
 
@@ -101,7 +98,6 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 | --- | --- |
 | `/context` | 查看上下文分类占用，并预览 System Prompt、Tools、Context Files、Skills 和消息内容 |
 | `/usage` | 查看当前 OpenAI Codex 账号的订阅用量、剩余额度和重置时间 |
-| `/plan [任务]` | 生成 checklist，确认后连续执行并最终检查 |
 | `/commit` | 暂存全部改动，根据 staged diff 生成 Conventional Commit 信息并提交 |
 | `/summarize` | 总结当前任务并沉淀可复用的 indexed memory |
 | `/memory_settings` | 交互式配置记忆上限、自动总结、模型、Thinking 及通知 |
@@ -114,7 +110,7 @@ cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
 | `/model` | 选择模型 |
 | `Ctrl+Y` | 打开会话恢复界面 |
 
-`memory_search`、`memory_get`、`memory_summarize`、`ask_question`、`plan_check_result` 和 `worker` 是供 Agent 调用的工具，不需要手动执行。
+`memory_search`、`memory_get`、`memory_summarize`、`ask_question` 和 `worker` 是供 Agent 调用的工具，不需要手动执行。
 
 `/commit` 会先执行 `git add -A`，再将完整的 staged diff 直接交给当前模型生成一行英文 Conventional Commit 信息，最后执行 `git commit`。该命令不启动 Agent 工具循环；执行前请确认工作区中的全部改动都应包含在同一次提交中。
 

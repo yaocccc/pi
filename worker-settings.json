@@ -9,11 +9,11 @@
     "thinking": "high"
   },
   "deep": {
-    "model": "openai-codex/gpt-5.6-sol",
+    "model": "openai-codex/gpt-6-astra",
     "thinking": "high"
   },
   "max": {
-    "model": "openai-codex/gpt-5.6-sol",
+    "model": "openai-codex/gpt-6-astra",
     "thinking": "xhigh"
   },
   "maxConcurrentWorkers": 3,
