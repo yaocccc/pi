@@ -50,7 +50,7 @@ export default function (pi: ExtensionAPI) {
             !config.enabled ||
             model?.provider !== 'openai-codex' ||
             model.api !== 'openai-codex-responses' ||
-            !/^gpt-5\.6-(sol|terra|luna)$/.test(model.id) ||
+            !/^gpt/.test(model.id) ||
             !event.payload ||
             typeof event.payload !== 'object' ||
             Array.isArray(event.payload)
