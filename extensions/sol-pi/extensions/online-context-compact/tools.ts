@@ -4,9 +4,8 @@
  */
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { renderSolPiTool } from "../../tui.ts";
 import { PLAN_STATUSES, type PlanStep } from "./plan.ts";
 
 export type PlanProgress = {
@@ -26,6 +25,13 @@ export type PlanUpdateInput = {
 export type OnlineToolHandlers = {
 	readonly updatePlan: (input: PlanUpdateInput) => Promise<AgentToolResult<Readonly<Record<string, unknown>>>>;
 };
+
+function hiddenRenderer(): Component {
+	return {
+		render: (_width) => [],
+		invalidate() {},
+	};
+}
 
 const progressSchema = Type.Object(
 	{
@@ -74,27 +80,11 @@ export function registerOnlineTools(pi: ExtensionAPI, handlers: OnlineToolHandle
 				signal,
 				context,
 			}),
-		renderCall(params, theme) {
-			const completed = params.steps.filter((step) => step.status === "completed").length;
-			return renderSolPiTool(
-				theme,
-				"Online Context Compact",
-				"compacts only when projected savings are positive",
-				new Text(theme.fg("dim", `Plan: ${params.steps.length} steps, ${completed} completed`), 0, 0),
-			);
+		renderCall() {
+			return hiddenRenderer();
 		},
-		renderResult(result, { isPartial }, theme) {
-			const boundary = (result.details as { boundary?: boolean } | undefined)?.boundary === true;
-			return renderSolPiTool(
-				theme,
-				"Online Context Compact",
-				"compacts only when projected savings are positive",
-				new Text(
-					theme.fg(isPartial ? "warning" : "dim", isPartial ? "Updating plan..." : boundary ? "Progress boundary recorded" : "Plan recorded"),
-					0,
-					0,
-				),
-			);
+		renderResult() {
+			return hiddenRenderer();
 		},
 	});
 }

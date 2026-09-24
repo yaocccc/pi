@@ -344,18 +344,11 @@ export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme, opti
 		const taskQuestions = details.batchId
 			? questions.filter((question) => question.taskId === `${details.batchId}:${task.index + 1}`)
 			: [];
-		const recent = taskQuestions.filter((question) => question.status !== "waiting").slice(-2);
-		const shown = options.expanded ? taskQuestions : [...taskQuestions.filter((question) => question.status === "waiting"), ...recent];
-		for (const question of shown) {
-			const questionNumber = taskQuestions.indexOf(question) + 1;
-			const questionState = question.status === "waiting" && question.pausedUntil ? "等待用户确认（预算暂停，最多 30 分钟）" : { waiting: "等待回答", answered: "已回答", expired: "已过期", cancelled: "已取消" }[question.status];
-			const questionLabel = `Q${questionNumber}${options.expanded ? ` · ${question.id}` : ""} · ${questionState}`;
-			text += `\n  ${theme.fg(question.status === "waiting" ? "warning" : "muted", questionLabel)}`;
-			const body = (value: string) => options.expanded ? sanitizeUiText(value) : uiSnippet(value, UI_DETAIL_CAP);
-			text += `\n    Q: ${body(question.question)}`;
-			if (question.answer !== undefined) text += `\n    A: ${body(question.answer)}`;
+		for (const question of taskQuestions) {
+			const body = (value: string) => sanitizeUiText(value).replace(/\n/g, "\n  ");
+			text += `\n  Q: ${theme.fg("toolOutput", body(question.question))}`;
+			if (question.answer !== undefined) text += `\n  A: ${theme.fg("toolOutput", body(question.answer))}`;
 		}
-		if (taskQuestions.length && !options.expanded) text += `\n  ${theme.fg("dim", `展开工具查看完整问答（${taskQuestions.length} 条）`)}`;
 	}
 	const component = new Text(text, 0, 0);
 	return {

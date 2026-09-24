@@ -82,15 +82,16 @@ test("questions and answers stay inside the matching worker block without duplic
 	const rendered = renderWorkerDetails(details, theme).render(1_000).join("\n");
 	const blocks = rendered.split("─".repeat(24));
 	assert.equal(blocks.length, 3);
-	assert.match(blocks[0]!, /first question[\s\S]*first answer/);
-	assert.doesNotMatch(blocks[0]!, /second question|third question|second answer|third answer/);
-	assert.match(blocks[1]!, /等待回答[\s\S]*second question/);
-	assert.doesNotMatch(blocks[1]!, /first question|third question|first answer|third answer/);
-	assert.match(blocks[2]!, /third question[\s\S]*third answer/);
-	assert.doesNotMatch(blocks[2]!, /first question|second question|first answer|second answer/);
+	assert.match(blocks[0]!, /  Q: first question[\s\S]*  A: first answer/);
+	assert.doesNotMatch(blocks[0]!, /second question|third question/);
+	assert.match(blocks[1]!, /  Q: second question/);
+	assert.doesNotMatch(blocks[1]!, /  A:/, "unanswered questions do not get a fabricated answer");
+	assert.match(blocks[2]!, /  Q: third question[\s\S]*  A: third answer/);
 	assert.equal((rendered.match(/first answer/g) ?? []).length, 1);
 	assert.equal((rendered.match(/third answer/g) ?? []).length, 1);
-	assert.doesNotMatch(rendered, /question-1|question-2|question-3/);
+	assert.doesNotMatch(rendered, /question-1|question-2|question-3|Q[1-9]\s*·|已回答|等待回答|展开工具查看完整问答/);
+	assert.match(rendered, /\n  Q: first question/);
+	assert.match(rendered, /\n  A: first answer/);
 });
 
 test("worker details omit batch and scheduling rows while retaining task and timeout diagnostics", () => {

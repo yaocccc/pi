@@ -11,7 +11,7 @@ export default function askParentExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "ask_parent",
 		label: "Ask parent",
-		description: "Ask the main Agent for a missing decision or clarification, not the end user. Waits for its answer while independent workers continue. Do not create other workers. Waiting retains your concurrency slot and path locks; timeout does not grant permission to guess or exceed your contract. Never send secrets.",
+		description: "Ask the main Agent for a missing decision or clarification, not the end user. Waits for its answer while independent workers continue. Do not create other workers. Waiting retains your concurrency slot and path locks. Task and question timeouts continue even during user confirmation; late answers cannot revive expired work. Timeout does not grant permission to guess or exceed your contract. Never send secrets.",
 		parameters: Type.Object({
 			question: Type.String({ minLength: 1, maxLength: QUESTION_LIMIT }),
 			timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 600_000, default: QUESTION_TIMEOUT_MS })),

@@ -287,7 +287,7 @@ export async function runPiWorker(
 				forceKillTimer.unref();
 			};
 			const abortHandler = () => terminate("abort");
-			// The session runtime owns the complete task budget (including Git checks).
+			// Managed calls use the runtime's fixed total task deadline (including Git checks).
 			// Standalone callers retain the independent process deadline by default.
 			if (!control?.managedTimeout) timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
 			if (signal?.aborted) abortHandler(); else signal?.addEventListener("abort", abortHandler, { once: true });

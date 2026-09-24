@@ -3,7 +3,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { Duplex } from "node:stream";
-import { ChildChannel, ParentChannel, type AskParent, type QuestionControl } from "./ipc.ts";
+import { ChildChannel, ParentChannel, type AskParent } from "./ipc.ts";
 import { WorkerRuntime } from "./runtime.ts";
 import { start, task, until } from "./fixtures/helpers.ts";
 import { acquireSlot, activeChildren, activeSlots, beginWorkerShutdown, resetWorkerRuntime, runPiWorker, slotWaiters } from "./process.ts";
@@ -202,90 +202,46 @@ test("process cancellation while asking cleans IPC and shutdown kills a SIGTERM-
 	resetWorkerRuntime();
 });
 
-test("IPC pause/resume acknowledgements preserve remaining child budget across nested tokens; late replies cannot revive timeout", async (t) => {
-	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
+test("child rejects a late answer before its ordinary timeout callback runs", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const [left, right] = pair();
-	let control!: QuestionControl; let answer!: (value: string) => void;
-	const parent = new ParentChannel(left, (_q, _signal, handle) => new Promise((resolve) => { control = handle!; answer = resolve; }));
+	let answer!: (value: string) => void;
+	let expired = false;
+	const parent = new ParentChannel(left, (_q, signal) => new Promise((resolve) => {
+		answer = resolve;
+		signal.addEventListener("abort", () => { expired = signal.reason.name === "TimeoutError"; });
+	}));
 	const child = new ChildChannel(right);
-	const result = child.ask("pause me", undefined, 100);
-	const expired = assert.rejects(result, /超时/);
-	await new Promise(setImmediate);
 	try {
-		t.mock.timers.tick(30);
-		await control("pause", "outer", Date.now() + 10_000);
-		await control("pause", "outer", Date.now() + 10_000);
-		t.mock.timers.tick(1_000);
-		await control("pause", "inner", Date.now() + 10_000);
-		await control("resume", "outer", Date.now() + 10_000);
-		t.mock.timers.tick(1_000);
-		await control("resume", "inner", Date.now() + 10_000);
-		t.mock.timers.tick(69);
-		let settled = false; void result.catch(() => { settled = true; });
-		await Promise.resolve(); assert.equal(settled, false);
-		t.mock.timers.tick(1); await expired;
-		await assert.rejects(control("pause", "late", Date.now() + 10_000), /过期/);
-		answer("late answer"); await new Promise(setImmediate);
+		const rejected = assert.rejects(child.ask("decision?", undefined, 100), /过期/);
+		await new Promise(setImmediate);
+		t.mock.timers.setTime(1_100);
+		answer("too late"); await rejected; await new Promise(setImmediate);
+		assert.equal(expired, true);
 	} finally { child.close(); parent.close(); t.mock.timers.reset(); }
 });
 
-test("IPC human cap expires the child even if parent never resumes; missing or malformed acknowledgements fail closed", async (t) => {
-	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
-	const [left, right] = pair();
-	let control!: QuestionControl;
-	const parent = new ParentChannel(left, (_q, _signal, handle) => { control = handle!; return new Promise(() => {}); });
-	const child = new ChildChannel(right);
-	const expired = assert.rejects(child.ask("cap", undefined, 100), /上限/);
-	await new Promise(setImmediate);
-	await control("pause", "human", Date.now() + 500);
-	t.mock.timers.tick(500); await expired;
-	child.close(); parent.close();
-	const [unacked, silent] = pair();
-	let aborted = false;
-	const noAck = new ParentChannel(unacked, (_q, signal, handle) => {
-		control = handle!;
-		signal.addEventListener("abort", () => { aborted = true; });
-		return new Promise(() => {});
-	});
-	silent.write(JSON.stringify({ type: "question", id: "q", question: "Q", timeoutMs: 10_000 }) + "\n");
-	await new Promise(setImmediate);
-	const missing = assert.rejects(control("pause", "token", Date.now() + 500), /确认超时/);
-	t.mock.timers.tick(3_000); await missing;
-	assert.equal(aborted, true);
-	await assert.rejects(control("resume", "token", Date.now() + 500), /关闭/);
-	noAck.close(); silent.destroy();
-	const [raw, client] = pair(); const malformed = new ChildChannel(client);
-	const rejected = assert.rejects(malformed.ask("bad frame"), /关闭/);
-	raw.write(JSON.stringify({ type: "pause", id: "q", token: "invalid/token", requestId: "r", deadline: Date.now() + 50 }) + "\n");
-	await rejected; malformed.close(); raw.destroy(); t.mock.timers.reset();
-});
-
-test("real managed process + runtime + parent and child deadlines all survive human wait beyond ordinary budgets, then cancel cleanly", async () => {
+test("real managed process uses the runtime's fixed task deadline; timeout and cancellation clean IPC and slots", async () => {
 	resetWorkerRuntime();
 	const runtime = new WorkerRuntime(() => false);
 	const execute = async (running: Parameters<Parameters<typeof start>[2]>[0]) => {
-		const result = await launch("human-wait", (q, signal, control) => runtime.ask(running, q, signal, control), running.controller.signal, 50, true);
+		const result = await launch("ask", (q, signal) => runtime.ask(running, q, signal), running.controller.signal, 50, true);
 		return { ...JSON.parse(result.assistantText || "{}"), process: { aborted: result.aborted, timedOut: result.timedOut } };
 	};
 	try {
-		const batch = start(runtime, [task("human.ts")], execute, 1, 2_000);
+		const batch = start(runtime, [task("deadline.ts")], execute, 1, 1_200);
 		await runtime.wait(batch.id);
-		await runtime.beginInteraction("real-human", Date.now() + 10_000);
-		await delay(2_100);
-		assert.equal(batch.tasks[0].state, "running");
 		assert.equal(batch.questions[0].status, "waiting");
 		assert.equal(activeSlots, 1);
-		await runtime.endInteraction("real-human");
-		runtime.reply(batch.id, batch.tasks[0].id, batch.questions[0].id, "real parent decision");
-		await runtime.wait(batch.id);
-		assert.equal(batch.tasks[0].result!.result.content[0].text, "real parent decision");
-		assert.deepEqual(batch.tasks[0].result!.process, { aborted: false, timedOut: false });
-		const cancelled = start(runtime, [task("cancel-human.ts")], execute, 1, 2_000);
+		await until(() => batch.finished, 2_000);
+		assert.equal(batch.tasks[0].result!.failure.category, "timeout");
+		assert.equal(batch.questions[0].status, "cancelled");
+		assert.throws(() => runtime.reply(batch.id, batch.tasks[0].id, batch.questions[0].id, "late"), /取消|过期/);
+		assert.equal(activeChildren.size, 0); assert.equal(activeSlots, 0);
+		const cancelled = start(runtime, [task("cancel.ts")], execute, 1, 2_000);
 		await runtime.wait(cancelled.id);
-		await runtime.beginInteraction("cancel-human", Date.now() + 10_000);
 		runtime.cancel(cancelled.id);
 		await runtime.wait(cancelled.id);
-		await runtime.endInteraction("cancel-human");
 		assert.equal(cancelled.questions[0].status, "cancelled");
 		assert.throws(() => runtime.reply(cancelled.id, cancelled.tasks[0].id, cancelled.questions[0].id, "late"), /取消|过期/);
 	} finally { await runtime.dispose(); }

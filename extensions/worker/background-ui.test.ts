@@ -80,8 +80,8 @@ test("original Pi tool row keeps refreshing after execute, reply and background 
 		const read = () => stripTerminalSequences(row.render(160).join("\n"));
 		const payload = JSON.parse(first.content[0].text);
 		assert.equal(payload.status, "waiting_for_reply");
-		assert.match(read(), /等待回答/);
-		assert.doesNotMatch(read(), /Batch |已结束|占用槽位与路径锁/);
+		assert.match(read(), /Q: 继续吗/);
+		assert.doesNotMatch(read(), /Q[1-9] ·|等待回答|已回答|Batch |已结束|占用槽位与路径锁/);
 		assert.doesNotMatch(read(), new RegExp(questionId), "collapsed worker question labels stay concise");
 		assert.doesNotMatch(read(), /password-fixture-hidden/);
 		const atReturn = updates;
@@ -94,8 +94,7 @@ test("original Pi tool row keeps refreshing after execute, reply and background 
 		const reply = tool.execute("reply", { batchId: payload.batchId, answers: [{ taskId: q.taskId, questionId: q.id, answer: `选择 B ${secret("token")}` }] }).then((result: any) => { replyReturned = true; return result; });
 		await until(() => /A: 选择 B/.test(read()));
 		assert.ok(paints > beforeReply, "ToolRenderContext.invalidate requested the actual TUI redraw");
-		assert.match(read(), /已回答/);
-		assert.doesNotMatch(read(), /执行中|等待执行/);
+		assert.doesNotMatch(read(), /Q[1-9] ·|等待回答|已回答|执行中|等待执行/);
 		assert.doesNotMatch(read(), /等待主 Agent|token-fixture-hidden/);
 		assert.equal(replyReturned, false, "answer invocation waits while the original card updates");
 		release();
@@ -104,7 +103,7 @@ test("original Pi tool row keeps refreshing after execute, reply and background 
 		row.setExpanded(true);
 		assert.match(read(), /Q: 继续吗/);
 		assert.match(read(), /A: 选择 B/);
-		assert.match(read(), new RegExp(questionId), "expanded view exposes the question ID");
+		assert.doesNotMatch(read(), new RegExp(questionId), "question IDs are not shown in the card");
 		assert.equal(first.details.questions[0].status, "waiting", "serialized initial snapshot is not mutated");
 		await assert.rejects(tool.execute("duplicate", { batchId: payload.batchId, answers: [{ taskId: q.taskId, questionId: q.id, answer: "再次" }] }), /重复/);
 		const completed = JSON.parse((await tool.execute("wait", { batchId: payload.batchId })).content[0].text);
@@ -161,11 +160,12 @@ test("no 30-second polling return; a later question returns and its expiry updat
 		context.invalidate();
 		t.mock.timers.tick(50);
 		assert.match(rendered, /工具返回后的问题/);
-		assert.match(rendered, /等待回答/);
+		assert.match(rendered, /Q: 工具返回后的问题/);
 		t.mock.timers.tick(1_000);
 		await tool.execute("wait", { batchId: result.details.batchId });
 		t.mock.timers.tick(50);
-		assert.match(rendered, /已过期/);
+		assert.match(rendered, /Q: 工具返回后的问题/);
+		assert.doesNotMatch(rendered, /已过期|等待回答/);
 		assert.match(rendered, /✗/);
 		assert.doesNotMatch(rendered, /已结束|执行中/);
 		assert.equal(updates, 1, "only the initial card snapshot uses onUpdate; later changes use live rendering");
@@ -190,7 +190,8 @@ test("switch/tree/shutdown cancels pending questions, freezes old rows and rejec
 		tool.renderResult(result, { expanded: true, isPartial: false }, theme, context);
 		await h.handlers.get("session_tree")({}, h.ctx);
 		const frozen = tool.renderResult(result, { expanded: true, isPartial: false }, theme, context).render(160).join("\n");
-		assert.match(frozen, /已取消/);
+		assert.match(frozen, /Q: 尚未回答/);
+		assert.doesNotMatch(frozen, /已取消/);
 		assert.doesNotMatch(frozen, /历史快照|已结束|Batch |执行中/);
 		const payload = JSON.parse(result.content[0].text);
 		await assert.rejects(tool.execute("late", { batchId: payload.batchId, answers: [{ taskId: payload.questions[0].taskId, questionId: "pending", answer: "late" }] }), /过期/);
@@ -201,24 +202,27 @@ test("switch/tree/shutdown cancels pending questions, freezes old rows and rejec
 	}
 });
 
-test("collapsed cards show pending questions and recent replies; expansion preserves full history and narrow widths", async () => {
+test("cards show all complete Q&A by default with two-space labels and narrow-width wrapping", async () => {
 	const runtime = new WorkerRuntime(() => false);
 	const batch = start(runtime, [task("中文任务.ts")], async () => complete);
 	await runtime.wait(batch.id);
-	const longQuestion = `中文问题\n${"需要保留的完整上下文".repeat(50)}问题末尾`;
-	const longAnswer = `${"回答细节".repeat(100)}答案末尾`;
+	const longQuestion = `中文问题\n${"需要保留的完整上下文".repeat(22)}问题末尾`;
+	const longAnswer = `${"回答细节".repeat(45)}答案末尾`;
 	batch.questions = Array.from({ length: 5 }, (_, i) => ({
 		id: `q-${i}`, batchId: batch.id, taskId: batch.tasks[0].id, status: i === 4 ? "waiting" : "answered", question: i === 0 ? longQuestion : `问题 ${i}`, answer: i === 4 ? undefined : i === 0 ? longAnswer : `回答 ${i}`, askedAt: 1, expiresAt: 2, timeoutMs: 1,
 	}));
 	const details = batchResponse(batch).details;
-	const collapsed = renderWorkerDetails(details, theme).render(160).join("\n");
-	assert.match(collapsed, /Q5 · 等待回答/);
-	assert.match(collapsed, /回答 3/);
-	assert.doesNotMatch(collapsed, /q-0/);
-	assert.match(collapsed, /展开工具查看完整问答（5 条）/);
-	const expanded = renderWorkerDetails(details, theme, { expanded: true }).render(160).join("\n");
-	assert.match(expanded, /问题末尾/);
-	assert.match(expanded, /答案末尾/);
+	const collapsed = stripTerminalSequences(renderWorkerDetails(details, theme).render(160).join("\n"));
+	assert.match(collapsed, /问题末尾/);
+	assert.match(collapsed, /答案末尾/);
+	assert.match(collapsed, /  Q: 问题 1/);
+	assert.match(collapsed, /  A: 回答 1/);
+	assert.match(collapsed, /  Q: 问题 3[\s\S]*  Q: 问题 4/);
+	assert.doesNotMatch(collapsed, /q-0|Q[1-9] ·|已回答|等待回答|展开工具查看完整问答/);
+	assert.match(collapsed, /\n  Q: 中文问题/);
+	assert.match(collapsed, /Q: 中文问题\s*\n  需要保留/);
+	assert.match(collapsed, /\n  A: 回答细节/);
+	assert.doesNotMatch(collapsed, /  A: undefined/);
 	for (const width of [0, 1, 2, 20, 40, 80, 120]) {
 		for (const expanded of [false, true]) assert.ok(renderWorkerDetails(details, theme, { expanded }).render(width).every((line) => visibleWidth(line) <= width));
 	}
@@ -430,7 +434,7 @@ test("reload beforeSessionStart and real Pi renderBeforeBind hydrate initial row
 		// reload's beforeSessionStart has already constructed and rendered this exact row.
 		row.updateResult(initial, false);
 		const text = (component: any) => stripTerminalSequences(component.render(160).join("\n"));
-		assert.match(text(row), /等待回答/); assert.doesNotMatch(text(row), /latest persisted answer/);
+		assert.match(text(row), /Q: reload Q/); assert.doesNotMatch(text(row), /latest persisted answer/);
 		await restored.handlers.get("session_start")({}, restored.ctx);
 		assert.match(text(row), /latest persisted answer/, "binding itself invalidates the startup row");
 		row.invalidate(); assert.match(text(row), /latest persisted answer/);
@@ -444,13 +448,13 @@ test("reload beforeSessionStart and real Pi renderBeforeBind hydrate initial row
 		const surface = { session: {}, applyRuntimeSettings() {}, subscribeToAgent() {}, updateAvailableProviderCount() {}, updateEditorBorderColor() {}, updateTerminalTitle() {},
 			renderCurrentSessionState() {
 				forkRow = new Component("worker", "reload-origin", args, {}, selected.tools.get("worker"), { requestRender() {} }, process.cwd());
-				forkRow.updateResult(initial, false); assert.match(text(forkRow), /等待回答/);
+				forkRow.updateResult(initial, false); assert.match(text(forkRow), /Q: reload Q/);
 			},
 			bindCurrentSessionExtensions: () => selected.handlers.get("session_start")({}, selected.ctx),
 		};
 		await restored.handlers.get("session_shutdown")({});
 		await InteractiveMode.prototype.rebindCurrentSession.call(surface, { renderBeforeBind: true });
-		forkRow.invalidate(); assert.match(text(forkRow), /等待回答/); assert.doesNotMatch(text(forkRow), /latest persisted answer/);
+		forkRow.invalidate(); assert.match(text(forkRow), /Q: reload Q/); assert.doesNotMatch(text(forkRow), /latest persisted answer/);
 		row.invalidate(); assert.match(text(row), /latest persisted answer/, "old session row stays frozen");
 		// A real replacement on the SAME registered renderer also cannot adopt old rows.
 		restored.branch.splice(0, restored.branch.length, ...fork);
@@ -504,7 +508,7 @@ test("reload and tree use only branch snapshots, merge latest replies/errors int
 		const isolated = new Component("worker", item.id, item.args, {}, tool, { requestRender() {} }, process.cwd());
 		isolated.updateResult(item.initial, false);
 		const text = stripTerminalSequences(isolated.render(160).join("\n"));
-		assert.match(text, /等待回答/); assert.doesNotMatch(text, /reply-0|控制错误/);
+		assert.match(text, /Q: history Q/); assert.doesNotMatch(text, /reply-0|控制错误/);
 		await assert.rejects(tool.execute("stale", { batchId: item.initial.details.batchId }), /过期/);
 		assert.equal(executions, 2);
 	} finally { await h.handlers.get("session_shutdown")({}); }

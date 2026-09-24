@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import { PausableBudget } from "../shared/pausable-budget.ts";
-import { HUMAN_WAIT_LIMIT_MS } from "../shared/interaction-lifecycle.ts";
 
 export const QUESTION_LIMIT = 2_000;
 export const ANSWER_LIMIT = 4_000;
@@ -12,8 +10,7 @@ const FRAME_LIMIT = 64 * 1024;
 export const PARENT_FD_ENV = "PI_WORKER_PARENT_FD";
 
 export interface ParentQuestion { id: string; question: string; timeoutMs: number }
-export type QuestionControl = (phase: "pause" | "resume", token: string, deadline: number) => Promise<void>;
-export type AskParent = (question: ParentQuestion, signal: AbortSignal, control?: QuestionControl) => Promise<string>;
+export type AskParent = (question: ParentQuestion, signal: AbortSignal) => Promise<string>;
 
 /** Private, inherited duplex pipe. Never multiplex control messages onto model stdout. */
 class Frames {
@@ -61,30 +58,9 @@ export class ParentChannel {
 	private frames: Frames;
 	private pending = new Map<string, AbortController>();
 	private seen = new Set<string>();
-	private controls = new Map<string, { id: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-	private control(id: string, phase: "pause" | "resume", token: string, deadline: number): Promise<void> {
-		if (this.frames.closed) return Promise.reject(new Error("Worker IPC 已关闭"));
-		return new Promise((resolve, reject) => {
-			const requestId = randomUUID();
-			const timer = setTimeout(() => { this.controls.delete(requestId); reject(new Error("Worker 暂停控制确认超时")); this.close(); }, 3_000);
-			timer.unref();
-			this.controls.set(requestId, { id, resolve, reject, timer });
-			if (!this.frames.send({ type: phase, id, token, deadline, requestId })) this.close();
-		});
-	}
 	constructor(stream: Duplex, ask: AskParent) {
 		this.frames = new Frames(stream, (message) => {
 			if (!message || !validId(message.id)) { this.close(); return; }
-			if (message.type === "ack") {
-				if (!validId(message.requestId) || typeof message.ok !== "boolean") { this.close(); return; }
-				const pending = this.controls.get(message.requestId);
-				if (pending) {
-					if (pending.id !== message.id) { this.close(); return; }
-					this.controls.delete(message.requestId); clearTimeout(pending.timer);
-					if (message.ok) pending.resolve(); else pending.reject(new Error("Worker 问题已过期或暂停控制无效"));
-				}
-				return;
-			}
 			if (message.type === "cancel") {
 				const error = new Error(message.reason === "timeout" ? "问题已过期" : "问题已取消");
 				if (message.reason === "timeout") error.name = "TimeoutError";
@@ -101,7 +77,7 @@ export class ParentChannel {
 			this.pending.set(message.id, controller);
 			// Register synchronously: the parent may receive a reply on the next turn.
 			let answer: Promise<string>;
-			try { answer = ask(message, controller.signal, (phase, token, deadline) => this.control(message.id, phase, token, deadline)); } catch (error) { answer = Promise.reject(error); }
+			try { answer = ask(message, controller.signal); } catch (error) { answer = Promise.reject(error); }
 			void answer.then((value) => {
 				if (!controller.signal.aborted) this.frames.send({ type: "answer", id: message.id, answer: value });
 			}, (error) => {
@@ -110,8 +86,6 @@ export class ParentChannel {
 		}, () => {
 			for (const controller of this.pending.values()) controller.abort(new Error("Worker IPC 已关闭"));
 			this.pending.clear();
-			for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error("Worker IPC 已关闭")); }
-			this.controls.clear();
 		});
 	}
 	close() { this.frames.close(); }
@@ -119,35 +93,13 @@ export class ParentChannel {
 
 export class ChildChannel {
 	private frames: Frames;
-	private pending = new Map<string, { resolve: (answer: string) => void; reject: (error: Error) => void; budget: PausableBudget; pauses: Map<string, { timer: NodeJS.Timeout; deadline: number }>; pauseDeadline?: number }>();
+	private pending = new Map<string, { resolve: (answer: string) => void; reject: (error: Error) => void; deadline: number }>();
 	constructor(stream: Duplex) {
 		this.frames = new Frames(stream, (message) => {
 			if (!message || !validId(message.id)) { this.close(); return; }
 			const pending = this.pending.get(message.id);
-			if (message.type === "pause" || message.type === "resume") {
-				if (!validId(message.token) || !validId(message.requestId) || !Number.isFinite(message.deadline)) { this.close(); return; }
-				let ok = false;
-				if (pending && !pending.budget.exhausted && [...pending.pauses.values()].every((pause) => Date.now() < pause.deadline)) {
-					if (message.type === "pause" && message.deadline > Date.now() && message.deadline <= Date.now() + HUMAN_WAIT_LIMIT_MS) {
-						if (!pending.pauses.has(message.token)) {
-							pending.pauseDeadline ??= Date.now() + HUMAN_WAIT_LIMIT_MS;
-							const timer = setTimeout(() => {
-								this.frames.send({ type: "cancel", id: message.id, reason: "timeout" });
-								pending.reject(new Error("人工确认等待已达上限"));
-							}, Math.max(1, Math.min(message.deadline, pending.pauseDeadline) - Date.now()));
-							pending.pauses.set(message.token, { timer, deadline: Math.min(message.deadline, pending.pauseDeadline) });
-						}
-						ok = pending.budget.pause(message.token);
-					} else if (message.type === "resume") {
-						clearTimeout(pending.pauses.get(message.token)?.timer); pending.pauses.delete(message.token);
-						pending.budget.resume(message.token); ok = true;
-					}
-				}
-				this.frames.send({ type: "ack", id: message.id, requestId: message.requestId, ok });
-				return;
-			}
 			if (!pending) return; // Late answers never revive cancelled calls.
-			if (pending.budget.exhausted || [...pending.pauses.values()].some((pause) => Date.now() >= pause.deadline)) {
+			if (Date.now() >= pending.deadline) {
 				this.frames.send({ type: "cancel", id: message.id, reason: "timeout" });
 				pending.reject(new Error("问题已过期")); return;
 			}
@@ -165,8 +117,7 @@ export class ChildChannel {
 		return new Promise((resolve, reject) => {
 			const finish = (error?: Error, answer?: string) => {
 				if (!this.pending.delete(id)) return;
-				budget.dispose();
-				for (const { timer } of pauses.values()) clearTimeout(timer);
+				clearTimeout(timer);
 				signal?.removeEventListener("abort", abort);
 				if (!this.pending.size) (this.frames.stream as any).unref?.();
 				if (error) reject(error); else resolve({ questionId: id, answer: answer! });
@@ -176,9 +127,9 @@ export class ChildChannel {
 				finish(new Error(reason === "timeout" ? "等待主 Agent 回答超时" : "ask_parent 已取消"));
 			};
 			const abort = () => cancel("abort");
-			const budget = new PausableBudget(timeoutMs, () => cancel("timeout"), true);
-			const pauses = new Map<string, { timer: NodeJS.Timeout; deadline: number }>();
-			this.pending.set(id, { resolve: (answer) => finish(undefined, answer), reject: (error) => finish(error), budget, pauses });
+			const deadline = Date.now() + timeoutMs;
+			const timer = setTimeout(() => cancel("timeout"), timeoutMs);
+			this.pending.set(id, { resolve: (answer) => finish(undefined, answer), reject: (error) => finish(error), deadline });
 			(this.frames.stream as any).ref?.();
 			signal?.addEventListener("abort", abort, { once: true });
 			if (!this.frames.send({ type: "question", id, question, timeoutMs })) finish(new Error("父进程 IPC 不可用"));

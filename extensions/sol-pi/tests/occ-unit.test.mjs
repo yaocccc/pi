@@ -57,6 +57,22 @@ function harness() {
   };
 }
 
+test("update_plan renderers emit no rows for calls and all result states", () => {
+  const h = harness();
+  const tool = h.tools.get("update_plan");
+  assert.equal(tool.renderShell, "self");
+  const callComponent = tool.renderCall({ steps }, {});
+  assert.deepEqual(callComponent.render(80), []);
+  assert.deepEqual(callComponent.render(1), []);
+  for (const isPartial of [true, false]) {
+    for (const details of [undefined, { boundary: false }, { boundary: true }]) {
+      const component = tool.renderResult({ content: [], details, isError: false }, { isPartial }, {});
+      assert.deepEqual(component.render(80), []);
+      assert.deepEqual(component.render(1), []);
+    }
+  }
+});
+
 for (const event of ["session_start", "session_tree", "session_before_tree", "session_before_switch", "session_before_fork", "model_select", "session_shutdown", "input"]) {
   test(`${event} cancels nested summary and invalidates generation`, async () => {
     const h = harness();

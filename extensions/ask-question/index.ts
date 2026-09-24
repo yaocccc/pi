@@ -398,14 +398,14 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
 };
 
 const askQuestion = (pi: ExtensionAPI) => {
-    const interactions = new QuestionInteractions(pi.events);
+    const interactions = new QuestionInteractions();
     pi.on('session_shutdown', () => interactions.shutdown());
     pi.on('session_tree', () => interactions.shutdown());
     pi.on('session_start', () => interactions.shutdown());
     pi.registerTool({
         name: 'ask_question',
         label: '提问用户',
-        description: '向用户提一个或多个问题，让用户从选项中选择、复选多项或自己输入。多个问题可逐题导航并在最后统一提交。需要用户决策、确认或补充信息时使用。相关问题优先合并到 questions；并发调用会按顺序展示，排队期间不新增人工等待暂停。',
+        description: '向用户提一个或多个问题，让用户从选项中选择、复选多项或自己输入。多个问题可逐题导航并在最后统一提交。需要用户决策、确认或补充信息时使用。相关问题优先合并到 questions；并发调用会按顺序展示；等待用户确认和排队均不延长 Worker 任务或问题的普通超时。',
         promptSnippet: '向用户提问，支持单选/多选及一次展示多个问题，并允许用户自己输入答案',
         promptGuidelines: [
             '当你需要用户决策、确认方案或补充信息才能继续时，必须调用 ask_question，而不要只在普通文本里提问。',

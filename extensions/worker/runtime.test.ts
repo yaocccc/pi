@@ -87,28 +87,28 @@ test("expired answer in a bulk submission cannot partially apply a still-valid a
 	} finally { await runtime.dispose(); }
 });
 
-test("bulk replies reject an exhausted total budget atomically before its timer callback runs", async (t) => {
+test("bulk replies reject an expired task deadline atomically before its timer callback runs", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const runtime = new WorkerRuntime(conflicts);
 	let received = 0;
 	const batch = start(runtime, [task("a.ts"), task("b.ts")], async (running) => {
-		await runtime.ask(running, { id: `budget-${running.index}`, question: "Q", timeoutMs: 1_000 }, running.controller.signal);
+		await runtime.ask(running, { id: `deadline-${running.index}`, question: "Q", timeoutMs: 1_000 }, running.controller.signal);
 		received++; return completed;
 	}, 2, 100);
 	try {
 		await runtime.wait(batch.id);
 		// Keep the first submitted answer valid to catch partial-application bugs.
-		assert.equal(batch.tasks[0].budget!.pause("fixture"), true);
+		batch.tasks[0].deadline = 1_200;
 		t.mock.timers.setTime(1_100);
 		assert.equal(batch.tasks[1].controller.signal.aborted, false, "timer has not fired");
 		assert.ok(batch.questions.every((q) => q.expiresAt > Date.now()));
-		assert.throws(() => runtime.replyMany(batch.id, batch.questions.map((q) => ({ taskId: q.taskId, questionId: q.id, answer: "late approval" }))), /总预算已过期/);
+		assert.throws(() => runtime.replyMany(batch.id, batch.questions.map((q) => ({ taskId: q.taskId, questionId: q.id, answer: "late approval" }))), /总期限已过期/);
 		await Promise.resolve(); assert.equal(received, 0);
 		assert.ok(batch.questions.every((q) => q.status === "waiting" && q.answer === undefined));
 	} finally { await runtime.dispose(); }
 });
 
-test("late successful runner result cannot beat an exhausted total budget when timers have not fired", async (t) => {
+test("late successful runner result cannot beat a task deadline when timers have not fired", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const runtime = new WorkerRuntime(conflicts);
 	let release!: () => void;

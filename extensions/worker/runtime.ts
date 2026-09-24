@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ParentQuestion, QuestionControl } from "./ipc.ts";
-import { PausableBudget } from "../shared/pausable-budget.ts";
-import { HUMAN_WAIT_LIMIT_MS } from "../shared/interaction-lifecycle.ts";
+import type { ParentQuestion } from "./ipc.ts";
 import { ANSWER_LIMIT, MAX_QUESTIONS } from "./ipc.ts";
 import type { WorkerAnswer, WorkerTask, WorkerUiDetails } from "./types.ts";
 
@@ -11,7 +9,6 @@ export interface QuestionRecord extends ParentQuestion {
 	status: "waiting" | "answered" | "expired" | "cancelled";
 	askedAt: number;
 	expiresAt: number;
-	pausedUntil?: number;
 	answeredAt?: number;
 	answer?: string;
 }
@@ -25,7 +22,8 @@ export interface RuntimeTask {
 	controller: AbortController;
 	overlappedWriter: boolean;
 	timedOut?: boolean;
-	budget?: PausableBudget;
+	deadline?: number;
+	timer?: NodeJS.Timeout;
 	result?: Record<string, any>;
 }
 export interface Batch {
@@ -47,11 +45,6 @@ interface PendingAnswer {
 	reject: (error: Error) => void;
 	cleanup: () => void;
 	task: RuntimeTask;
-	budget: PausableBudget;
-	control?: QuestionControl;
-	pauses: Map<string, Promise<void>>;
-	pauseDeadline?: number;
-	pauseTimer?: NodeJS.Timeout;
 }
 
 /** Session-owned queue: slots and path locks span ALL batches, including Q&A waits. */
@@ -63,65 +56,6 @@ export class WorkerRuntime {
 	private listeners = new Set<() => void>();
 	private closed = false;
 	private scheduling = false;
-	private interactions = new Map<string, { deadline: number; timer: NodeJS.Timeout }>();
-
-	/** Pause only tasks actually waiting for a parent decision, not arbitrary tools. */
-	async beginInteraction(token: string, deadline: number) {
-		if (this.closed) return;
-		if (this.interactions.has(token)) { await Promise.all([...this.pending.values()].map((pending) => pending.pauses.get(token))); return; }
-		if (!/^[a-zA-Z0-9-]{1,80}$/.test(token) || !Number.isFinite(deadline) || deadline <= Date.now()) throw new Error("无效的人工等待 token/期限");
-		deadline = Math.min(deadline, Date.now() + HUMAN_WAIT_LIMIT_MS);
-		const timer = setTimeout(() => {
-			for (const pending of [...this.pending.values()]) if (pending.pauses.has(token)) this.cancelTask(pending.task, "人工确认等待已达上限，Worker 已取消");
-			void this.endInteraction(token);
-		}, Math.max(1, deadline - Date.now()));
-		timer.unref(); this.interactions.set(token, { deadline, timer });
-		await Promise.all([...this.pending.values()].map((pending) => this.pauseQuestion(pending, token, deadline)));
-	}
-	async endInteraction(token: string) {
-		const interaction = this.interactions.get(token);
-		if (!interaction) return;
-		clearTimeout(interaction.timer); this.interactions.delete(token);
-		await Promise.all([...this.pending.values()].map(async (pending) => {
-			const preparation = pending.pauses.get(token);
-			if (!preparation) return;
-			if (Date.now() >= interaction.deadline || Date.now() >= pending.pauseDeadline!) {
-				this.cancelTask(pending.task, "人工确认等待已达上限，Worker 已取消"); return;
-			}
-			try {
-				await preparation;
-				if (pending.record.status !== "waiting") return;
-				await pending.control?.("resume", token, interaction.deadline);
-				if (pending.record.status !== "waiting") return;
-				pending.pauses.delete(token); pending.budget.resume(token);
-				pending.task.budget?.resume(`${pending.record.id}/${token}`);
-				pending.record.pausedUntil = pending.pauses.size ? Math.min(pending.pauseDeadline!, ...[...pending.pauses.keys()].map((key) => this.interactions.get(key)?.deadline ?? Infinity)) : undefined;
-				pending.record.expiresAt = pending.budget.expiresAt;
-				if (!pending.pauses.size) clearTimeout(pending.pauseTimer);
-			} catch (error) { if (pending.record.status === "waiting") this.cancelTask(pending.task, String(error)); }
-		}));
-		this.changed();
-	}
-	private pauseQuestion(pending: PendingAnswer, token: string, deadline: number): Promise<void> {
-		if (pending.pauses.has(token)) return pending.pauses.get(token)!;
-		if (!pending.budget.pause(token) || !pending.task.budget?.pause(`${pending.record.id}/${token}`)) {
-			this.cancelTask(pending.task, "问题或任务已过期，不能暂停");
-			return Promise.resolve();
-		}
-		pending.pauseDeadline ??= Date.now() + HUMAN_WAIT_LIMIT_MS;
-		const pauseUntil = Math.min(deadline, pending.pauseDeadline);
-		pending.record.pausedUntil = Math.min(pending.record.pausedUntil ?? Infinity, pauseUntil);
-		clearTimeout(pending.pauseTimer);
-		pending.pauseTimer = setTimeout(() => this.cancelTask(pending.task, "人工确认等待已达上限，Worker 已取消"), Math.max(1, pending.pauseDeadline - Date.now()));
-		pending.pauseTimer.unref();
-		const preparation = Promise.resolve().then(() => pending.record.status === "waiting" ? pending.control?.("pause", token, pauseUntil) : undefined).catch((error) => {
-			if (pending.record.status === "waiting") this.cancelTask(pending.task, `暂停失败：${String(error)}`);
-			throw error;
-		});
-		pending.pauses.set(token, preparation);
-		this.changed();
-		return preparation;
-	}
 	constructor(private conflicts: (left: RuntimeTask, right: RuntimeTask) => boolean, private onChange: () => void = () => {}) {}
 
 	changed() {
@@ -167,18 +101,20 @@ export class WorkerRuntime {
 				ui.startedAt = Date.now();
 				this.active.add(task);
 				this.changed();
-				task.budget = new PausableBudget(task.batch.timeoutMs, () => { task.timedOut = true; this.cancelTask(task, "Worker 任务超时"); });
+				task.deadline = Date.now() + task.batch.timeoutMs;
+				task.timer = setTimeout(() => { task.timedOut = true; this.cancelTask(task, "Worker 任务超时"); }, task.batch.timeoutMs);
+				task.timer.unref();
 				void Promise.resolve().then(() => task.batch.execute(task)).then((result) => {
 					task.result = result;
 				}, (error) => {
 					task.result = this.failure(error instanceof Error ? error.message : String(error));
 				}).finally(() => {
 					// The event loop may resolve execute before dispatching an overdue timer.
-					if (!task.controller.signal.aborted && task.budget?.exhausted) {
+					if (!task.controller.signal.aborted && Date.now() >= task.deadline!) {
 						task.timedOut = true;
 						this.cancelTask(task, "Worker 任务超时");
 					}
-					task.budget?.dispose();
+					clearTimeout(task.timer);
 					// Cancellation wins over a late successful result from a cooperative runner.
 					if (task.controller.signal.aborted) {
 						const reason = String(task.controller.signal.reason?.message ?? "Worker 已取消");
@@ -210,23 +146,22 @@ export class WorkerRuntime {
 		task.batch.finished = task.batch.tasks.every((item) => item.state === "finished");
 		if (task.batch.finished) task.batch.ui.finishedAt = Date.now();
 	}
-	ask(task: RuntimeTask, question: ParentQuestion, signal: AbortSignal, control?: QuestionControl): Promise<string> {
+	ask(task: RuntimeTask, question: ParentQuestion, signal: AbortSignal): Promise<string> {
 		if (this.closed || task.state !== "running" || task.controller.signal.aborted || signal.aborted) return Promise.reject(new Error("Worker 已结束或取消"));
+		if (task.deadline === undefined || Date.now() >= task.deadline) return Promise.reject(new Error("Worker 任务已过期"));
 		if (task.batch.questions.some((item) => item.id === question.id) || task.batch.questions.filter((item) => item.taskId === task.id).length >= MAX_QUESTIONS) return Promise.reject(new Error("重复问题 ID 或问题数量超过限制"));
 		const askedAt = Date.now();
 		const record: QuestionRecord = { ...question, batchId: task.batch.id, taskId: task.id, askedAt, expiresAt: askedAt + question.timeoutMs, status: "waiting" };
 		task.batch.questions.push(record);
 		return new Promise((resolve, reject) => {
 			const abort = () => this.endQuestion(pending, signal.reason?.name === "TimeoutError" ? "expired" : "cancelled", "问题已取消、过期或 IPC 已关闭");
-			const budget = new PausableBudget(question.timeoutMs, () => this.endQuestion(pending, "expired", "等待主 Agent 回答超时"));
-			const pending: PendingAnswer = { record, resolve, reject, task, budget, control, pauses: new Map(), cleanup: () => {
-				budget.dispose(); clearTimeout(pending.pauseTimer); signal.removeEventListener("abort", abort);
-				for (const token of pending.pauses.keys()) task.budget?.resume(`${record.id}/${token}`);
-				record.pausedUntil = undefined;
+			const timer = setTimeout(() => this.endQuestion(pending, "expired", "等待主 Agent 回答超时"), question.timeoutMs);
+			timer.unref();
+			const pending: PendingAnswer = { record, resolve, reject, task, cleanup: () => {
+				clearTimeout(timer); signal.removeEventListener("abort", abort);
 			} };
 			this.pending.set(`${task.id}/${question.id}`, pending);
 			signal.addEventListener("abort", abort, { once: true });
-			for (const [token, interaction] of this.interactions) void this.pauseQuestion(pending, token, interaction.deadline).catch(() => {});
 			this.changed();
 		});
 	}
@@ -259,9 +194,9 @@ export class WorkerRuntime {
 			if (record.status === "answered") throw new Error("问题已回答，不能重复回答");
 			if (record.status !== "waiting") throw new Error("问题已取消或过期");
 			const pending = this.pending.get(key);
-			if (!pending || pending.budget.exhausted || (!pending.budget.paused && now >= record.expiresAt) || (record.pausedUntil !== undefined && now >= record.pausedUntil) || pending.record !== record) throw new Error("问题已过期");
+			if (!pending || now >= record.expiresAt || pending.record !== record) throw new Error("问题已过期");
 			if (this.closed || batch.cancelled || batch.finished || pending.task.state !== "running" || pending.task.controller.signal.aborted) throw new Error("Worker 任务已结束或取消，问题已过期");
-			if (!pending.task.budget || pending.task.budget.exhausted) throw new Error("Worker 任务总预算已过期");
+			if (pending.task.deadline === undefined || now >= pending.task.deadline) throw new Error("Worker 任务总期限已过期");
 			return { pending, answer: item.answer };
 		});
 		for (const { pending, answer } of validated) {
@@ -277,6 +212,7 @@ export class WorkerRuntime {
 	}
 	private cancelTask(task: RuntimeTask, reason: string) {
 		if (task.state === "finished") return;
+		clearTimeout(task.timer);
 		task.controller.abort(new Error(reason));
 		for (const pending of [...this.pending.values()]) if (pending.record.taskId === task.id) this.endQuestion(pending, "cancelled", reason);
 		if (task.state === "queued") {
@@ -310,8 +246,6 @@ export class WorkerRuntime {
 	}
 	async dispose(): Promise<void> {
 		this.closed = true;
-		for (const { timer } of this.interactions.values()) clearTimeout(timer);
-		this.interactions.clear();
 		for (const batch of this.batches.values()) this.cancel(batch.id, "Worker 会话已关闭");
 		this.changed();
 		if (!this.active.size) return;
