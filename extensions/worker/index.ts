@@ -10,6 +10,7 @@ import { mapWithConflicts, workerTasksConflict } from "./security";
 import { configureWorkerSettings } from "./settings-ui";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
 import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, renderWorkerDetails, sanitizeStructuredValue, serializePayload } from "./ui";
+import { updateRenderRefresh } from "./render-refresh";
 
 
 export const TOOL_DESCRIPTION = `Use this tool autonomously for bounded, independently verifiable coding subtasks. Do not ask the user before delegating suitable tasks. Use Fast for clear local work, Normal for normal development, and Deep for difficult work. Deep is the highest automatic task-complexity level. Use Max only when the user explicitly requests Max, xhigh, or maximum strength, and set userExplicitMax: true. Read the worker-orchestration skill when decomposition, parallelization, routing, review, or acceptance strategy is non-trivial. Workers may not create other workers. Failed Worker tasks are returned to the main agent for direct handling and are not automatically retried. The main agent remains responsible for reviewing the diff, validation, and acceptance evidence.`;
@@ -178,7 +179,8 @@ export default function workerExtension(pi: ExtensionAPI) {
 			const title = count > 1 ? `Workers ×${count}` : "Worker";
 			return new Text(theme.fg("toolTitle", theme.bold(title)), 0, 0);
 		},
-		renderResult(result, _options, theme) {
+		renderResult(result, options, theme, context) {
+			updateRenderRefresh(context, options.isPartial && !context?.isError);
 			const details = result.details as WorkerUiDetails | undefined;
 			if (details?.kind === "worker-ui" && details.tasks.length) return renderWorkerDetails(details, theme);
 			const text = result.content.find((item) => item.type === "text");
