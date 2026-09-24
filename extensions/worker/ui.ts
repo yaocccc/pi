@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Text, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkerUiActivity, WorkerUiDetails, WorkerUiStatus, WorkerUiTask, WorkerUsage } from "./types";
 
 export const UI_ACTIVITY_LIMIT = 20;
@@ -295,7 +295,11 @@ export function uiActivityLine(activity: WorkerUiActivity, theme: Theme): string
 	if (activity.type !== "tool") return `${icon} ${label}${activity.detail ? theme.fg("dim", ` · ${uiSnippet(activity.detail, 96)}`) : ""}`;
 	const prefix = `${icon} ${label}`;
 	const detailWidth = UI_TOOL_LINE_WIDTH - visibleWidth(prefix) - 3; // " · "
-	return `${prefix}${activity.detail && detailWidth > 0 ? theme.fg("dim", ` · ${truncateToWidth(uiSnippet(activity.detail, UI_DETAIL_CAP), detailWidth, "…")}`) : ""}`;
+	// truncateToWidth adds full ANSI resets when clipping; remove them before applying the theme color.
+	const detail = activity.detail && detailWidth > 0
+		? stripTerminalSequences(truncateToWidth(uiSnippet(activity.detail, UI_DETAIL_CAP), detailWidth, "…"))
+		: undefined;
+	return `${prefix}${detail ? theme.fg("dim", ` · ${detail}`) : ""}`;
 }
 
 export function uiDuration(task: WorkerUiTask): string | undefined {

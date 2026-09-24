@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkerUiActivity, WorkerUiDetails } from "./types.ts";
 import { createThinkingActivityRecorder, renderWorkerDetails, uiActivityLine, workerUsageText } from "./ui.ts";
@@ -49,6 +49,17 @@ test("tool activity lines fit 70 visible columns including wide Chinese and elli
 	assert.equal(visibleWidth(line), 70);
 	assert.ok(stripTerminalSequences(line).endsWith("…"));
 	assert.ok(line.startsWith("→ 中文工具 · "));
+});
+
+test("truncated tool lines preserve an enclosing ANSI background", () => {
+	const colors = { accent: "#00aaff", warning: "#ffaa00", success: "#00ff00", error: "#ff0000", dim: "#777777", muted: "#888888", text: "#ffffff", thinkingXhigh: "#aaaaaa" } as ConstructorParameters<typeof Theme>[0];
+	const theme = new Theme(colors, { selectedBg: "#223344" } as ConstructorParameters<typeof Theme>[1], "truecolor");
+	const line = uiActivityLine({ id: "tool:2", type: "tool", status: "completed", label: "read", detail: "中文摘要".repeat(25), at: 0 }, theme);
+	assert.equal(visibleWidth(line), 70);
+	assert.ok(stripTerminalSequences(line).endsWith("…"));
+	assert.doesNotMatch(line, /\x1b\[0m/, "a full SGR reset would clear the enclosing background");
+	const framed = theme.bg("selectedBg", line + " ".repeat(10));
+	assert.match(framed, /…\x1b\[39m {10}\x1b\[49m$/);
 });
 
 test("worker details display the complete objective", () => {
