@@ -16,8 +16,7 @@
   "defaultThinkingLevel": "medium",
   "packages": [
     "npm:pi-web-access",
-    "npm:@ff-labs/pi-fff",
-    "npm:context-mode"
+    "npm:@ff-labs/pi-fff"
   ],
   "treeFilterMode": "all",
   "enableInstallTelemetry": true,

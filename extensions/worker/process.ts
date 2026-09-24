@@ -8,7 +8,7 @@ import { agentDir, resolveRoute, resolveTaskCwd } from "./config";
 import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard";
 import { attributeChangedFiles, changedSince, snapshotWorkspace } from "./security";
 import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkerUsage, WorkspaceSnapshot } from "./types";
-import { UI_ACTIVITY_LIMIT, UI_DETAIL_CAP, addWorkerUsage, appendUiActivity, emptyWorkerUsage, estimateMessageTokens, messageUsage, publicThinking, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./ui";
+import { addWorkerUsage, appendUiActivity, createThinkingActivityRecorder, emptyWorkerUsage, estimateMessageTokens, messageUsage, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./ui";
 
 export const activeChildren = new Set<ChildProcess>();
 export let runtimeShuttingDown = false;
@@ -135,7 +135,6 @@ export async function runPiWorker(
 	let phase = "等待执行槽位";
 	let toolCalls = 0;
 	let lastEmitAt = 0;
-	let latestThinking = "";
 	let settledUsage = emptyWorkerUsage();
 	let streamUsage = emptyWorkerUsage();
 	let currentTurn = 1;
@@ -176,15 +175,7 @@ export async function runPiWorker(
 		});
 		emit(status !== "running");
 	};
-	const recordThinking = (value: string) => {
-		const text = uiSnippet(value, UI_DETAIL_CAP);
-		if (!text) return;
-		const existing = activities.findIndex((item) => item.id === "thinking:latest");
-		if (existing >= 0) activities.splice(existing, 1);
-		activities.push({ id: "thinking:latest", type: "thinking", status: "running", label: "思考", detail: text, at: Date.now() });
-		if (activities.length > UI_ACTIVITY_LIMIT) activities.splice(0, activities.length - UI_ACTIVITY_LIMIT);
-		emit();
-	};
+	const recordThinking = createThinkingActivityRecorder(activities, () => emit());
 
 	emit(true);
 	const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-worker-"));
@@ -290,6 +281,7 @@ export async function runPiWorker(
 			timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
 			if (signal?.aborted) abortHandler(); else signal?.addEventListener("abort", abortHandler, { once: true });
 			const processEvent = (event: any) => {
+				recordThinking(event);
 				if (event.type === "turn_start") {
 					currentTurn = Math.max(currentTurn, Number(event.turnIndex) + 1 || settledUsage.turns + 1);
 					activeTurn = true;
@@ -302,14 +294,8 @@ export async function runPiWorker(
 						streamUsage.output = Math.max(streamUsage.output, estimateMessageTokens(event.message));
 						activeTurn = true;
 					}
-					const thinking = publicThinking(event.message);
-					if (thinking) recordThinking(thinking);
-					const delta = event.assistantMessageEvent;
-					if (delta?.type === "thinking_delta" && typeof delta.delta === "string") {
-						latestThinking = uiSnippet(`${latestThinking}${delta.delta}`, UI_DETAIL_CAP);
-						streamUsage.output = Math.max(streamUsage.output, Math.ceil(latestThinking.length / 4));
-						recordThinking(latestThinking);
-					}
+					const thinking = activities.find((item) => item.type === "thinking" && item.status === "running");
+					if (thinking?.detail) streamUsage.output = Math.max(streamUsage.output, Math.ceil(thinking.detail.length / 4));
 					emit();
 					return;
 				}
@@ -329,8 +315,6 @@ export async function runPiWorker(
 					currentTurn = Math.max(currentTurn, settledUsage.turns);
 					streamUsage = emptyWorkerUsage();
 					activeTurn = false;
-					const thinking = publicThinking(event.message);
-					if (thinking) recordThinking(thinking);
 					for (const part of event.message.content ?? []) {
 						if (part?.type === "toolCall") upsertTool(part.id, part.name, "running", summarizeToolArgs(part.arguments));
 					}

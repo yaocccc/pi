@@ -1,10 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkerUiActivity, WorkerUiDetails, WorkerUiStatus, WorkerUiTask, WorkerUsage } from "./types";
 
 export const UI_ACTIVITY_LIMIT = 20;
 export const UI_RECENT_ACTIVITY_LIMIT = 10;
 export const UI_DETAIL_CAP = 160;
+export const UI_TOOL_LINE_WIDTH = 70;
 export const UI_SENSITIVE_KEY = /(?:password|passwd|token|secret|api[-_]?key|private[-_]?key|mnemonic|authorization|cookie|credential|auth)/i;
 
 export function sanitizeUiText(value: string): string {
@@ -184,6 +185,43 @@ export function appendUiActivity(activities: WorkerUiActivity[], activity: Worke
 	if (activities.length > UI_ACTIVITY_LIMIT) activities.splice(0, activities.length - UI_ACTIVITY_LIMIT);
 }
 
+/** JSON mode sends deltas without message snapshots; keep raw whitespace until display. */
+export function createThinkingActivityRecorder(activities: WorkerUiActivity[], emit: () => void) {
+	let messageIndex = 0;
+	let latest = "";
+	const snapshot = (message: any): string | undefined => {
+		if (!Array.isArray(message?.content)) return undefined;
+		const parts = message.content.filter((part: any) => part?.type === "thinking" && typeof part.thinking === "string");
+		return parts.length ? parts.map((part: any) => part.thinking).join("\n") : undefined;
+	};
+	const record = () => {
+		const detail = uiSnippet(latest, UI_DETAIL_CAP);
+		if (!detail) return;
+		const id = `thinking:${messageIndex}`;
+		if (activities.some((item) => item.id === id && item.detail === detail)) return;
+		appendUiActivity(activities, { id, type: "thinking", status: "running", label: "思考", detail, at: Date.now() });
+		emit();
+	};
+	return (event: { type: string; message?: any; assistantMessageEvent?: { type: string; delta?: string } }) => {
+		if (event.type === "message_start" && event.message?.role === "assistant") {
+			messageIndex++;
+			latest = "";
+			return;
+		}
+		if ((event.type !== "message_update" && event.type !== "message_end") || (event.message?.role && event.message.role !== "assistant")) return;
+		const current = snapshot(event.message);
+		if (current !== undefined) latest = current;
+		else if (event.assistantMessageEvent?.type === "thinking_delta") latest += event.assistantMessageEvent.delta ?? "";
+		latest = latest.slice(0, 16 * 1024);
+		record();
+		if (event.type === "message_end") {
+			const activity = activities.find((item) => item.id === `thinking:${messageIndex}`);
+			if (activity) activity.status = "completed";
+			latest = "";
+		}
+	};
+}
+
 export function emptyWorkerUsage(): WorkerUsage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, turns: 0 };
 }
@@ -254,7 +292,10 @@ export function uiActivityLine(activity: WorkerUiActivity, theme: Theme): string
 	if (activity.type === "thinking") return `${theme.fg("mdLink", "!")} ${theme.fg("dim", uiSnippet(activity.detail ?? activity.label, 150))}`;
 	const icon = activity.status === "running" ? theme.fg("warning", "→") : activity.status === "completed" ? theme.fg("success", "✓") : theme.fg("error", "✗");
 	const label = activity.type === "tool" ? theme.fg("accent", activity.label) : theme.fg("muted", activity.label);
-	return `${icon} ${label}${activity.detail ? theme.fg("dim", ` · ${uiSnippet(activity.detail, 96)}`) : ""}`;
+	if (activity.type !== "tool") return `${icon} ${label}${activity.detail ? theme.fg("dim", ` · ${uiSnippet(activity.detail, 96)}`) : ""}`;
+	const prefix = `${icon} ${label}`;
+	const detailWidth = UI_TOOL_LINE_WIDTH - visibleWidth(prefix) - 3; // " · "
+	return `${prefix}${activity.detail && detailWidth > 0 ? theme.fg("dim", ` · ${truncateToWidth(uiSnippet(activity.detail, UI_DETAIL_CAP), detailWidth, "…")}`) : ""}`;
 }
 
 export function uiDuration(task: WorkerUiTask): string | undefined {
