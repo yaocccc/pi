@@ -22,11 +22,22 @@ export interface WorkerTask {
 	cwd?: string;
 }
 
+export interface WorkerAnswer {
+	taskId: string;
+	questionId: string;
+	answer: string;
+}
+
 export interface WorkerToolInput {
 	task?: WorkerTask;
 	tasks?: WorkerTask[];
 	/** Required for calls made while automatic delegation is disabled in routing config. */
 	manual?: boolean;
+	batchId?: string;
+	answers?: WorkerAnswer[];
+	cancel?: true;
+	/** History page in the next question/completion response; never a polling timeout. */
+	questionOffset?: number;
 }
 
 export interface PresetConfig {
@@ -114,6 +125,13 @@ export interface WorkerUiTask {
 
 export interface WorkerUiDetails {
 	kind: "worker-ui";
+	batchId?: string;
+	originToolCallId?: string;
+	revision?: number;
+	controlErrors?: Array<{ toolCallId: string; message: string }>;
+	/** Capture time for static history; elapsed times must not keep advancing. */
+	snapshotAt?: number;
+	questions?: import("./runtime.ts").QuestionRecord[];
 	startedAt: number;
 	finishedAt?: number;
 	limit: number;

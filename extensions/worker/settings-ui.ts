@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { RESOLVED_PRESETS, atomicWriteJson, supportedThinking, validateConfig } from "./config";
+import { RESOLVED_PRESETS, atomicWriteJson, supportedThinking, validateConfig } from "./config.ts";
 import type { ResolvedPreset, RoutingConfig, Thinking } from "./types";
 
 type MenuKey = ResolvedPreset | "maxConcurrentWorkers" | "automaticDelegationEnabled" | "defaultTimeoutMs" | "maxOutputBytes" | "save" | "cancel";

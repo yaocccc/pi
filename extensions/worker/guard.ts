@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { isPathInside } from "./config";
-import { matchesAny } from "./security";
+import { isPathInside } from "./config.ts";
+import { matchesAny } from "./security.ts";
 import type { WorkerMode } from "./types";
 
 export const WORKER_MODE_ENV = "PI_WORKER_MODE";

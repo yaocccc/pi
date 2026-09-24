@@ -114,14 +114,19 @@ function rangesOverlap(left: WriteBoundary["ranges"][number], right: WriteBounda
 }
 
 export function workerTasksConflict(left: WorkerTask, right: WorkerTask, baseCwd: string): boolean {
+	return workerTaskScopesConflict(left, baseCwd, right, baseCwd);
+}
+
+/** Cross-batch tasks may have different session cwd snapshots. */
+export function workerTaskScopesConflict(left: WorkerTask, leftCwd: string, right: WorkerTask, rightCwd: string): boolean {
 	const leftWrites = WRITE_MODES.has(left.mode);
 	const rightWrites = WRITE_MODES.has(right.mode);
 	if (!leftWrites && !rightWrites) return false;
 	// Read tasks do not declare a complete read set, so no read/write independence
 	// can be proven within a shared worktree.
 	if (leftWrites !== rightWrites) return true;
-	const leftBoundary = declaredWriteBoundary(left, baseCwd);
-	const rightBoundary = declaredWriteBoundary(right, baseCwd);
+	const leftBoundary = declaredWriteBoundary(left, leftCwd);
+	const rightBoundary = declaredWriteBoundary(right, rightCwd);
 	if (leftBoundary.unknown || rightBoundary.unknown) return true;
 	return leftBoundary.ranges.some((leftRange) => rightBoundary.ranges.some((rightRange) => rangesOverlap(leftRange, rightRange)));
 }

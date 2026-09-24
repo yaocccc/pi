@@ -9,13 +9,20 @@ const COLLAPSED_THINKING_PATCH = Symbol.for('pi.extensions.ui.single-thinking-pr
 const THINKING_SPACING_PATCH = Symbol.for('pi.extensions.ui.thinking-spacing.v3');
 const LEGACY_FINAL_RESPONSE_SEPARATOR_PATCH = Symbol.for('pi.extensions.ui.final-response-separator.v1');
 const FINAL_RESPONSE_SEPARATOR_PATCH = Symbol.for('pi.extensions.ui.final-response-separator.v2');
+const FINAL_RESPONSE_SEPARATOR_ACTIVITY_PATCH = Symbol.for('pi.extensions.ui.final-response-separator-activity.v3');
+const COMPACT_TOOL_ACTIVITY_KEY = Symbol.for('pi.extensions.ui.compact-tool-activity.v10');
+const PADDED_BACKGROUND_PATCH = Symbol.for('pi.extensions.ui.padded-background.v2');
+const CORE_BACKGROUND_PATCH = Symbol.for('pi.extensions.ui.core-background.v1');
 const FULLSCREEN_SCROLLBAR_PATCH = Symbol.for('pi.extensions.ui.fullscreen-scrollbar.v1');
-const COMPACT_TOOL_DISPLAY_PATCH = Symbol.for('pi.extensions.ui.compact-tool-display.v9');
+const COMPACT_TOOL_DISPLAY_PATCH = Symbol.for('pi.extensions.ui.compact-tool-display.v10');
 const MERGE_CONSECUTIVE_TOOLS_PATCH = Symbol.for('pi.extensions.ui.merge-consecutive-tools.v5');
 const RUNTIME_THEME_KEY = Symbol.for('@earendil-works/pi-coding-agent:theme');
 const COLLAPSED_THINKING_LINE_WIDTH = 120;
 
 let renderedActivitySinceUserMessage = false;
+// Survives module reload: an already-installed v2 final separator closes over the
+// previous module's activity flag, while the new compact renderer does not.
+const compactToolActivity = ((globalThis as any)[COMPACT_TOOL_ACTIVITY_KEY] ??= { rendered: false }) as { rendered: boolean };
 
 type AssistantMessage = Parameters<AssistantMessageComponent['updateContent']>[0];
 type AssistantMessagePrototype = {
@@ -27,6 +34,7 @@ type AssistantMessagePrototype = {
 
 type RenderablePrototype = {
     render(width: number): string[];
+    [key: symbol]: unknown;
 };
 
 type RuntimeTheme = {
@@ -60,6 +68,10 @@ type CompactToolExecution = {
     args?: unknown;
     isPartial?: boolean;
     result?: { isError?: boolean };
+    getRenderShell?(): string;
+    selfRenderContainer?: { render(width: number): string[]; invalidate(): void };
+    contentBox?: Box;
+    contentText?: Text;
 };
 
 type ToolExecutionPrototype = {
@@ -129,12 +141,36 @@ export const patchCompactToolDisplay = (): void => {
 
     const originalRender = prototype.render;
     prototype.render = function patchedCompactToolRender(this: CompactToolExecution, width: number): string[] {
-        renderedActivitySinceUserMessage = true;
-        if (typeof this.toolName !== 'string' || !usesCompactToolDisplay(this.toolName)) {
-            return removeLeadingBlankLine(originalRender.call(this, width));
-        }
-
+        // The Worker keeps its self shell so continuation calls can really render zero
+        // lines. Frame only visible content with Pi's Box and the same theme
+        // tokens already used for compact tools (pending/success/error).
         const runtimeTheme = (globalThis as any)[RUNTIME_THEME_KEY] as RuntimeTheme | undefined;
+        if (this.toolName === 'worker' && this.getRenderShell?.() === 'self' && this.selfRenderContainer) {
+            // Do not call the old v9 renderer for a hidden control row: it marks
+            // activity even when it renders zero lines.
+            const paddingX = width > 2 ? 1 : 0;
+            const contentLines = this.selfRenderContainer.render(runtimeTheme ? Math.max(1, width - paddingX * 2) : width);
+            if (contentLines.length === 0) return [];
+            if (runtimeTheme) {
+                const CoreBox = this.contentBox?.constructor as typeof Box | undefined;
+                const shell = new (CoreBox ?? Box)(paddingX, 1, (text) => runtimeTheme.bg(toolBackgroundColor(this), text));
+                shell.addChild({ render: () => contentLines, invalidate() {} });
+                const lines = shell.render(width);
+                if (lines.length) compactToolActivity.rendered = true;
+                return lines;
+            }
+        }
+        if (typeof this.toolName !== 'string' || !usesCompactToolDisplay(this.toolName)) {
+            const lines = removeLeadingBlankLine(originalRender.call(this, width));
+            if (lines.length) {
+                renderedActivitySinceUserMessage = true;
+                compactToolActivity.rendered = true;
+            }
+            return lines;
+        }
+        renderedActivitySinceUserMessage = true;
+        compactToolActivity.rendered = true;
+
         const isError = this.result?.isError === true;
         const args = compactToolArgs(this.args);
         const errorPrefix = isError ? `${runtimeTheme ? runtimeTheme.fg('error', '✗') : '✗'} ` : '';
@@ -439,8 +475,7 @@ const collapseLegacyFinalSeparator = (lines: string[], width: number): string[] 
 
 export const patchFinalResponseSeparator = (): void => {
     const prototype = AssistantMessageComponent.prototype as unknown as FinalResponseComponent;
-    if (prototype[FINAL_RESPONSE_SEPARATOR_PATCH]) return;
-
+    if (!prototype[FINAL_RESPONSE_SEPARATOR_PATCH]) {
     const hasLegacySeparatorPatch = Boolean(prototype[LEGACY_FINAL_RESPONSE_SEPARATOR_PATCH]);
     const originalUpdateContent = prototype.updateContent;
     prototype.updateContent = function patchedFinalResponseContent(this: FinalResponseComponent, message: AssistantMessage): void {
@@ -482,9 +517,34 @@ export const patchFinalResponseSeparator = (): void => {
         return lines;
     };
     prototype[FINAL_RESPONSE_SEPARATOR_PATCH] = true;
+    }
+
+    // On reload, the v2 wrapper may still hold a previous module's flag. Keep
+    // its existing formatting, and add a gap only if visible v10 tool activity
+    // was not already accounted for by that wrapper.
+    if (prototype[FINAL_RESPONSE_SEPARATOR_ACTIVITY_PATCH]) return;
+    const previousRender = prototype.render;
+    prototype.render = function patchedFinalResponseActivity(this: FinalResponseComponent, width: number): string[] {
+        const hadActivity = compactToolActivity.rendered;
+        const lines = previousRender.call(this, width);
+        const message = this.lastMessage;
+        if (!message) return lines;
+        const hasText = message.content.some((part) => part.type === 'text' && part.text.trim());
+        const hasThinking = message.content.some((part) => part.type === 'thinking' && part.thinking.trim());
+        const hasToolCalls = message.content.some((part) => part.type === 'toolCall');
+        if (!hasText || hasToolCalls) return lines;
+        compactToolActivity.rendered = false;
+        if (hadActivity && !hasThinking && !(lines.length > 0 && isVisuallyBlankLine(lines[0]!))) {
+            return [...new FinalResponseGap().render(width), ...lines];
+        }
+        return lines;
+    };
+    prototype[FINAL_RESPONSE_SEPARATOR_ACTIVITY_PATCH] = true;
 };
 
 const patchPaddedBackgroundComponent = (prototype: RenderablePrototype): void => {
+    if (prototype[PADDED_BACKGROUND_PATCH]) return;
+    prototype[PADDED_BACKGROUND_PATCH] = true;
     const originalRender = prototype.render;
 
     prototype.render = function patchedPaddedBackgroundRender(this: { paddingY?: number; bgFn?: unknown; customBgFn?: unknown }, width: number): string[] {
@@ -510,6 +570,17 @@ export const patchPaddedBackgroundHalfBlocks = (): void => {
     patchPaddedBackgroundComponent(Box.prototype as unknown as RenderablePrototype);
     // Text 覆盖少量直接用 Text + customBgFn 渲染背景的组件兜底。
     patchPaddedBackgroundComponent(Text.prototype as unknown as RenderablePrototype);
+    // The installed coding-agent may resolve a nested pi-tui copy, distinct from
+    // the extension's direct pi-tui. Patch the actual Box/Text instances Pi uses.
+    const prototype = ToolExecutionComponent.prototype as unknown as { updateDisplay(this: CompactToolExecution): void; [key: symbol]: unknown };
+    if (prototype[CORE_BACKGROUND_PATCH]) return;
+    const originalUpdateDisplay = prototype.updateDisplay;
+    prototype.updateDisplay = function patchedCoreBackgrounds(this: CompactToolExecution) {
+        if (this.contentBox) patchPaddedBackgroundComponent(Object.getPrototypeOf(this.contentBox) as RenderablePrototype);
+        if (this.contentText) patchPaddedBackgroundComponent(Object.getPrototypeOf(this.contentText) as RenderablePrototype);
+        return originalUpdateDisplay.call(this);
+    };
+    prototype[CORE_BACKGROUND_PATCH] = true;
 };
 
 export const patchUserMessageHalfBlocks = (): void => {
@@ -521,6 +592,7 @@ export const patchUserMessageHalfBlocks = (): void => {
 
     prototype.render = function patchedUserMessageRender(this: UserMessageComponent, width: number): string[] {
         renderedActivitySinceUserMessage = false;
+        compactToolActivity.rendered = false;
         const lines = originalRender.call(this, width);
         if (lines.length === 0) return lines;
 

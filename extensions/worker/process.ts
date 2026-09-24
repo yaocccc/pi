@@ -1,14 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import type { Duplex } from "node:stream";
+import { ParentChannel, PARENT_FD_ENV, type AskParent } from "./ipc.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { agentDir, resolveRoute, resolveTaskCwd } from "./config";
-import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard";
-import { attributeChangedFiles, changedSince, snapshotWorkspace } from "./security";
+import { agentDir, resolveRoute, resolveTaskCwd } from "./config.ts";
+import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard.ts";
+import { attributeChangedFiles, changedSince, snapshotWorkspace } from "./security.ts";
 import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkerUsage, WorkspaceSnapshot } from "./types";
-import { addWorkerUsage, appendUiActivity, createThinkingActivityRecorder, emptyWorkerUsage, estimateMessageTokens, messageUsage, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./ui";
+import { addWorkerUsage, appendUiActivity, createThinkingActivityRecorder, emptyWorkerUsage, estimateMessageTokens, messageUsage, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./ui.ts";
 
 export const activeChildren = new Set<ChildProcess>();
 export let runtimeShuttingDown = false;
@@ -40,10 +42,12 @@ export function killProcessTree(child: ChildProcess, signal: NodeJS.Signals): vo
 }
 
 export function killAllChildren(force = false): void {
-	for (const child of activeChildren) killProcessTree(child, force ? "SIGKILL" : "SIGTERM");
-	if (!force && activeChildren.size > 0) {
+	const children = [...activeChildren];
+	for (const child of children) killProcessTree(child, force ? "SIGKILL" : "SIGTERM");
+	if (!force && children.length > 0) {
 		setTimeout(() => {
-			for (const child of activeChildren) killProcessTree(child, "SIGKILL");
+			// Never kill a new session's children from an old shutdown timer.
+			for (const child of children) if (activeChildren.has(child)) killProcessTree(child, "SIGKILL");
 		}, 3_000).unref();
 	}
 }
@@ -54,7 +58,7 @@ export function releaseSlot(): void {
 }
 
 export async function acquireSlot(limit: number, signal: AbortSignal | undefined, timeoutMs: number): Promise<() => void> {
-	if (signal?.aborted) throw new Error("Worker 在等待执行槽位时已取消");
+	if (signal?.aborted || runtimeShuttingDown) throw new Error("Worker 在等待执行槽位时已取消");
 	if (activeSlots < limit) {
 		activeSlots++;
 		return releaseSlot;
@@ -129,6 +133,7 @@ export async function runPiWorker(
 	timeoutMs: number,
 	concurrencyLimit: number,
 	onProgress?: (progress: ChildProgress) => void,
+	control?: { askParent?: AskParent; invocation?: { command: string; args: string[] }; managedTimeout?: boolean },
 ): Promise<ChildResult> {
 	const activities: WorkerUiActivity[] = [];
 	const seenToolIds = new Set<string>();
@@ -183,8 +188,8 @@ export async function runPiWorker(
 	try {
 		const systemPath = path.join(tempDir, "worker-system.md");
 		await fs.promises.writeFile(systemPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
-		const args = ["--mode", "json", "--print", "--no-session", "--no-skills", "--no-context-files", "--model", route.modelId, "--thinking", route.thinking, "--append-system-prompt", systemPath, prompt];
-		const invocation = getPiInvocation(args);
+		const args = ["--mode", "json", "--print", "--no-session", "--no-skills", "--no-context-files", "--extension", path.join(agentDir(), "extensions", "worker", "ask-parent.ts"), "--model", route.modelId, "--thinking", route.thinking, "--append-system-prompt", systemPath, prompt];
+		const invocation = control?.invocation ?? getPiInvocation(args);
 		const deadline = Date.now() + timeoutMs;
 		try {
 			release = await acquireSlot(concurrencyLimit, signal, timeoutMs);
@@ -221,15 +226,16 @@ export async function runPiWorker(
 			let stdoutBytes = 0;
 			let forceKillTimer: NodeJS.Timeout | undefined;
 			let forceSettleTimer: NodeJS.Timeout | undefined;
-			let timeout: NodeJS.Timeout;
+			let timeout: NodeJS.Timeout | undefined;
 			const child = spawn(invocation.command, invocation.args, {
 				cwd,
 				shell: false,
 				detached: process.platform !== "win32",
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["ignore", "pipe", "pipe", "pipe"],
 				env: {
 					...process.env,
 					PI_WORKER_DEPTH: "1",
+					[PARENT_FD_ENV]: "3",
 					PI_SKIP_VERSION_CHECK: "1",
 					[WORKER_MODE_ENV]: task.mode,
 					[WORKER_CWD_ENV]: cwd,
@@ -239,9 +245,11 @@ export async function runPiWorker(
 
 			});
 			activeChildren.add(child);
+			const channel = new ParentChannel(child.stdio[3] as Duplex, control?.askParent ?? (async () => { throw new Error("父进程不支持问答"); }));
 			const finish = (exitCode: number, childClosed = true) => {
 				if (settled) return;
 				settled = true;
+				channel.close();
 				clearTimeout(timeout);
 				if (forceKillTimer) clearTimeout(forceKillTimer);
 				if (forceSettleTimer) clearTimeout(forceSettleTimer);
@@ -261,6 +269,7 @@ export async function runPiWorker(
 			const terminate = (reason: "abort" | "timeout" | "output") => {
 				if (settled || terminating) return;
 				terminating = true;
+				channel.close();
 				aborted = reason === "abort";
 				timedOut = reason === "timeout";
 				setPhase(reason === "abort" ? "正在取消" : reason === "timeout" ? "正在终止超时任务" : "正在终止超限输出", "failed");
@@ -278,7 +287,9 @@ export async function runPiWorker(
 				forceKillTimer.unref();
 			};
 			const abortHandler = () => terminate("abort");
-			timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
+			// The session runtime owns the complete task budget (including Git checks).
+			// Standalone callers retain the independent process deadline by default.
+			if (!control?.managedTimeout) timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
 			if (signal?.aborted) abortHandler(); else signal?.addEventListener("abort", abortHandler, { once: true });
 			const processEvent = (event: any) => {
 				recordThinking(event);
@@ -336,7 +347,7 @@ export async function runPiWorker(
 					upsertTool(event.message.toolCallId, event.message.toolName, event.message.isError ? "failed" : "completed", summarizeToolResult(event.message));
 				}
 			};
-			child.stdout.on("data", (chunk: Buffer) => {
+			child.stdout!.on("data", (chunk: Buffer) => {
 				stdoutBytes += chunk.length;
 				if (stdoutBytes > MAX_WORKER_STDOUT_BYTES) {
 					errorMessage = `Worker 事件流超过 ${MAX_WORKER_STDOUT_BYTES} 字节安全上限`;
@@ -366,7 +377,7 @@ export async function runPiWorker(
 					catch { /* ignore non-JSON diagnostics */ }
 				}
 			});
-			child.stderr.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-65_536); });
+			child.stderr!.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-65_536); });
 			(child as any).on("error", (error: Error) => {
 				activeChildren.delete(child);
 				errorMessage = error.message;
@@ -427,7 +438,7 @@ export function failureDetails(category: string, reason: string) {
 	};
 }
 
-export async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: string[], ctx: ExtensionContext, signal: AbortSignal | undefined, onProgress?: (patch: Partial<WorkerUiTask>) => void, hadConcurrentWriter: () => boolean = () => false): Promise<Record<string, any>> {
+export async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: string[], ctx: ExtensionContext, signal: AbortSignal | undefined, onProgress?: (patch: Partial<WorkerUiTask>) => void, hadConcurrentWriter: () => boolean = () => false, askParent?: AskParent, managedTimeout = false): Promise<Record<string, any>> {
 	const cwd = resolveTaskCwd(ctx.cwd, task.cwd);
 	let route: Route;
 	onProgress?.({ status: "running", phase: "解析模型路由" });
@@ -461,16 +472,21 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 		config.defaultTimeoutMs,
 		config.maxConcurrentWorkers,
 		(progress) => onProgress?.({ phase: progress.phase, activities: progress.activities, toolCalls: progress.toolCalls, usage: progress.usage }),
+		{ askParent, managedTimeout },
 	);
 	onProgress?.({ phase: "校验结果与修改范围", activities: child.activities, toolCalls: child.toolCalls, usage: child.usage });
 	const parsed = parseStructuredResult(child.assistantText);
-	const delta = before ? await changedSince(before, signal) : { changed: [] as string[] };
+	let delta = { changed: [] as string[] };
+	let deltaError: string | undefined;
+	try { if (before) delta = await changedSince(before, signal); }
+	catch (error) { deltaError = `未能校验最终 Git delta：${error instanceof Error ? error.message : String(error)}`; }
 	// Evaluate overlap after the snapshot delta: the scheduler mutates this
 	// execution context when a sibling starts after this task.
 	const attribution = attributeChangedFiles(task, ctx.cwd, delta.changed, hadConcurrentWriter());
 	const actualMismatch = Boolean(child.actualProvider && child.actualModel && `${child.actualProvider}/${child.actualModel}` !== route.modelId);
 	let status: "completed" | "blocked" | "failed" = parsed?.status === "completed" || parsed?.status === "blocked" || parsed?.status === "failed" ? parsed.status : "failed";
 	const risks = Array.isArray(parsed?.risks) ? [...parsed.risks] : [];
+	if (deltaError) { risks.push(deltaError); status = "failed"; }
 	if (attribution.attributedToDeclaredPaths) risks.unshift("任务与兄弟写任务真实重叠并共享 Git worktree；changed_files 已按本任务规范化 allowedPaths 取交集。observed_changed_files 保留快照观察到的完整原始 delta，其中范围外变化的来源无法由共享 worktree 快照证明。");
 	if (runtimeShuttingDown || child.aborted || child.timedOut || child.exitCode !== 0 || child.errorMessage || !parsed || actualMismatch) status = isBlockedFailure(child) ? "blocked" : "failed";
 	if (actualMismatch) risks.push(`实际模型 ${child.actualProvider}/${child.actualModel} 与请求 ${route.modelId} 不一致`);
@@ -485,10 +501,11 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 						: child.truncated ? "protocol_output_limit"
 							: child.exitCode !== 0 ? "process_exit"
 								: child.errorMessage ? "runtime_error"
-									: !parsed ? "invalid_result" : "worker_failed";
+									: !parsed ? "invalid_result" : deltaError ? "workspace_delta" : "worker_failed";
 		const reason = category === "model_mismatch" ? `实际模型与请求不一致: ${child.actualProvider}/${child.actualModel}`
 			: category === "cancelled" ? "Worker 已取消"
 				: category === "timeout" ? "Worker 超时"
+					: category === "workspace_delta" ? deltaError!
 					: String(child.errorMessage ?? summary[0] ?? child.stderr ?? "Worker 执行失败");
 		failure = failureDetails(category, reason);
 	}

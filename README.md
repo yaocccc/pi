@@ -2,77 +2,28 @@
 
 [English](README_EN.md)
 
-这是我的个人 [Pi Coding Agent](https://pi.dev) 配置，包含自定义扩展、主题、快捷键和工作流。仓库用于保存可公开、可复用的配置源码；认证信息、模型密钥、会话记录和个人记忆不应提交，并应通过环境变量或被忽略的本地文件提供。
+这是我的个人 [Pi Coding Agent](https://pi.dev) 配置：自定义扩展、主题、快捷键与工作流，而非通用发行版。仓库只适合存放可公开的配置源码；扩展拥有本机权限，请先审查代码再运行，尤其是第三方扩展。
 
-## 功能
+## 功能概览
 
-- **自定义界面**：启动 Logo、输入框、消息卡片、工作状态和精简 Footer。
-- **上下文检查**：`/context` 展示当前上下文窗口的分类占用，并可预览 System Prompt、Tools、Context Files、Skills、用户/Agent 消息和 Tool Call；详情支持空格翻页。
-- **Codex 用量**：`/usage` 使用 Pi 当前解析的 OpenAI Codex 认证，显示订阅计划、主/次及附加用量窗口、剩余额度、重置时间和 Credits。
-- **结构化提问**：`ask_question` 支持单题单选/多选与自由输入，也可用 `questions` 一次收集多题，在 TUI 中逐题导航并统一确认。
-- **智能提交**：`/commit` 暂存当前全部改动，根据 staged diff 生成简洁的英文 Conventional Commit 信息并提交。
-- **Indexed Memory**：通过 `memory_search` 检索索引、`memory_get` 按需读取详情；模型可用 `memory_summarize` 请求本轮结束后沉淀可复用知识，也可手动执行 `/summarize`。
-- **敏感信息过滤**：在工具结果进入模型上下文前过滤常见 API Key、Token、私钥和连接串。
-- **Fast 模式**：`/fast` 对符合条件的 OpenAI Codex GPT 请求添加 `service_tier: priority`；能否使用该 tier 仍取决于 Provider/模型支持。
-- **Thinking 翻译**：将较短的 Thinking 内容翻译为简体中文，并使用本地持久缓存避免重复翻译。
-- **自动会话命名**：`autoname` 在交互式会话的 Agent 完全 settled 后，使用配置模型判断是否保留或更新简洁的中文会话标题。
-- **Telegram 通知**：可选地将结构化提问、任务输入和最终回复发送到指定聊天。
-- **Worker 编排**：独立 Pi 子进程支持分档路由、冲突感知并发、任务进度与用量反馈，以及 `edit`/`write` 路径守卫（非沙箱）。
-- **SoL-Pi 优化**：Action Fusion 将文件修改与验证命令融合；ObservationPack 将重复的大结果替换为可回读引用；Online Context Compact 在计划步骤完成时评估压缩收益并自动续跑。
-- **Impeccable 设计指令**：`/impeccable` 打开可搜索的指令选择器或直接填入可编辑的 Skill 提示词；本仓库未附带 Impeccable Skill。
-- **扩展包**：通过 `settings.json` 声明 `pi-web-access` 和 `@ff-labs/pi-fff`；未声明 `context-mode`。
-- **主题与快捷键**：自定义 `pi` 深色主题，并使用 `Ctrl+Y` 打开会话恢复界面。
-
-## 目录结构
-
-```text
-.
-├── extensions/                        # TypeScript 扩展
-│   ├── ask-question/                  # 结构化用户提问
-│   ├── autoname/                      # 自动会话命名
-│   ├── context/                       # /context 占用与内容预览
-│   ├── commit/                        # /commit 智能提交
-│   ├── fast/                          # 可选 priority service tier
-│   ├── filter-output/                 # 敏感工具结果过滤
-│   ├── impeccable/                    # /impeccable 指令选择与提示词插入
-│   ├── memory/                        # 分级记忆、工具与 /summarize
-│   ├── sol-pi/                        # Action Fusion、ObservationPack、OCC
-│   ├── telegram/                      # Telegram 任务通知
-│   ├── thinking-translation/          # Thinking 中文翻译与缓存
-│   ├── ui/                            # TUI 定制
-│   ├── usage/                         # /usage Codex 订阅用量
-│   ├── worker/                        # 通用 Worker 工具
-│   │   └── agents/                    # Worker 执行契约
-│   └── herdr-agent-state.ts           # 可选 Herdr 状态桥接文件（不是 herdr/ 目录）
-├── skills/                            # memory、worker-orchestration 两项 Skill
-├── autoname.json                      # 自动会话命名配置
-├── fast.json                          # Fast 模式开关
-├── memory-settings.json               # Memory 总结与结果展示配置
-├── thinking-translation-settings.json # Thinking 翻译配置
-├── worker-settings.json               # Worker 模型、并发与限制
-├── themes/pi.json                     # 自定义主题
-├── keybindings.json                   # 快捷键
-└── settings.json                      # Pi 全局设置
-```
-
-`auth.json`、`models.json`、`models-store.json`、`sessions/`、`memory.md`、`memory-index.md` 和 `memories/` 等本地文件由 `.gitignore` 排除。`.gitignore` 不会保护已经被 Git 跟踪的文件。`extensions/herdr-agent-state.ts` 是受外部 Herdr 管理、仅在相应环境变量齐全时启用的桥接文件；仓库没有 `herdr/` 目录。
+- 自定义 TUI：界面、深色主题和 `Ctrl+Y` 会话恢复。
+- `/context` 查看上下文占用；`/usage` 查看 Codex 用量。
+- `ask_question` 支持单选、多选和多题确认；并发问卷排队显示，避免互相覆盖。`/commit` 生成 Conventional Commit 信息并提交（会暂存全部改动）。
+- `/fast` 为符合条件的 Codex 请求尝试 priority tier；Thinking 翻译和自动中文会话命名可按需使用。
+- `/impeccable` 选择设计指令并插入可编辑提示词；本仓库不附带对应 Skill。
+- Indexed Memory 按需检索本地记忆，也可用 `/summarize` 请求总结；记忆内容不随仓库分发。
+- [Worker](#worker) 在独立 Pi 子进程中协助完成指定任务；Fast、Normal、Deep 可自动选择，**Max 仅在用户明确要求时使用**。路径检查不是安全沙箱，仍须核对修改。
+- SoL-Pi 提供文件修改后验证、长结果回读与计划步骤间的上下文压缩；工具结果过滤只降低常见敏感信息泄露风险，不保证脱敏。
 
 ## 安装
 
-### 前置要求
-
-- Node.js 22+
-- [Pi Coding Agent](https://github.com/earendil-works/pi)；当前 SoL-Pi OCC 已针对 **0.87.1** 验证，升级 Pi 后需重新验证兼容性。
-
-安装 Pi：
+需要 Node.js **22.19+** 与 [Pi Coding Agent](https://github.com/earendil-works/pi)。SoL-Pi 的 OCC 目前针对 Pi **0.87.1** 验证；升级 Pi 后需重新检查兼容性。
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
 
-### 使用此配置
-
-先备份已有配置，再将仓库克隆到 Pi 的全局配置目录：
+先备份已有的个人 agent 目录（若存在）；确认备份目标不存在，以免覆盖。将 `<repository-url>` 换成此仓库地址：
 
 ```bash
 mv ~/.pi/agent ~/.pi/agent.backup
@@ -80,166 +31,83 @@ git clone <repository-url> ~/.pi/agent
 npm ci --prefix ~/.pi/agent/extensions
 ```
 
-`npm ci --prefix` 在 `extensions/` 内按 `package-lock.json` 安装本地扩展依赖（例如 `node-telegram-bot-api`、`typebox`）；不要把这一步当成 Pi 管理的扩展包安装。启动 Pi 后，`settings.json` 声明的两个 npm 扩展包由 Pi 另行管理：
+启动 Pi：
 
 ```bash
 pi
 ```
 
-首次使用时执行 `/login` 配置认证。如需自定义 Provider 或模型，请在本地重新创建 `~/.pi/agent/models.json`，并优先通过环境变量引用密钥；该文件不会被 Git 跟踪。配置方式见 [Custom Models](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)。
-
-如果需要恢复原有的本地模型配置，可以从备份复制：
-
-```bash
-cp ~/.pi/agent.backup/models.json ~/.pi/agent/models.json
-```
-
-修改扩展、Skill、主题或快捷键后，可在 Pi 中执行 `/reload`。
+如果没有现有 `~/.pi/agent`，跳过 `mv`。`npm ci` 只安装 `extensions/` 锁文件中的本地依赖；启动 Pi 后，`settings.json` 声明的 `pi-web-access`、`@ff-labs/pi-fff` 扩展包由 Pi 另行管理。首次使用执行 `/login`；更改扩展、Skill、主题或快捷键后执行 `/reload`。
 
 ## 常用命令
 
-| 命令 | 说明 |
+| 命令 | 用途 |
 | --- | --- |
-| `/context` | 查看上下文分类占用，并预览 System Prompt、Tools、Context Files、Skills 和消息内容 |
-| `/usage` | 查看当前 OpenAI Codex 账号的订阅用量、剩余额度和重置时间 |
-| `/commit` | 暂存全部改动，根据 staged diff 生成 Conventional Commit 信息并提交 |
-| `/summarize` | 总结当前任务并沉淀可复用的 indexed memory |
-| `/memory_settings` | 交互式配置记忆上限、自动总结、模型、Thinking 及通知 |
-| `/worker_settings` | 交互式配置 Worker 各档模型、Thinking、并发、自动委派、超时和输出上限 |
-| `/impeccable`、`/impeccable <指令>` | 在交互式 TUI 选择设计指令，或直接将指定指令的可编辑提示词写入编辑器（不会自动执行） |
-| `/fast` | 切换支持模型的 priority service tier；状态保存在 `fast.json` |
-| `/thinking_translation` | 切换 Thinking 简体中文翻译 |
-| `/autonameall` | 一次性为所有包含用户文本的未命名历史会话批量生成中文名称 |
-| `/reload` | 重新加载扩展、Skill、主题和快捷键 |
-| `/login` | 配置 Provider 认证 |
-| `/model` | 选择模型 |
-| `Ctrl+Y` | 打开会话恢复界面 |
+| `/login`、`/model` | 配置认证、选择模型 |
+| `/context`、`/usage` | 查看上下文占用、Codex 用量 |
+| `/summarize`、`/memory_settings` | 保存可复用记忆、调整记忆设置 |
+| `/worker_settings` | 调整 Worker 模型与并发等设置 |
+| `/commit` | 暂存全部改动、生成提交信息并提交 |
+| `/fast`、`/thinking_translation` | 切换可选的 priority tier、Thinking 翻译 |
+| `/impeccable`、`/reload` | 选择设计指令、重新加载配置 |
 
-`memory_search`、`memory_get`、`memory_summarize`、`ask_question`、`worker`、`obs_recall` 和 `update_plan` 是供 Agent 调用的工具，不需要手动执行。
-
-`/commit` 会先执行 `git add -A`，再将完整的 staged diff 直接交给当前模型生成一行英文 Conventional Commit 信息，最后执行 `git commit`。该命令不启动 Agent 工具循环；执行前请确认工作区中的全部改动都应包含在同一次提交中。
-
-## Indexed Memory
-
-`skills/memory/SKILL.md` 指导 Agent 先搜索索引、必要时按名读取详情；`memory_search` 同一会话内重复查询会提示复用，`memory_get` 比较当前分支最近读取的版本：相同则提示复用，有更新才返回详情。原生压缩或分支摘要后可重新读取；若 OCC 压缩后返回复用提示但旧内容已不可见，应通过明确的读取路径重新获取，而不能依赖该提示。记忆索引和详情分别保存在被忽略的 `memory-index.md` 与 `memories/`，不随仓库分发。
-
-`/summarize` 手动请求总结；启用自动总结时，Agent 也可通过 `memory_summarize` 排队在本轮完全 settled 后总结。总结上下文只取用户文本与 Assistant 最终文本，不含 Thinking、Tool Call 或 Tool Result；模型可判定没有长期价值而不写入。`/memory_settings` 或 `memory-settings.json` 可设置数量上限、自动总结、模型、思考强度和通知方式；保存后的总结使用新配置，切换自动总结工具的注册状态须 `/reload`。`summarize.resultDisplay` 可选 `message`（写入会话；本仓库当前配置）、`popup`（居中弹窗；代码默认）或 `none`（不通知）；配置缺失/无效时使用代码默认。
-
-TUI 总结在后台运行，可继续编辑和对话；进度组件显示阶段、模型、Token 估算/用量与耗时。模型请求期间按 `Esc` 可取消；进入实际写入阶段后不能取消。选择 `popup` 时结果展示处理状态、记忆标题/字段及用量和耗时，可键盘或鼠标滚动；`message` 模式则在会话中展示结果。
-
-## SoL-Pi 上下文与执行优化
-
-`extensions/sol-pi/` 移植自 [NVlabs/SoL-Pi](https://github.com/NVlabs/SoL-Pi)，保留 MIT 许可，由 Pi 自动发现加载。当前启用以下三个机制，**未引入 Evidence-Preserving Reducer**，也不读取上游 `sol-pi.json` 配置。
-
-### Action Fusion
-
-`edit`、`write` 保留原生参数，新增可选 `then_run`，例如 `{"command":"npm test","timeout":30}`。文件修改成功后才执行命令，并在同一次工具调用中返回结果；命令失败不会回滚修改。不传 `then_run` 时沿用原生行为。
-
-融合命令在内部调用 shell，不产生独立的 `bash` 工具调用事件，因此不会自动经过仅针对 `bash` 的工具调用守卫。它不是沙箱，命令的副作用仍需遵守任务范围。
-
-### ObservationPack
-
-大于 **10 KiB** 的非错误纯文本工具结果，前两次模型请求完整发送，之后替换为带首尾摘录的引用。Agent 可通过 `obs_recall` 按字节偏移分页回读原文；短结果、错误结果和混合媒体结果不打包。
-
-此机制仅改变发给模型的上下文投影，不改写原始会话历史。原文与 JSONL 记录保存在对应会话目录的 `sol-pi/<session-id>/observation-pack/` 下，不自动清理；删除归档后将无法回读。归档及摘录不构成脱敏保障。
-
-### Online Context Compact（OCC）
-
-Agent 使用 `update_plan` 维护完整任务计划。只有本轮成功更新计划、刚完成步骤且仍有未完成工作时，才评估是否压缩；不是每次更新都会触发。估算考虑剩余主轮次、上下文增长、缓存重建成本和窗口压力，默认缓存写/读成本比 **12.5** 仅为启发式，不代表实际账单节省。
-
-满足条件时，OCC 使用当前模型生成原生格式摘要，在 Pi **0.87.1** 的轮次边界提交压缩与剩余计划提醒，再自然续跑。取消、失败或无效摘要不会提交压缩，也不会额外启动续跑。一次压缩可能增加一到两次摘要请求及重试费用，且摘要仍可能丢失细节。
-
-OCC 尊重现有 `compaction.enabled`、`keepRecentTokens` 和 `reserveTokens` 设置；无持久会话时禁用，`PI_WORKER_DEPTH > 0` 的 Worker 不注册 OCC 工具或事件。它不通过 `agent_settled` 重启任务，但其边界压缩不会触发原生 `session_before_compact` / `session_compact` 钩子，依赖这些事件的其他扩展需单独评估兼容性。
-
-### 验证与维护
-
-```bash
-node extensions/sol-pi/tests/run-global.mjs
-node extensions/sol-pi/tests/run-global.mjs --typecheck
-```
-
-已通过 **57 项离线测试**与严格类型检查，包括真实 Pi 0.87.1 AgentSession 下的连续压缩、取消、失败、缓存预热隔离和原有两个机制的回归。测试使用临时目录与已安装的全局依赖，不调用远程模型、不修改依赖或锁文件；类型检查需要已有的全局 TypeScript 编译器。
-
-修改后执行 `/reload` 或新开会话。卸载时仅移除 `extensions/sol-pi/` 并重新加载，历史归档可另行清理。来源、SDK 设置注入和详细兼容约束见 [SoL-Pi 扩展说明](extensions/sol-pi/README.md)。
-
-## 可选运行时功能
-
-### Fast 与 Thinking 翻译
-
-`/fast` 修改 `fast.json` 中的开关。启用后，仅当 Provider 为 `openai-codex`、API 为 `openai-codex-responses` 且模型 ID 以 `gpt` 开头时，为请求添加 `service_tier: priority`；不再限于某三个 GPT-5.6 ID。代码默认关闭，仓库当前 `fast.json` 的 `enabled` 为 `true`。是否实际获准使用 priority tier 由服务端决定；Worker 进程也会加载该扩展。
-
-`/thinking_translation` 修改 `thinking-translation-settings.json` 中的开关。当前配置默认开启，使用配置的模型翻译不超过 200 个字符的 Thinking 内容，并将结果缓存到 `~/.pi/thinking-translations/`。
-
-### Impeccable 设计指令
-
-`/impeccable` 在 TUI 中打开可搜索的设计指令选择器；`/impeccable shape`、`/impeccable hooks status` 等可直接选择目录中的精确指令。扩展只把 `/skill:impeccable <指令>` 模板写入主编辑器，供用户补全目标、审查并提交；它本身不执行设计操作。`extensions/impeccable/commands.ts` 列出可用指令。本仓库的 `skills/` 只有 memory 与 worker-orchestration，未提供 Impeccable Skill；实际执行模板前需另行安装可发现的同名 Skill，否则模板不能实现对应设计流程。
-
-### 自动会话命名
-
-`autoname` 仅在有 UI 的会话中运行，并在每次 `agent_settled` 后检查是否需要命名。它只向命名模型发送活动分支中的用户文本、Assistant 文本和现有会话名，不发送 Thinking、Tool Call、Tool Result、Skills 或 Pi System Prompt。手动设置的会话名不会被覆盖；对于未命名或之前由扩展生成的名称，模型必须返回 `keep` 或 `rename`，新标题要求为简洁中文。
-
-当前仓库配置位于 `autoname.json`：
-
-```json
-{
-  "enabled": true,
-  "notify": true,
-  "cooldownSeconds": 600,
-  "model": "openai-codex/gpt-5.3-codex-spark",
-  "reasoning": "minimal"
-}
-```
-
-`enabled` 控制功能总开关，`notify` 控制名称更新通知。`cooldownSeconds` 以秒为单位，默认 600 秒；设为 `0` 可关闭冷却。每次实际发起命名请求时，扩展都会把时间写入当前会话的 Custom Entry，因此 `/reload` 或恢复会话后仍会遵守当前分支的冷却窗口。`model` 可使用完整的 `provider/model`，也可设为 `auto` 以沿用主会话模型；内置默认值为 `auto`，仓库当前配置则显式使用 `openai-codex/gpt-5.3-codex-spark`。`reasoning` 指定命名请求的思考强度。配置会在每次检查时重新读取，无需 `/reload`；名称实际更新时，通知会显示命名请求的上下文 Token 消耗和耗时。
-
-`/autonameall` 是一次性的历史会话补全命令。它会扫描所有项目的会话，跳过已经命名或不含用户文本的记录，并按顺序使用 `autoname.json` 中的模型和思考强度为其余会话强制生成中文名称。该显式命令不受自动命名开关和冷却窗口限制，也不会改动已有名称；每个实际请求仍会写入冷却记录，避免随后恢复会话时立即再次自动命名。命令结束后会汇报已命名、跳过、失败数量和总耗时。
-
-### Telegram 通知
-
-Telegram 扩展只发送任务通知，不启用 Polling 或远程回复。目前源码读取的目标环境变量是 **`PI_TG_CHAT`**；Bot Token 目前由 `extensions/telegram/index.ts` 中的本地值提供，**`PI_TG_TOKEN` 不是当前实现读取的配置项**。不要提交或公开真实 Token；部署前应审查并改为安全注入，本 README 不包含凭据。缺少 Token 或 Chat ID 时不发送通知。
-
-有 UI 的会话在 `agent_end` 后可发送项目、会话、本轮用户输入与最终文本回复；`ask_question` 的单题 `question`/`options` 会发送等待回复通知（多题 `questions` 不会逐题通知）。发送异常当前被静默忽略，不保证送达，也不支持从 Telegram 回传答案。
+`/commit` 会把完整的 staged diff 发给当前模型；使用前确认所有工作区改动都应进入同一次提交。`memory_search`、`memory_get`、`ask_question` 和 `worker` 等是 Agent 工具，无需手动执行。
 
 ## Worker
 
-`worker` 使用独立、无会话的 Pi 子进程（`--mode json --print --no-session --no-skills --no-context-files`）执行 `scout`、`implement`、`test`、`review` 或 `fix` 任务。Fast、Normal、Deep 可自动路由，Max 仅响应用户明确要求；Deep 是自动路由的最高档。各档模型和 Thinking 配在 `worker-settings.json`，所配模型必须可用。Worker 不显式限制工具列表，会加载全局扩展；`PI_WORKER_DEPTH` 阻止递归委派，SoL-Pi OCC 在 Worker 中禁用。
+`worker` 将边界明确、可独立验收的子任务交给独立 Pi 子进程；子进程不持久化会话，不自动加载 Skills 或 Context Files，也不得创建或调用其他 Worker。主 Agent 负责拆分任务、回答问题、检查实际 diff、验证并最终验收。
 
-TUI Worker 卡片按任务显示排队/运行/完成状态、档位、轮次、用量、耗时、最近工具与思考摘要及完成结论；工作提示汇总主会话和 Worker 的输入/输出 Token。子进程通过 JSON 事件流回报阶段、工具执行和用量，流式用量包含估算值；UI 摘要经截断/常见敏感字段过滤，**不能当作完整脱敏或安全隔离**。取消、超时、输出超限时会尝试终止子进程；失败不自动重试，主 Agent 仍需核对实际 diff。
+启动、回答、继续等待和取消统一使用 `worker` 工具。每个主会话同时只允许一个未完成批次；需要并行的任务应放在同一次调用的 `tasks` 数组中。批量结果按输入顺序返回，各项可分别成功、阻塞或失败。
 
-批量调度在 `maxConcurrentWorkers` 内运行并保持输入结果顺序：只读任务可相互并行；读写互斥；写任务仅在各自 `task.cwd` 与全部 `allowedPaths` 规范化到主工作区后能证明不重叠时并行。无 glob 的路径（即使当前是目录）只表示精确路径；目录后代必须写成 `dir/**`。相同路径、路径节点的祖先/后代关系、重叠的显式子树或 glob 静态目录前缀、符号链接别名以及根级、悬空符号链接或无法静态解析的 glob 均保守视为冲突；调度器可越过被冲突阻塞的队首任务运行后续独立任务。写入任务必须声明允许路径；Worker 子进程只在 `edit` 和 `write` 工具调用前校验 `allowedPaths`、`forbiddenPaths` 与工作目录边界，**不拦截 `bash`、其他扩展工具或 `then_run` 命令**，不能作为文件系统沙箱。只有与兄弟写任务真实重叠的任务才会把 `changed_files` 限制到其规范化声明范围；串行任务保留完整原始 delta。所有结果另以 `observed_changed_files` 暴露完整快照观察路径；共享 Git worktree 下无法证明范围外路径由哪个任务产生，相关说明会写入 `risks`。可通过 `/worker_settings` 交互式调整各档模型与 Thinking、并发、自动委派、超时和输出上限，也可直接编辑 `worker-settings.json`；保存后续 Worker 任务会立即使用新配置。
+结果摘要和 `changed_files` 是 Worker 报告及工作区快照信息，不替代主 Agent 对真实 diff 的检查。
 
-Worker 的主要文件为：
+支持五种 mode：`scout` 只读调查，`implement` 实现，`test` 测试，`review` 只读审查，`fix` 修复已确认的问题。写入模式须声明非空 `allowedPaths`；`relevantFiles` 只是读取提示，不授予写权限。
 
-- `extensions/worker/index.ts`：工具入口与执行编排；`process.ts`、`ui.ts`、`guard.ts` 等负责子进程事件、TUI 与 `edit`/`write` 守卫。
-- `skills/worker-orchestration/SKILL.md`：主 Agent 的拆分、委派、Review 与验收规则。
-- `extensions/worker/agents/worker.md`：Worker 的执行纪律和结构化返回格式。
-- `worker-settings.json`：模型、thinking、并发、超时和最终输出上限配置。
+### 档位与设置
 
-## 隐私与安全
+- **Fast**：明确、局部且容易验证的工作。
+- **Normal**：常规任务，也是无法判断 Fast 或 Deep 时的默认选择。
+- **Deep**：跨模块、根因不明、并发状态等困难任务；它是自动路由的最高复杂度档位。
+- **Max**：不是自动路由档位；只有用户明确要求 Max、最高强度或同等表述时才可使用，不能静默降级。
 
-提交前务必检查暂存区：
+各档模型和 Thinking 均从本机 `worker-settings.json` 读取。使用 `/worker_settings` 可交互调整模型、Thinking、并发、自动委派、超时和输出上限；保存后续任务立即生效。配置的模型必须可用。
 
-```bash
-git status --short --ignored
-git diff --cached
-```
+### 问答与用户确认
 
-`.gitignore` 只能阻止尚未被 Git 跟踪的文件。若敏感文件曾经提交过，需要先将其从 Git 索引和历史中移除，并立即轮换相关密钥。`filter-output` 只过滤进入模型上下文的工具结果，不能替代凭据管理，也不会阻止其他扩展主动发送数据。
+Worker 可通过 `ask_parent` 向真正的主 Agent 提问，不使用额外的协调模型或主会话 fork。`worker` 遇到待答问题时返回，否则等待整批完成，不定时轮询返回。主 Agent 通过同一工具提交一个或多个答案，并继续等待；其他独立任务可同时运行。等待答案的任务仍占用并发槽位与路径锁。
 
-`/context` 的详情只显示在本地 TUI，不会写入会话或额外发送给模型。`/usage` 不直接读取凭据文件，只使用 Pi 解析后的运行时认证，并仅向官方 `https://chatgpt.com` 用量接口发送 Bearer Authorization；自定义或代理 Origin 会被拒绝。执行 `/commit` 时，当前 staged diff 会发送给所选模型用于生成提交信息。
+需要用户决策时，主 Agent 调用 `ask_question`，再明确将答案回传 Worker，用户选择不会自动转发。实际确认界面打开期间，仅待答任务的剩余任务预算和问题超时暂停；新提出的问题也会加入暂停，独立任务继续运行。人工等待有 **30 分钟上限**，正常结束后恢复剩余预算，不重置为完整时长；超出上限按超时或取消处理，不视为批准。排队中的问卷不会额外触发暂停，其排队时间也计入交互上限。
 
-启用 Telegram 通知后，项目名、会话名、本轮用户输入、最终回复及 `ask_question` 单题的问题和选项可能发送至目标聊天；当前 Token 由扩展源码提供而非 `PI_TG_TOKEN`，发布/共享前必须先移除任何真实凭据并轮换已暴露的 Token。启用 Thinking 翻译后，符合长度限制的 Thinking 内容会发送给 `thinking-translation-settings.json` 指定的模型，翻译结果会缓存在 `~/.pi/thinking-translations/`。启用自动会话命名后，活动分支中的用户文本、Assistant 文本和现有会话名会发送给 `autoname.json` 指定的模型；执行 `/autonameall` 时，这一范围会扩展到所有项目中符合条件的未命名历史会话。冷却记录仅作为对应会话的 Custom Entry 保存，不进入模型上下文。使用这些功能前请确认数据接收方和模型符合你的隐私要求。
+取消或退出确认不代表同意。答案不能扩大原任务权限；需要扩大范围时，应先取消、等待清理，再创建新任务。若决策影响正在执行的危险操作，应先取消相关批次，不能把人工等待当作暂停任意运行工具。
 
-默认忽略的内容包括：
+### 并行、进度与验收
 
-- Provider 登录凭据和模型 API Key
-- 会话记录及导出的 JSONL
-- 用户画像、记忆索引和项目记忆详情
-- Pi 下载或安装的 npm/git 包
-- 本地依赖、缓存、日志和临时文件
+批量任务在并发上限内调度：只读任务可并行；读写任务冲突，必须串行；写入任务仅在 `cwd` 与全部声明写路径可解析且确认互不重叠时并行。无法证明独立时按冲突处理，且调度不保证独立 Git worktree。
 
-## 说明
+每个批次只显示最初一张 Worker 卡片，复用 `extensions/ui/` 的统一工具样式；后续回答、等待和取消调用仍保留在模型记录中，但不新增可见卡片。任务状态、工具活动、档位、轮次、用量、耗时、完成摘要及各任务问答在原卡片更新，展开可查看完整问答。不再显示 Batch 编号汇总和正常的执行槽位等待提示；错误与超时诊断仍保留。
 
-这是面向个人工作流的配置，不是通用 Pi 发行版。扩展拥有本机完整权限，请在使用或修改第三方扩展前审查源码。
+进度内容经过截断和常见敏感字段过滤，不是完整脱敏保证。取消、超时或输出超限会尝试终止子进程；取消调用会等待清理完成。失败交由主 Agent 检查处理，不自动重试。重载、会话切换或树导航会清理后台任务；历史卡片使用当前分支最新的持久化快照，不恢复子进程。
 
-`/usage` 依赖 ChatGPT 的非公开用量接口，服务端字段或可用性可能变化；当前仅支持官方 OpenAI Codex Origin。
+`cwd` 必须位于主工作目录内；`allowedPaths`/`forbiddenPaths` 只在 `edit`、`write` 工具调用前检查。它们不是 shell 或文件系统沙箱，不能限制 `bash`、其他扩展工具或 `then_run` 命令；不要把它们视为隔离边界。主 Agent 必须检查实际修改、原有工作区改动、验证证据和任务范围，再决定是否验收。
+
+协议、限制及测试命令见 [Worker 扩展文档](extensions/worker/README.md)。
+
+## 配置与安全
+
+- `settings.json` 声明 Pi 扩展包；`worker-settings.json`、`memory-settings.json`、`fast.json`、`autoname.json` 与 `thinking-translation-settings.json` 控制对应功能。
+- 登录凭据与模型密钥（如 `auth.json`、`models.json`、`models-store.json`）、会话和记忆（如 `sessions/`、`memory-index.md`、`memories/`）应保留在被忽略的本地文件中，不要提交或复制到公开仓库。
+- 自定义模型配置应在本地创建，并优先通过环境变量引用密钥；参见 [模型配置](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)。
+- `.gitignore` 不会保护已跟踪的文件；发布前检查 `git status --short --ignored` 和 `git diff --cached`。若凭据已泄露，应移除公开内容并轮换密钥。
+- Telegram 通知默认不使用；如需启用，先审查扩展源码并安全配置聊天目标与 Bot Token，**不要将凭据写入仓库**。通知可能把任务输入、回复和提问发往目标聊天，且不保证送达。
+- Thinking 翻译与自动会话命名可能向各自配置的模型发送对话内容；使用前确认接收方。
+- `/usage` 依赖可能变化的非公开 Codex 用量接口。工具结果过滤不能代替凭据管理或限制扩展的本机权限。
+
+## SoL-Pi
+
+`extensions/sol-pi/` 提供三项机制：
+
+1. **Action Fusion**：`edit`/`write` 可在成功修改后通过 `then_run` 执行验证命令；命令失败不回滚修改，命令本身也不是沙箱。
+2. **ObservationPack**：将重复的大型纯文本结果换成可用 `obs_recall` 回读的引用；归档保留在本地会话目录，不自动清理或脱敏。
+3. **Online Context Compact（OCC）**：在合适的计划步骤完成后评估压缩并继续任务；摘要可能丢失细节，且会产生额外模型请求与费用，并非省钱保证。OCC 针对 Pi **0.87.1**，在 Worker 中禁用。
+
+来源、配置、兼容限制及离线测试命令见 [SoL-Pi 扩展文档](extensions/sol-pi/README.md)。

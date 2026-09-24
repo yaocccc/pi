@@ -62,6 +62,62 @@ test("truncated tool lines preserve an enclosing ANSI background", () => {
 	assert.match(framed, /…\x1b\[39m {10}\x1b\[49m$/);
 });
 
+test("questions and answers stay inside the matching worker block without duplication", () => {
+	const batchId = "batch-long-id";
+	const task = (index: number) => ({
+		index, mode: "scout" as const, objective: `worker-${index + 1}`, status: "running" as const,
+		requestedPreset: "fast" as const, attempt: 0, phase: "运行", activities: [], toolCalls: 0,
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, turns: 0 },
+	});
+	const details: WorkerUiDetails = {
+		kind: "worker-ui", batchId, startedAt: 1, limit: 3, total: 3, completed: 0,
+		tasks: [task(0), task(1), task(2)],
+		questions: [
+			{ id: "question-1", batchId, taskId: `${batchId}:1`, status: "answered", question: "first question", answer: "first answer", askedAt: 1, expiresAt: 10, timeoutMs: 9 },
+			{ id: "question-2", batchId, taskId: `${batchId}:2`, status: "waiting", question: "second question", askedAt: 1, expiresAt: 10, timeoutMs: 9 },
+			{ id: "question-3", batchId, taskId: `${batchId}:3`, status: "answered", question: "third question", answer: "third answer", askedAt: 1, expiresAt: 10, timeoutMs: 9 },
+		],
+	};
+	const theme = { fg: (_: string, text: string) => text } as Theme;
+	const rendered = renderWorkerDetails(details, theme).render(1_000).join("\n");
+	const blocks = rendered.split("─".repeat(24));
+	assert.equal(blocks.length, 3);
+	assert.match(blocks[0]!, /first question[\s\S]*first answer/);
+	assert.doesNotMatch(blocks[0]!, /second question|third question|second answer|third answer/);
+	assert.match(blocks[1]!, /等待回答[\s\S]*second question/);
+	assert.doesNotMatch(blocks[1]!, /first question|third question|first answer|third answer/);
+	assert.match(blocks[2]!, /third question[\s\S]*third answer/);
+	assert.doesNotMatch(blocks[2]!, /first question|second question|first answer|second answer/);
+	assert.equal((rendered.match(/first answer/g) ?? []).length, 1);
+	assert.equal((rendered.match(/third answer/g) ?? []).length, 1);
+	assert.doesNotMatch(rendered, /question-1|question-2|question-3/);
+});
+
+test("worker details omit batch and scheduling rows while retaining task and timeout diagnostics", () => {
+	const batchId = "batch-render-test";
+	const details: WorkerUiDetails = {
+		kind: "worker-ui", batchId, startedAt: 1, limit: 1, total: 1, completed: 0,
+		controlErrors: [{ toolCallId: "call-1", message: "真正控制错误" }],
+		tasks: [{
+			index: 0, mode: "scout", objective: "保留目标", status: "running", requestedPreset: "fast", attempt: 0,
+			phase: "等待执行槽位", activities: [
+				{ id: "phase:slot", type: "phase", status: "running", label: "等待执行槽位", at: 1 },
+				{ id: "phase:timeout", type: "phase", status: "failed", label: "等待执行槽位超时", at: 2 },
+			], toolCalls: 0,
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, turns: 0 },
+		}],
+	};
+	const theme = { fg: (_: string, text: string) => text } as Theme;
+	for (const expanded of [false, true]) {
+		const rendered = renderWorkerDetails(details, theme, { expanded }).render(1_000).join("\n");
+		assert.doesNotMatch(rendered, /Batch |batch-render-test|等待主 Agent（占用槽位与路径锁）|等待执行槽位(?!超时)/);
+		assert.match(rendered, /◌ scout/);
+		assert.match(rendered, /保留目标/);
+		assert.match(rendered, /真正控制错误/);
+		assert.match(rendered, /等待执行槽位超时/);
+	}
+});
+
 test("worker details display the complete objective", () => {
 	const objective = `检查并修复 Worker 工具目标显示。${"完整目标内容".repeat(30)}目标结束`;
 	const details: WorkerUiDetails = {

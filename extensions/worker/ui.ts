@@ -276,6 +276,8 @@ export function workerUsageText(usage: WorkerUsage, active = false): string {
 export function cloneUiDetails(details: WorkerUiDetails): WorkerUiDetails {
 	return {
 		...details,
+		questions: details.questions?.map((question) => ({ ...question })),
+		controlErrors: details.controlErrors?.map((error) => ({ ...error })),
 		tasks: details.tasks.map((task) => ({ ...task, activities: task.activities.map((activity) => ({ ...activity })), usage: { ...task.usage } })),
 	};
 }
@@ -302,9 +304,9 @@ export function uiActivityLine(activity: WorkerUiActivity, theme: Theme): string
 	return `${prefix}${detail ? theme.fg("dim", ` · ${detail}`) : ""}`;
 }
 
-export function uiDuration(task: WorkerUiTask): string | undefined {
+export function uiDuration(task: WorkerUiTask, now = Date.now()): string | undefined {
 	if (!task.startedAt) return undefined;
-	const elapsed = (task.finishedAt ?? Date.now()) - task.startedAt;
+	const elapsed = Math.max(0, (task.finishedAt ?? now) - task.startedAt);
 	if (elapsed < 1000) return `${elapsed}ms`;
 	if (elapsed < 60_000) return `${(elapsed / 1000).toFixed(elapsed < 10_000 ? 1 : 0)}s`;
 	return `${Math.floor(elapsed / 60_000)}m${Math.floor((elapsed % 60_000) / 1000)}s`;
@@ -317,11 +319,13 @@ export function workerConclusions(task: WorkerUiTask): string[] {
 		.filter((item): item is string => Boolean(item));
 }
 
-export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme) {
+export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme, options: { expanded?: boolean; snapshot?: boolean } = {}) {
+	const questions = details.questions ?? [];
 	let text = "";
+	for (const error of details.controlErrors ?? []) text += `${theme.fg("error", `控制错误：${sanitizeUiText(error.message)}`)}\n`;
 	for (const [position, task] of details.tasks.entries()) {
 		if (position > 0) text += `\n${theme.fg("borderMuted", "─".repeat(24))}\n`;
-		const duration = uiDuration(task);
+		const duration = uiDuration(task, options.snapshot ? details.snapshotAt ?? details.finishedAt ?? details.startedAt : Date.now());
 		const usage = workerUsageText(task.usage, task.status === "running");
 		const preset = task.resolvedPreset ?? task.requestedPreset;
 		const runtime = [preset, usage, duration].filter(Boolean).join(" · ");
@@ -330,12 +334,32 @@ export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme) {
 		text += `\n  ${theme.fg("toolOutput", objective)}`;
 		const conclusions = workerConclusions(task);
 		for (const activity of task.activities.slice(-UI_RECENT_ACTIVITY_LIMIT)) {
+			if (activity.type === "phase" && activity.status !== "failed" && /等待执行槽位/.test(activity.label) && !/超时|取消|失败/.test(activity.label)) continue;
 			text += `\n  ${uiActivityLine(activity, theme)}`;
 			if (conclusions.length && activity.id === "phase:finished" && activity.status === "completed") {
 				text += theme.fg("muted", "，结论:");
 				for (const conclusion of conclusions) text += `\n    ${theme.fg("toolOutput", `• ${conclusion}`)}`;
 			}
 		}
+		const taskQuestions = details.batchId
+			? questions.filter((question) => question.taskId === `${details.batchId}:${task.index + 1}`)
+			: [];
+		const recent = taskQuestions.filter((question) => question.status !== "waiting").slice(-2);
+		const shown = options.expanded ? taskQuestions : [...taskQuestions.filter((question) => question.status === "waiting"), ...recent];
+		for (const question of shown) {
+			const questionNumber = taskQuestions.indexOf(question) + 1;
+			const questionState = question.status === "waiting" && question.pausedUntil ? "等待用户确认（预算暂停，最多 30 分钟）" : { waiting: "等待回答", answered: "已回答", expired: "已过期", cancelled: "已取消" }[question.status];
+			const questionLabel = `Q${questionNumber}${options.expanded ? ` · ${question.id}` : ""} · ${questionState}`;
+			text += `\n  ${theme.fg(question.status === "waiting" ? "warning" : "muted", questionLabel)}`;
+			const body = (value: string) => options.expanded ? sanitizeUiText(value) : uiSnippet(value, UI_DETAIL_CAP);
+			text += `\n    Q: ${body(question.question)}`;
+			if (question.answer !== undefined) text += `\n    A: ${body(question.answer)}`;
+		}
+		if (taskQuestions.length && !options.expanded) text += `\n  ${theme.fg("dim", `展开工具查看完整问答（${taskQuestions.length} 条）`)}`;
 	}
-	return new Text(text, 0, 0);
+	const component = new Text(text, 0, 0);
+	return {
+		invalidate: () => component.invalidate(),
+		render: (width: number) => width <= 0 ? [] : component.render(width).map((line) => truncateToWidth(line, width)),
+	};
 }

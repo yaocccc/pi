@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
+import { QuestionInteractions } from './interaction.ts';
 
 interface AskQuestionDetails {
     question: string;
@@ -116,7 +117,7 @@ const questionnaireDetails = (questions: AskQuestionInput[], answers: Array<Ques
     }),
 });
 
-const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, ctx: ExtensionContext) => {
+const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, ctx: ExtensionContext, interactions: QuestionInteractions, signal?: AbortSignal) => {
     const questions = params.questions.map((question) => ({
         question: question.question,
         label: question.label?.replace(/[\r\n\t]+/g, ' ').trim() || undefined,
@@ -124,7 +125,7 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
         multiSelect: question.multiSelect === true,
     }));
 
-    if (!ctx.hasUI) {
+    if (!ctx.hasUI || ctx.mode !== 'tui') {
         const details = questionnaireDetails(questions, []);
         return {
             content: [{ type: 'text' as const, text: `需要询问用户（${questions.length} 个问题）：\n${questions.map((q, i) => `${q.label || `问题 ${i + 1}`}：${q.question}\n${q.multiSelect ? '可多选：' : '选项：'}${q.options.join(' / ')}`).join('\n')}` }],
@@ -132,7 +133,7 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
         };
     }
 
-    const result = await ctx.ui.custom<{ answers: Array<QuestionnaireAnswer | undefined>; cancelled: boolean } | null>((tui, theme, _keybindings, done) => {
+    const result = await interactions.custom<{ answers: Array<QuestionnaireAnswer | undefined>; cancelled: boolean }>(ctx, signal, (tui, theme, _keybindings, done) => {
         let currentTab = 0;
         let inputMode = false;
         let warning: string | undefined;
@@ -385,7 +386,8 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
         };
     });
 
-    const indexedAnswers = questions.map((_question, index) => result?.answers[index]);
+    // Esc cancels the submission, including any unsubmitted draft choices.
+    const indexedAnswers = questions.map((_question, index) => result && !result.cancelled ? result.answers[index] : undefined);
     const details = questionnaireDetails(questions, indexedAnswers);
     details.cancelled = !result || result.cancelled;
     if (!result || result.cancelled) {
@@ -396,10 +398,14 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
 };
 
 const askQuestion = (pi: ExtensionAPI) => {
+    const interactions = new QuestionInteractions(pi.events);
+    pi.on('session_shutdown', () => interactions.shutdown());
+    pi.on('session_tree', () => interactions.shutdown());
+    pi.on('session_start', () => interactions.shutdown());
     pi.registerTool({
         name: 'ask_question',
         label: '提问用户',
-        description: '向用户提一个或多个问题，让用户从选项中选择、复选多项或自己输入。多个问题可逐题导航并在最后统一提交。需要用户决策、确认或补充信息时使用。',
+        description: '向用户提一个或多个问题，让用户从选项中选择、复选多项或自己输入。多个问题可逐题导航并在最后统一提交。需要用户决策、确认或补充信息时使用。相关问题优先合并到 questions；并发调用会按顺序展示，排队期间不新增人工等待暂停。',
         promptSnippet: '向用户提问，支持单选/多选及一次展示多个问题，并允许用户自己输入答案',
         promptGuidelines: [
             '当你需要用户决策、确认方案或补充信息才能继续时，必须调用 ask_question，而不要只在普通文本里提问。',
@@ -412,7 +418,7 @@ const askQuestion = (pi: ExtensionAPI) => {
 
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             if (params.questions && params.questions.length > 0) {
-                return executeQuestionnaire({ questions: params.questions as AskQuestionInput[] }, ctx);
+                return executeQuestionnaire({ questions: params.questions as AskQuestionInput[] }, ctx, interactions, _signal);
             }
 
             if (typeof params.question !== 'string' || !Array.isArray(params.options)) {
@@ -422,7 +428,7 @@ const askQuestion = (pi: ExtensionAPI) => {
             const options = normalizeOptions(params.options);
             const multiSelect = params.multiSelect === true;
 
-            if (!ctx.hasUI) {
+            if (!ctx.hasUI || ctx.mode !== 'tui') {
                 return {
                     content: [{ type: 'text', text: `需要询问用户：${params.question}\n${multiSelect ? '可多选：' : '选项：'}${options.join(' / ')}` }],
                     details: { question: params.question, options, answer: null, multiSelect } as AskQuestionDetails,
@@ -431,7 +437,7 @@ const askQuestion = (pi: ExtensionAPI) => {
 
             const allOptions: DisplayOption[] = [...options.map((label) => ({ label })), { label: '自己输入…', isCustom: true }];
 
-            const result = await ctx.ui.custom<AskQuestionResult | null>((tui, theme, _keybindings, done) => {
+            const result = await interactions.custom<AskQuestionResult>(ctx, _signal, (tui, theme, _keybindings, done) => {
                 let selectedIndex = 0;
                 let inputMode = false;
                 let warning: string | undefined;

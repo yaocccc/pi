@@ -22,7 +22,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { runtimeRoot } from "../../runtime-paths.ts";
-import { formatSavingsCount, renderSolPiTool, showSolPiSavings } from "../../tui.ts";
+import { renderSolPiTool } from "../../tui.ts";
 import { createLedger, type Ledger } from "./ledger.ts";
 import {
 	countLines,
@@ -190,13 +190,6 @@ export function createObservationPackExtension(): ExtensionFactory {
 						placeholderTokens,
 						removedTokens,
 					});
-					if (previousSends === FULL_SENDS) {
-						showSolPiSavings(
-							ctx,
-							"Observation Pack",
-							formatSavingsCount(removedTokens, "context tokens avoided"),
-						);
-					}
 					projected[index] = { ...message, content: [{ type: "text", text: placeholder }] };
 					sentCounts.set(sendCountKey, previousSends + 1);
 				} catch (error) {

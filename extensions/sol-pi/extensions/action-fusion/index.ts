@@ -29,11 +29,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { resolveToolPath } from "./file-queue.ts";
-import { renderSolPiTool, showSolPiSavings } from "../../tui.ts";
+import { renderSolPiTool } from "../../tui.ts";
 import {
 	createThenRunSchema,
 	executeMutationThenRun,
-	THEN_RUN_SUCCEEDED,
 	type ThenRunInput,
 } from "./then-run.ts";
 
@@ -97,12 +96,6 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 					ctx,
 					mutate: () => baseEdit(ctx.cwd).execute(toolCallId, editInput, signal, onUpdate, ctx),
 				});
-				if (
-					then_run &&
-					result.content.some((block) => block.type === "text" && block.text.includes(THEN_RUN_SUCCEEDED))
-				) {
-					showSolPiSavings(ctx, "Action Fusion", "1 model round-trip avoided");
-				}
 				return result;
 			},
 			renderCall: (args, theme, context) => {
@@ -131,12 +124,6 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 					ctx,
 					mutate: () => baseWrite(ctx.cwd).execute(toolCallId, writeInput, signal, onUpdate, ctx),
 				});
-				if (
-					then_run &&
-					result.content.some((block) => block.type === "text" && block.text.includes(THEN_RUN_SUCCEEDED))
-				) {
-					showSolPiSavings(ctx, "Action Fusion", "1 model round-trip avoided");
-				}
 				return result;
 			},
 			renderCall: (args, theme, context) => {
