@@ -61,7 +61,7 @@ Starting, answering, continuing to wait, and cancelling all use the single `work
 
 The summary and `changed_files` report Worker claims and workspace snapshot information; they do not replace the main agent's inspection of the actual diff.
 
-Five modes are supported: `scout` for read-only investigation, `implement` for implementation, `test` for testing, `review` for read-only review, and `fix` for confirmed issues. Write modes must declare non-empty `allowedPaths`; `relevantFiles` are read hints and grant no write access.
+Five modes are supported: `scout` for read-only investigation, `implement` for implementation, `test` for testing, `review` for read-only review, and `fix` for confirmed issues. Write modes must declare non-empty `allowedPaths`; `relevantFiles` are read hints and grant no write access. `allowedPaths` and `forbiddenPaths` are relative to `task.cwd`: `backend/file.ts` matches exactly one file (including a new file), while directory descendants require `backend/**`. Existing bare directories such as `backend`, `./backend`, or `backend/` fail validation before any batch task starts, with a `backend/**` suggestion. Use `backend/**` even for directories not yet created; a nonexistent bare path is not assumed to be a directory. Use `/**` to exclude directory descendants in `forbiddenPaths` too.
 
 ### Tiers and settings
 
@@ -82,7 +82,7 @@ Cancelling or leaving a confirmation is not consent. Answers cannot expand the o
 
 ### Parallelism, progress, and acceptance
 
-Batch tasks are scheduled up to the concurrency limit: read-only tasks may run in parallel; read/write tasks conflict and must run serially; writers run in parallel only when `cwd` and all declared write paths can be resolved and proven disjoint. Unprovable independence is treated as a conflict; scheduling does not promise independent Git worktrees.
+Batch tasks are scheduled up to the concurrency limit: read-only tasks may run in parallel; read/write tasks conflict and must run serially; writers run in parallel only when `cwd` and all declared write paths can be resolved and proven disjoint. Unprovable independence is treated as a conflict; scheduling does not promise independent Git worktrees. Sessions in the same process own separate children, slots, and cleanup. Separate Pi windows have isolated control channels but may still share a worktree; path locks do not span windows.
 
 Each batch uses only its original Worker card, styled consistently with the tools in `extensions/ui/`. Follow-up answer, wait, and cancel calls remain in the model transcript but add no visible cards. Task status, tool activity, tier, turns, usage, elapsed time, completion summaries, and all per-task Q&A display in full on the original card by default. Batch-ID summary lines and routine execution-slot waiting notices are omitted; errors and timeout diagnostics remain visible.
 
@@ -90,7 +90,7 @@ Progress is truncated and filtered for common sensitive fields; this does not gu
 
 `cwd` must remain inside the main working directory. `allowedPaths`/`forbiddenPaths` are checked only before `edit` and `write` tool calls. They are not a shell or filesystem sandbox and do not constrain `bash`, other extension tools, or `then_run` commands; do not treat them as an isolation boundary. The main agent must inspect actual changes, pre-existing worktree modifications, verification evidence, and task scope before accepting the result.
 
-For protocol details, limits, and test commands, see the [Worker extension documentation](extensions/worker/README.md).
+Unexpected disconnection during a pending question fails and cleans up the worker, even if it catches the IPC error and claims success. There is no automatic reconnect or redispatch. Failure diagnostics retain termination sources and necessary process identifiers; they cannot establish why historical runs were cancelled. Custom SDK hosts must emit and await `session_shutdown`: bare `AgentSession.dispose()` in Pi 0.87.1 does not emit it. See the [Worker extension documentation](extensions/worker/README.md) for protocol details, host limitations, and test commands.
 
 ## Configuration and security
 

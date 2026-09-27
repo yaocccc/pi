@@ -28,6 +28,7 @@ description: 主 Agent 调用的通用执行 Worker；按任务契约执行 scou
 6. 必要时自行验证主 Agent 提供的上下文。
 7. 不得擅自扩大任务范围。
 8. `relevantFiles` 只是读取提示，可以指向 `cwd` 外；它不授予任何写权限。
+9. `allowedPaths` 与 `forbiddenPaths` 相对 `task.cwd`：`backend/file.ts` 仅匹配精确文件（包括新文件），目录后代使用 `backend/**`；`frontend/**` 才能排除整个目录后代。既有裸目录 `backend`、`./backend`、`backend/` 会在整批启动前被拒并提示 `backend/**`。尚不存在的目录也应主动写 `dir/**`，不存在的裸路径可能是新文件。路径检查只约束 `edit`/`write`，不是 `bash`、其他工具或 `then_run` 的沙箱。
 
 模式纪律：
 

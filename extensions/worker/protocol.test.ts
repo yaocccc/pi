@@ -97,6 +97,24 @@ test("invalid starts admit no work; continuations bypass routing/delegation sett
 	} finally { await h.close(); }
 });
 
+test("one invalid directory scope rejects the entire batch before routing or subprocess execution", async () => {
+	let starts = 0;
+	const h = harness(async () => { starts++; return complete; });
+	try {
+		const result = payload(await h.call({ tasks: [
+			{ mode: "implement", objective: "backend", allowedPaths: ["extensions/worker"] },
+			{ mode: "implement", objective: "frontend", allowedPaths: ["README.md"] },
+		] }));
+		assert.equal(result.status, "failed");
+		assert.match(result.validation_errors[0].errors[0], /extensions\/worker\/\*\*/);
+		assert.deepEqual(result.validation_errors[1].errors, []);
+		assert.equal(h.loads(), 0);
+		assert.equal(starts, 0);
+		assert.equal(payload(await h.call({ task: { mode: "implement", objective: "valid", allowedPaths: ["README.md"] } })).finished, true);
+		assert.equal(starts, 1);
+	} finally { await h.close(); }
+});
+
 test("batch answers are atomic, reject foreign/duplicate IDs and support parallel multi-round Q&A", async () => {
 	let answered = 0;
 	const h = harness(async (task, _config, _warnings, _ctx, signal, _progress, _overlap, ask) => {

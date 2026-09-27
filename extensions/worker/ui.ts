@@ -86,6 +86,8 @@ function compactExecution(value: unknown, profile: ResultCompactProfile): unknow
 		exit_code: execution.exit_code,
 		timed_out: execution.timed_out,
 		cancelled: execution.cancelled,
+		termination: execution.termination,
+		termination_source: execution.termination_source,
 		warnings: execution.warnings,
 	}, profile);
 }

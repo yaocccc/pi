@@ -6,7 +6,7 @@ import { Check } from "typebox/value";
 import { MODES, PRESETS, loadRoutingConfig, validateTask } from "./config.ts";
 import { WORKER_USAGE_EVENT, type WorkerUsageSnapshot } from "./events.ts";
 import { registerWorkerWriteGuard } from "./guard.ts";
-import { beginWorkerShutdown, executeTask, killAllChildren, resetWorkerRuntime } from "./process.ts";
+import { beginWorkerShutdown, createWorkerOwner, executeTask } from "./process.ts";
 import { workerTaskScopesConflict } from "./security.ts";
 import { configureWorkerSettings } from "./settings-ui.ts";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
@@ -14,6 +14,7 @@ import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, renderWorkerDeta
 import { WorkerRenderRefresh } from "./render-refresh.ts";
 import { WorkerRuntime, type Batch, type QuestionRecord } from "./runtime.ts";
 import { ANSWER_LIMIT } from "./ipc.ts";
+import { present } from "./presentation.ts";
 import { emptyWorkerComponent, workerBranchSnapshots, WORKER_SNAPSHOT_ENTRY } from "./history.ts";
 
 export const TOOL_DESCRIPTION = `Use this tool autonomously for bounded, independently verifiable coding subtasks. Do not ask the user before delegating suitable tasks. Use Fast for clear local work, Normal for normal development, and Deep for difficult work. Deep is the highest automatic task-complexity level. Use Max only when the user explicitly requests Max, xhigh, or maximum strength, and set userExplicitMax: true. Read the worker-orchestration skill when decomposition, parallelization, routing, review, or acceptance strategy is non-trivial. Workers may not create other workers. Failed Worker tasks are returned to the main agent for direct handling and are not automatically retried. The main agent remains responsible for reviewing the diff, validation, and acceptance evidence. Single-tool protocol: only ONE unfinished batch per session. To parallelize, put independent tasks in the SAME tasks array; never launch separate starts in one tool-call round. Starting another batch before the current one finishes returns activeBatchId immediately: answer/continue/cancel that batch first. Start with exactly one of task/tasks (optional manual); continue with {batchId}; answer with {batchId, answers:[{taskId, questionId, answer}]}; cancel with {batchId, cancel:true}. Do not mix start and continuation fields or answers and cancel. Uses exact questions[].id as questionId. Answers are validated together before any are applied; duplicate, expired and foreign IDs are errors. Answers cannot expand task permissions. Start/continue/answer waits until a pending question or the entire batch finishes, without a polling timeout. A question returns immediately while independent tasks continue in the background; answering then waits for the next question or completion. Waiting workers retain concurrency slots and path locks. If a decision requires user judgment, call ask_question as a normal quick interaction. Task and question deadlines continue during user confirmation and UI queueing; no extra time is reserved and late answers cannot revive expired work. Independent work continues. User answers are NOT forwarded automatically: the real main Agent must explicitly answer the exact Worker question IDs. Esc/cancellation is not consent. For global dangerous decisions first cancel relevant batches; expanding permissions requires cancellation, cleanup and a new task. The original batch card shows all live Q&A; valid follow-up calls render no new card. Cancel waits for cleanup and lock release. Aborting ANY active invocation cancels its batch and waits for cleanup; aborting after it returned has no effect. No automatic follow-up messages are queued: keep calling worker for unfinished batches before finishing your turn. Do not modify paths locked by background workers.`;
@@ -25,8 +26,8 @@ export const TaskSchema = Type.Object({
 	userExplicitMax: Type.Optional(Type.Boolean({ description: "Must be true only when the user explicitly requested Max or maximum strength" })),
 	context: Type.Optional(Type.String()),
 	relevantFiles: Type.Optional(Type.Array(Type.String({ description: "Read hints may be relative, absolute, or outside cwd; they do not grant write access" }))),
-	allowedPaths: Type.Optional(Type.Array(Type.String())),
-	forbiddenPaths: Type.Optional(Type.Array(Type.String())),
+	allowedPaths: Type.Optional(Type.Array(Type.String({ description: "Write scope relative to task.cwd: exact files (including new files) or globs. For directory children use dir/**, never a bare existing directory or dir/; existing directory declarations are rejected before any task starts. Not a shell/filesystem sandbox." }))),
+	forbiddenPaths: Type.Optional(Type.Array(Type.String({ description: "Write exclusions relative to task.cwd: exact files or globs. To exclude directory children use dir/**, not a bare existing directory or dir/; directory declarations are rejected before any task starts." }))),
 	acceptanceCriteria: Type.Optional(Type.Array(Type.String())),
 	verificationCommands: Type.Optional(Type.Array(Type.String())),
 	outputRequirements: Type.Optional(Type.Array(Type.String())),
@@ -135,16 +136,17 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 			const batch = runtime.batches.get(id);
 			return batch ? batchUiSnapshot(batch) : undefined;
 		}, undefined, (id) => history.get(id), awaitingHistory);
-		return { runtime, refresh, history };
+		return { runtime, refresh, history, processes: createWorkerOwner() };
 	};
 	let session = createSession([], true);
 	let initialized = false;
-	resetWorkerRuntime();
 	const shutdown = async () => {
 		stopped = true;
 		const owner = session;
-		beginWorkerShutdown();
-		try { await owner.runtime.dispose(); }
+		// Abort task controllers first so execution retains the session shutdown source.
+		const disposal = owner.runtime.dispose();
+		beginWorkerShutdown(owner.processes);
+		try { await disposal; }
 		finally { owner.refresh.dispose(); }
 	};
 	const restart = async (_event: unknown, ctx: any) => {
@@ -152,7 +154,6 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 		await shutdown();
 		session = createSession(ctx?.sessionManager?.getBranch() ?? []);
 		stopped = false;
-		resetWorkerRuntime();
 	};
 	pi.on("session_shutdown", shutdown);
 	pi.on("session_start", async (event, ctx) => {
@@ -218,7 +219,8 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 					const owner = session.runtime;
 					const batch = owner.get(input.batchId);
 					// A pre-aborted continuation must not deliver answers or leave orphan work.
-					if (input.cancel || signal?.aborted) owner.cancel(batch.id);
+					if (signal?.aborted) owner.cancel(batch.id, "Worker 调用已取消", "invocation_abort");
+					else if (input.cancel) owner.cancel(batch.id);
 					else if (input.answers) owner.replyMany(batch.id, input.answers);
 					await owner.wait(batch.id, signal);
 					return batchResponse(batch, input.questionOffset);
@@ -249,7 +251,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 			};
 			const emitTaskUsage = (task: WorkerUiDetails["tasks"][number]) => {
 				const snapshot: WorkerUsageSnapshot = { taskId: `${toolCallId}:${task.index}`, input: task.usage.input, output: task.usage.output };
-				pi.events.emit(WORKER_USAGE_EVENT, snapshot);
+				present(() => pi.events.emit(WORKER_USAGE_EVENT, snapshot));
 			};
 			// Admission and start are synchronous: no second invocation can slip between this
 			// check and start, including reentrant calls from configuration/UI callbacks.
@@ -265,8 +267,8 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 						Object.assign(uiTask, patch);
 						emitTaskUsage(uiTask);
 						owner.changed();
-						if (toolActive) onUpdate?.(respond(`${running.task.mode} ${uiTask.phase}`, batchUiSnapshot(running.batch)));
-					}, () => running.overlappedWriter, (question, questionSignal) => owner.ask(running, question, questionSignal), true);
+						if (toolActive) present(() => onUpdate?.(respond(`${running.task.mode} ${uiTask.phase}`, batchUiSnapshot(running.batch))));
+					}, () => running.overlappedWriter, (question, questionSignal) => owner.ask(running, question, questionSignal), true, invocationSession.processes);
 					const sanitized = sanitizeStructuredValue(item) as Record<string, any>;
 					const compact = compactWorkerResult(sanitized);
 					compact.observed_changed_files = Array.isArray(sanitized.observed_changed_files) ? sanitized.observed_changed_files : [];
@@ -284,8 +286,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 			try {
 				// Attach the original card even when every task is queued or emits no progress.
 				// Presentation failures must not orphan the newly admitted batch.
-				try { onUpdate?.(respond(`准备执行 ${tasks.length} 个 Worker 任务`, batchUiSnapshot(batch))); }
-				catch { /* The runtime's live renderer can still update an attached row. */ }
+				present(() => onUpdate?.(respond(`准备执行 ${tasks.length} 个 Worker 任务`, batchUiSnapshot(batch))));
 				await owner.wait(batch.id, signal);
 				return batchResponse(batch);
 			} finally {
@@ -315,9 +316,4 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 			return new Text(text?.type === "text" ? text.text : "Worker 无输出", 0, 0);
 		},
 	});
-}
-
-if (!(globalThis as any).__piWorkerExitHookInstalled) {
-	(globalThis as any).__piWorkerExitHookInstalled = true;
-	process.once("exit", () => killAllChildren(true));
 }

@@ -61,7 +61,7 @@ pi
 
 结果摘要和 `changed_files` 是 Worker 报告及工作区快照信息，不替代主 Agent 对真实 diff 的检查。
 
-支持五种 mode：`scout` 只读调查，`implement` 实现，`test` 测试，`review` 只读审查，`fix` 修复已确认的问题。写入模式须声明非空 `allowedPaths`；`relevantFiles` 只是读取提示，不授予写权限。
+支持五种 mode：`scout` 只读调查，`implement` 实现，`test` 测试，`review` 只读审查，`fix` 修复已确认的问题。写入模式须声明非空 `allowedPaths`；`relevantFiles` 只是读取提示，不授予写权限。`allowedPaths`/`forbiddenPaths` 相对 `task.cwd`：`backend/file.ts` 精确匹配单个文件（新文件也可），目录后代须用 `backend/**`。既有裸目录 `backend`、`./backend` 或 `backend/` 会在整批启动前报错并建议 `backend/**`；即使目录尚不存在，也应显式使用 `backend/**`，不要依赖裸路径推断。`forbiddenPaths` 排除目录后代也须使用 `/**`。
 
 ### 档位与设置
 
@@ -82,7 +82,7 @@ Worker 可通过 `ask_parent` 向真正的主 Agent 提问，不使用额外的�
 
 ### 并行、进度与验收
 
-批量任务在并发上限内调度：只读任务可并行；读写任务冲突，必须串行；写入任务仅在 `cwd` 与全部声明写路径可解析且确认互不重叠时并行。无法证明独立时按冲突处理，且调度不保证独立 Git worktree。
+批量任务在并发上限内调度：只读任务可并行；读写任务冲突，必须串行；写入任务仅在 `cwd` 与全部声明写路径可解析且确认互不重叠时并行。无法证明独立时按冲突处理，且调度不保证独立 Git worktree。同进程各会话的子进程、槽位和关闭清理独立；不同 Pi 窗口即使控制通道隔离，仍可能共享工作树，路径锁不跨窗口。
 
 每个批次只显示最初一张 Worker 卡片，复用 `extensions/ui/` 的统一工具样式；后续回答、等待和取消调用仍保留在模型记录中，但不新增可见卡片。任务状态、工具活动、档位、轮次、用量、耗时、完成摘要及各任务完整问答均在原卡片默认显示。不再显示 Batch 编号汇总和正常的执行槽位等待提示；错误与超时诊断仍保留。
 
@@ -90,7 +90,7 @@ Worker 可通过 `ask_parent` 向真正的主 Agent 提问，不使用额外的�
 
 `cwd` 必须位于主工作目录内；`allowedPaths`/`forbiddenPaths` 只在 `edit`、`write` 工具调用前检查。它们不是 shell 或文件系统沙箱，不能限制 `bash`、其他扩展工具或 `then_run` 命令；不要把它们视为隔离边界。主 Agent 必须检查实际修改、原有工作区改动、验证证据和任务范围，再决定是否验收。
 
-协议、限制及测试命令见 [Worker 扩展文档](extensions/worker/README.md)。
+待答时意外断管会明确失败并清理，不把子进程捕获 IPC 错误后的“完成”视为成功，也不自动重连或重派。失败诊断保留终止来源及必要进程标识；旧记录无法据此反推取消原因。自定义 SDK 宿主须发送并等待 `session_shutdown`；Pi 0.87.1 的裸 `AgentSession.dispose()` 不发送该事件。协议、宿主限制及测试命令见 [Worker 扩展文档](extensions/worker/README.md)。
 
 ## 配置与安全
 

@@ -29,7 +29,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { resolveToolPath } from "./file-queue.ts";
-import { renderSolPiTool } from "../../tui.ts";
 import {
 	createThenRunSchema,
 	executeMutationThenRun,
@@ -98,16 +97,10 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 				});
 				return result;
 			},
-			renderCall: (args, theme, context) => {
-				const base = baseEdit(context.cwd).renderCall!(args, theme, context);
-				return args.then_run ? renderSolPiTool(theme, "Action Fusion", "1 model round-trip avoided", base) : base;
-			},
-			renderResult: (result, resultOptions, theme, context) => {
-				const base = baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context);
-				return context.args.then_run
-					? renderSolPiTool(theme, "Action Fusion", "1 model round-trip avoided", base)
-					: base;
-			},
+			renderCall: (args, theme, context) =>
+				baseEdit(context.cwd).renderCall!(args, theme, context),
+			renderResult: (result, resultOptions, theme, context) =>
+				baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context),
 		});
 
 		pi.registerTool<typeof writeParameters, undefined>({
@@ -126,16 +119,10 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 				});
 				return result;
 			},
-			renderCall: (args, theme, context) => {
-				const base = baseWrite(context.cwd).renderCall!(args, theme, context);
-				return args.then_run ? renderSolPiTool(theme, "Action Fusion", "1 model round-trip avoided", base) : base;
-			},
-			renderResult: (result, resultOptions, theme, context) => {
-				const base = baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context);
-				return context.args.then_run
-					? renderSolPiTool(theme, "Action Fusion", "1 model round-trip avoided", base)
-					: base;
-			},
+			renderCall: (args, theme, context) =>
+				baseWrite(context.cwd).renderCall!(args, theme, context),
+			renderResult: (result, resultOptions, theme, context) =>
+				baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context),
 		});
 	};
 }

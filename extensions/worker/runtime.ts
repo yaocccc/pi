@@ -102,7 +102,7 @@ export class WorkerRuntime {
 				this.active.add(task);
 				this.changed();
 				task.deadline = Date.now() + task.batch.timeoutMs;
-				task.timer = setTimeout(() => { task.timedOut = true; this.cancelTask(task, "Worker 任务超时"); }, task.batch.timeoutMs);
+				task.timer = setTimeout(() => { task.timedOut = true; this.cancelTask(task, "Worker 任务超时", "task_timeout"); }, task.batch.timeoutMs);
 				task.timer.unref();
 				void Promise.resolve().then(() => task.batch.execute(task)).then((result) => {
 					task.result = result;
@@ -112,7 +112,7 @@ export class WorkerRuntime {
 					// The event loop may resolve execute before dispatching an overdue timer.
 					if (!task.controller.signal.aborted && Date.now() >= task.deadline!) {
 						task.timedOut = true;
-						this.cancelTask(task, "Worker 任务超时");
+						this.cancelTask(task, "Worker 任务超时", "task_timeout");
 					}
 					clearTimeout(task.timer);
 					// Cancellation wins over a late successful result from a cooperative runner.
@@ -120,7 +120,7 @@ export class WorkerRuntime {
 						const reason = String(task.controller.signal.reason?.message ?? "Worker 已取消");
 						task.result = { ...task.result, status: "failed", summary: [reason],
 							failure: { category: task.timedOut ? "timeout" : "cancelled", reason, retryable: false, next_action: "由主 Agent 检查，不要自动重试。" },
-							execution: { ...task.result?.execution, cancelled: !task.timedOut, timed_out: !!task.timedOut },
+							execution: { ...task.result?.execution, cancelled: !task.timedOut, timed_out: !!task.timedOut, termination_source: task.controller.signal.reason?.source },
 						};
 					}
 					this.finish(task);
@@ -154,7 +154,7 @@ export class WorkerRuntime {
 		const record: QuestionRecord = { ...question, batchId: task.batch.id, taskId: task.id, askedAt, expiresAt: askedAt + question.timeoutMs, status: "waiting" };
 		task.batch.questions.push(record);
 		return new Promise((resolve, reject) => {
-			const abort = () => this.endQuestion(pending, signal.reason?.name === "TimeoutError" ? "expired" : "cancelled", "问题已取消、过期或 IPC 已关闭");
+			const abort = () => this.endQuestion(pending, signal.reason?.name === "TimeoutError" ? "expired" : "cancelled", signal.reason instanceof Error ? signal.reason.message : "问题已取消或 IPC 已关闭");
 			const timer = setTimeout(() => this.endQuestion(pending, "expired", "等待主 Agent 回答超时"), question.timeoutMs);
 			timer.unref();
 			const pending: PendingAnswer = { record, resolve, reject, task, cleanup: () => {
@@ -210,22 +210,25 @@ export class WorkerRuntime {
 		this.changed();
 		return validated.map(({ pending }) => pending.record);
 	}
-	private cancelTask(task: RuntimeTask, reason: string) {
+	private cancelTask(task: RuntimeTask, reason: string, source: string) {
 		if (task.state === "finished") return;
 		clearTimeout(task.timer);
-		task.controller.abort(new Error(reason));
+		task.controller.abort(Object.assign(new Error(reason), { source }));
 		for (const pending of [...this.pending.values()]) if (pending.record.taskId === task.id) this.endQuestion(pending, "cancelled", reason);
 		if (task.state === "queued") {
 			this.queue = this.queue.filter((item) => item !== task);
-			task.result = this.failure(reason);
+			task.result = { ...this.failure(reason),
+				failure: { category: task.timedOut ? "timeout" : "cancelled", reason, retryable: false, next_action: "由主 Agent 检查，不要自动重试。" },
+				execution: { cancelled: !task.timedOut, timed_out: !!task.timedOut, termination_source: task.controller.signal.reason?.source },
+			};
 			this.finish(task);
 		}
 	}
-	cancel(batchId: string, reason = "Worker 批次已取消") {
+	cancel(batchId: string, reason = "Worker 批次已取消", source = "batch_cancel") {
 		const batch = this.get(batchId);
 		if (batch.finished) return;
 		batch.cancelled = true;
-		for (const task of batch.tasks) this.cancelTask(task, reason);
+		for (const task of batch.tasks) this.cancelTask(task, reason, source);
 		this.changed();
 		this.schedule();
 	}
@@ -237,7 +240,7 @@ export class WorkerRuntime {
 			const check = () => {
 				if (batch.finished || (!batch.cancelled && !this.closed && batch.questions.some((q) => q.status === "waiting"))) finish();
 			};
-			const abort = () => this.cancel(batch.id, "Worker 调用已取消");
+			const abort = () => this.cancel(batch.id, "Worker 调用已取消", "invocation_abort");
 			this.listeners.add(check);
 			signal?.addEventListener("abort", abort, { once: true });
 			if (signal?.aborted) abort();
@@ -246,7 +249,7 @@ export class WorkerRuntime {
 	}
 	async dispose(): Promise<void> {
 		this.closed = true;
-		for (const batch of this.batches.values()) this.cancel(batch.id, "Worker 会话已关闭");
+		for (const batch of this.batches.values()) this.cancel(batch.id, "Worker 会话已关闭", "session_shutdown");
 		this.changed();
 		if (!this.active.size) return;
 		await new Promise<void>((resolve) => {

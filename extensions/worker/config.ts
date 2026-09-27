@@ -134,16 +134,33 @@ export function validateTask(task: WorkerTask, baseCwd: string): string[] {
 	for (const file of task.relevantFiles ?? []) {
 		if (!file.trim()) errors.push("relevantFiles 不能包含空路径");
 	}
-	for (const [label, patterns] of [["allowedPaths", task.allowedPaths], ["forbiddenPaths", task.forbiddenPaths]] as const) {
-		for (const pattern of patterns ?? []) {
-			if (!pattern.trim() || path.isAbsolute(pattern) || pattern.split(/[\\/]+/).includes("..")) errors.push(`${label} 只能包含 cwd 下的相对路径或 glob: ${pattern}`);
-		}
-	}
+	let cwd: string | undefined;
 	try {
-		const cwd = resolveTaskCwd(baseCwd, task.cwd);
+		cwd = resolveTaskCwd(baseCwd, task.cwd);
 		if (!fs.statSync(cwd).isDirectory()) errors.push(`cwd 不是目录: ${cwd}`);
 	} catch (error) {
 		errors.push(error instanceof Error ? error.message : String(error));
+	}
+	for (const [label, patterns] of [["allowedPaths", task.allowedPaths], ["forbiddenPaths", task.forbiddenPaths]] as const) {
+		for (const pattern of patterns ?? []) {
+			if (!pattern.trim() || path.isAbsolute(pattern) || pattern.split(/[\\/]+/).includes("..")) {
+				errors.push(`${label} 只能包含 cwd 下的相对路径或 glob: ${pattern}`);
+				continue;
+			}
+			// Literals match one path in the write guard, never the directory's children.
+			// An explicit trailing slash communicates directory intent even before it exists.
+			const normalized = pattern.replaceAll("\\", "/").replace(/^\.\/+/, "");
+			if (/[*?]/.test(normalized)) continue;
+			const literal = normalized.replace(/\/+$/, "") || ".";
+			let existingDirectory = false;
+			if (cwd) {
+				try { existingDirectory = fs.statSync(path.resolve(cwd, literal)).isDirectory(); }
+				catch { /* An absent bare path may be an exact new file. */ }
+			}
+			if (normalized.endsWith("/") || existingDirectory) {
+				errors.push(`${label} 目录声明 ${pattern} 只匹配精确路径，不匹配子文件；如需目录后代，请改为 ${literal}/**（相对 task.cwd）`);
+			}
+		}
 	}
 	return errors;
 }

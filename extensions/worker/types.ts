@@ -149,6 +149,7 @@ export interface ChildResult {
 	actualModel?: string;
 	stopReason?: string;
 	errorMessage?: string;
+	termination?: { stage: "ipc" | "process" | "spawn" | "slot"; code: string; source: string; parentPid: number; workerPid?: number; ownerId: string };
 	aborted: boolean;
 	timedOut: boolean;
 	truncated: boolean;
