@@ -35,7 +35,7 @@ function harness(execute: typeof executeTask) {
 			events: { on: (name: string, fn: any) => eventHandlers.set(name, fn), emit: (name: string, item: any) => { usage.push(item); eventHandlers.get(name)?.(item); } },
 			appendEntry: (customType: string, data: any) => branch.push({ type: "custom", customType, data }),
 			sendMessage: () => { throw new Error("must not inject messages"); },
-		} as any, { executeTask: execute, loadRoutingConfig: () => ({ config: { ...DEFAULT_OPTIONS, fast: preset, normal: preset, deep: preset, max: preset }, warnings: [], path: "fixture" }) });
+		} as any, { executeTask: execute, loadRoutingConfig: () => ({ config: { ...DEFAULT_OPTIONS, fast: preset, normal: preset, deep: preset }, warnings: [], path: "fixture" }) });
 	} finally {
 		if (oldDepth === undefined) delete process.env.PI_WORKER_DEPTH; else process.env.PI_WORKER_DEPTH = oldDepth;
 	}

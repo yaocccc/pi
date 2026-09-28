@@ -11,7 +11,6 @@ const PRESET_LABELS: Record<ResolvedPreset, string> = {
 	fast: "Fast",
 	normal: "Normal",
 	deep: "Deep",
-	max: "Max",
 };
 
 const enabledName = (value: boolean): string => value ? "开启" : "关闭";

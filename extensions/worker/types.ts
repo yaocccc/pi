@@ -2,7 +2,7 @@
 
 
 export type WorkerMode = "scout" | "implement" | "test" | "review" | "fix";
-export type WorkerPreset = "auto" | "fast" | "normal" | "deep" | "max";
+export type WorkerPreset = "auto" | "fast" | "normal" | "deep";
 export type Thinking = "high" | "xhigh" | "max";
 export type ResolvedPreset = Exclude<WorkerPreset, "auto">;
 
@@ -10,8 +10,6 @@ export interface WorkerTask {
 	mode: WorkerMode;
 	objective: string;
 	preset?: WorkerPreset;
-	/** Must be true when `preset: max` reflects an explicit user request. */
-	userExplicitMax?: boolean;
 	context?: string;
 	relevantFiles?: string[];
 	allowedPaths?: string[];

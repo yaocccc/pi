@@ -1,6 +1,6 @@
 ---
 name: worker-orchestration
-description: Use for Worker delegation, Fast/Normal/Deep/Max routing, parallel task splitting, file boundaries, review, rework, and acceptance.
+description: Use for Worker delegation, Fast/Normal/Deep routing, parallel task splitting, file boundaries, review, rework, and acceptance.
 ---
 
 # Worker 编排
@@ -114,11 +114,9 @@ TUI 每批次只有原始 `worker` 卡片，调用返回后仍动态刷新状态
 
 ### Deep
 
-用于困难任务，例如跨模块/服务/语言、根因不明、并发与异步状态、缓存一致性、重试容错、资源生命周期、数据同步、复杂架构、大范围回归、重要 Review、约束很多或 Normal 已失败的任务。Deep 是自动路由的最高任务复杂度级别，文件多本身不等于困难任务。
+用于困难任务，例如跨模块/服务/语言、根因不明、并发与异步状态、缓存一致性、重试容错、资源生命周期、数据同步、复杂架构、大范围回归、重要 Review、约束很多或 Normal 已失败的任务。Deep 是最高任务复杂度级别，文件多本身不等于困难任务。
 
-### Max
-
-`Max` 不是任务复杂度级别，仅代表用户显式要求的最高执行强度。仅当用户主动明确要求 `Max`、最高强度或同等表述时使用，并设置 `userExplicitMax: true`。Max 不参与自动路由，也不得静默降级。各档位的模型与 thinking 仅由 `worker-settings.json` 配置。
+执行档位只有 Fast、Normal、Deep；`auto` 在这三档中自动选择。各档位的模型与 thinking 仅由 `worker-settings.json` 配置。
 
 ## Review 与返工
 
@@ -126,7 +124,7 @@ TUI 每批次只有原始 `worker` 卡片，调用返回后仍动态刷新状态
 - 普通任务：Worker → 主 Agent 验收。
 - 困难任务：实现 Worker → 独立 Deep Review Worker → Fix Worker → 主 Agent 验收。
 
-功能实现完成后，如果 Review 是主 Agent 自动追加而非用户明确要求，默认使用 `preset: fast`；具体模型和 thinking 读取 `worker-settings.json`。不得为这种常规自动 Review 使用 Max。困难任务需要加强审查时使用 Deep；只有用户主动明确要求最高执行强度时才可使用 Max。
+功能实现完成后，如果 Review 是主 Agent 自动追加而非用户明确要求，默认使用 `preset: fast`；具体模型和 thinking 读取 `worker-settings.json`。困难任务需要加强审查时使用 Deep。
 
 不要让所有小任务默认走完整 Review 流程。Review finding 必须有文件、位置、证据、影响、建议和置信度；只修复主 Agent 已确认的问题。
 
@@ -141,4 +139,4 @@ Worker 声称完成不代表任务完成。主 Agent 至少检查：
 5. 是否有 blocker、越界写入、模型降级或未解析输出；
 6. 是否需要定向返工或独立 Review。
 
-批量结果彼此独立；一个失败不得掩盖其他任务。任何 `blocked`、`failed`、Max 降级、越界文件或实际模型不匹配都不能直接验收为成功。
+批量结果彼此独立；一个失败不得掩盖其他任务。任何 `blocked`、`failed`、越界文件或实际模型不匹配都不能直接验收为成功。

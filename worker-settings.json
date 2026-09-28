@@ -12,10 +12,6 @@
     "model": "openai-codex/gpt-6-astra",
     "thinking": "high"
   },
-  "max": {
-    "model": "openai-codex/gpt-6-astra",
-    "thinking": "xhigh"
-  },
   "maxConcurrentWorkers": 3,
   "automaticDelegationEnabled": true,
   "defaultTimeoutMs": 1800000,

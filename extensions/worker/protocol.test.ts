@@ -29,7 +29,7 @@ function harness(execute: typeof executeTask, automaticDelegationEnabled = true,
 			events: { emit() {} }, sendMessage() { throw new Error("no queued continuations"); },
 		} as any, {
 			executeTask: execute,
-			loadRoutingConfig: () => { loads++; return { config: { ...DEFAULT_OPTIONS, automaticDelegationEnabled, maxConcurrentWorkers, fast: preset, normal: preset, deep: preset, max: preset }, warnings: [], path: "fixture" }; },
+			loadRoutingConfig: () => { loads++; return { config: { ...DEFAULT_OPTIONS, automaticDelegationEnabled, maxConcurrentWorkers, fast: preset, normal: preset, deep: preset }, warnings: [], path: "fixture" }; },
 		});
 	} finally {
 		if (oldDepth === undefined) delete process.env.PI_WORKER_DEPTH; else process.env.PI_WORKER_DEPTH = oldDepth;
@@ -53,6 +53,7 @@ test("single-tool input modes strictly reject mixed, missing, unknown and malfor
 		undefined, null, [], {}, { task, tasks: [task] }, { task: null }, { tasks: [] },
 		{ tasks: Array(13).fill(task) }, { task: { ...task, mode: "invalid" } },
 		{ task: { ...task, objective: 1 } }, { task: { ...task, unknown: true } },
+		{ task: { ...task, preset: "max" } }, { task: { ...task, userExplicitMax: true } },
 		{ task: { ...task, allowedPaths: [1] } }, { task, manual: "yes" },
 		{ task, waitMs: 0 }, { task, batchId: "batch" }, { tasks: [task], batchId: "batch" },
 		{ answers: [answer] }, { cancel: true }, { questionOffset: 0 },

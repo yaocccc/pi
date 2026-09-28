@@ -38,6 +38,6 @@ export default function fixtureExtension(pi: ExtensionAPI) {
 			};
 			return executeTask(...args);
 		},
-		loadRoutingConfig: () => ({ config: { ...DEFAULT_OPTIONS, maxConcurrentWorkers: 1, defaultTimeoutMs: 15_000, fast: preset, normal: preset, deep: preset, max: preset }, warnings: [], path: "fixture" }),
+		loadRoutingConfig: () => ({ config: { ...DEFAULT_OPTIONS, maxConcurrentWorkers: 1, defaultTimeoutMs: 15_000, fast: preset, normal: preset, deep: preset }, warnings: [], path: "fixture" }),
 	});
 }

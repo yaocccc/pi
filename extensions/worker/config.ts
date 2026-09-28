@@ -7,10 +7,10 @@ import type { PresetConfig, ResolvedPreset, Route, RoutingConfig, Thinking, Work
 
 
 export const MODES = ["scout", "implement", "test", "review", "fix"] as const;
-export const PRESETS = ["auto", "fast", "normal", "deep", "max"] as const;
+export const PRESETS = ["auto", "fast", "normal", "deep"] as const;
 export const WRITE_MODES = new Set<WorkerMode>(["implement", "test", "fix"]);
 export const READ_ONLY_MODES = new Set<WorkerMode>(["scout", "review"]);
-export const RESOLVED_PRESETS = ["fast", "normal", "deep", "max"] as const;
+export const RESOLVED_PRESETS = ["fast", "normal", "deep"] as const;
 
 export const DEFAULT_OPTIONS = {
 	version: 2,
@@ -64,6 +64,7 @@ export function validateConfig(raw: RoutingConfig): { config: RoutingConfig; war
 	const warnings: string[] = [];
 	const config = structuredClone(raw);
 	delete (config as RoutingConfig & { maxAutomaticRetries?: unknown }).maxAutomaticRetries;
+	delete (config as RoutingConfig & { max?: unknown }).max;
 	config.maxConcurrentWorkers = Math.max(1, Math.min(16, Number(config.maxConcurrentWorkers) || 3));
 	config.defaultTimeoutMs = Math.max(1_000, Math.min(3_600_000, Number(config.defaultTimeoutMs) || 900_000));
 	config.maxOutputBytes = Math.max(8_192, Math.min(1_048_576, Number(config.maxOutputBytes) || 65_536));
@@ -105,9 +106,10 @@ export function loadRoutingConfig(): { config: RoutingConfig; warnings: string[]
 		return Boolean(setting && typeof setting === "object" && "maxOutputBytes" in setting);
 	}));
 	const hadLegacyRetrySetting = Boolean(current && typeof current === "object" && "maxAutomaticRetries" in current);
+	const hadLegacyMaxPreset = Boolean(current && typeof current === "object" && "max" in current);
 	const merged = deepMergeMissing(current as Record<string, unknown>, DEFAULT_OPTIONS);
 	const validated = validateConfig(merged.value as RoutingConfig);
-	if (merged.changed || hadPresetOutputLimits || hadLegacyRetrySetting) atomicWriteJson(configPath, validated.config);
+	if (merged.changed || hadPresetOutputLimits || hadLegacyRetrySetting || hadLegacyMaxPreset) atomicWriteJson(configPath, validated.config);
 	return { config: validated.config, warnings: validated.warnings, path: configPath };
 }
 
@@ -129,7 +131,6 @@ export function validateTask(task: WorkerTask, baseCwd: string): string[] {
 	if (!MODES.includes(task.mode)) errors.push(`无效 mode: ${String(task.mode)}`);
 	if (!task.objective || !task.objective.trim()) errors.push("objective 不能为空");
 	if (task.preset && !PRESETS.includes(task.preset)) errors.push(`无效 preset: ${String(task.preset)}`);
-	if (task.preset === "max" && !task.userExplicitMax) errors.push("Max 仅允许响应用户明确要求；请设置 userExplicitMax: true");
 	if (WRITE_MODES.has(task.mode) && (!task.allowedPaths || task.allowedPaths.length === 0)) errors.push(`${task.mode} 必须提供非空 allowedPaths`);
 	for (const file of task.relevantFiles ?? []) {
 		if (!file.trim()) errors.push("relevantFiles 不能包含空路径");
@@ -166,6 +167,7 @@ export function validateTask(task: WorkerTask, baseCwd: string): string[] {
 }
 
 export function inferPreset(task: WorkerTask): { preset: ResolvedPreset; reasons: string[] } {
+	if (task.preset && !PRESETS.includes(task.preset)) throw new Error(`无效 preset: ${String(task.preset)}`);
 	if (task.preset && task.preset !== "auto") return { preset: task.preset, reasons: [`任务显式指定 ${task.preset}`] };
 	const text = [task.objective, task.context, ...(task.acceptanceCriteria ?? [])].filter(Boolean).join(" ").toLowerCase();
 	const deep = /(跨模块|跨服务|跨语言|并发|异步状态|缓存一致性|网络重试|资源生命周期|数据同步|根因不明|架构|cross.module|cross.service|concurren|async state|cache consistency|retry|resource lifecycle|architecture)/i.test(text);
@@ -186,15 +188,10 @@ export function resolveRoute(task: WorkerTask, config: RoutingConfig, ctx: Exten
 	const preset = inferred.preset;
 	const setting = config[preset];
 	const thinking = setting.thinking;
-	if ((preset === "max" || thinking === "max") && !task.userExplicitMax) throw new Error("Max/xhigh 未获用户明确授权");
 	const model = findConfiguredModel(ctx, setting.model);
 	if (!model) throw new Error(`${preset}.model 配置的模型不可用：${setting.model}`);
 	const levels = supportedThinking(model);
-	if (!levels.includes(thinking)) {
-		if (thinking === "max") throw new Error(`unsupported：${setting.model} 不支持 max；当前最高为 ${levels.at(-1)}`);
-		if (preset === "max" || thinking === "xhigh") throw new Error(`Max blocked：${setting.model} 不支持 xhigh；当前最高为 ${levels.at(-1)}`);
-		throw new Error(`${setting.model} 不支持 ${thinking}`);
-	}
+	if (!levels.includes(thinking)) throw new Error(`${setting.model} 不支持 thinking ${thinking}；当前最高为 ${levels.at(-1)}`);
 	return {
 		requestedPreset: task.preset ?? "auto",
 		resolvedPreset: preset,
