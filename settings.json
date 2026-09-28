@@ -36,5 +36,7 @@
   },
   "defaultProjectTrust": "ask",
   "tuiMode": "fullscreen",
-  "fullscreenScrollbar": "auto"
+  "fullscreenScrollbar": "auto",
+  "fullscreenCopyOnSelect": true,
+  "fullscreenExitOutput": "transcript"
 }

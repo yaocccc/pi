@@ -1,8 +1,8 @@
 {
   "version": 2,
   "fast": {
-    "model": "openai-codex/gpt-6-luna",
-    "thinking": "high"
+    "model": "openai-codex/gpt-6-sol",
+    "thinking": "medium"
   },
   "normal": {
     "model": "openai-codex/gpt-6-sol",

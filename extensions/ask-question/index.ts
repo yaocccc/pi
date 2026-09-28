@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { QuestionInteractions } from './interaction.ts';
 
@@ -94,6 +94,10 @@ const padToWidth = (text: string, width: number): string => {
 
 // Editor 光标内部可能用 \x1b[0m 重置样式；重置后重新补上背景色，保证整行都有 #101827 背景。
 const textAreaBg = (text: string): string => TEXTAREA_BG + text.replace(/\x1b\[0m/g, `\x1b[0m${TEXTAREA_BG}`) + RESET_BG;
+
+const addQuestionHeading = (lines: string[], width: number, heading: string): void => {
+    for (const line of wrapTextWithAnsi(heading, width)) lines.push(textAreaBg(padToWidth(line, width)));
+};
 
 const halfBlockLine = (width: number, position: 'top' | 'bottom'): string => TEXTAREA_FG + (position === 'top' ? '▄' : '▀').repeat(Math.max(0, width)) + RESET_FG;
 
@@ -344,7 +348,7 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
                 const question = currentQuestion()!;
                 const options = displayOptions(currentTab);
                 const selectedIndex = selectedIndices[currentTab]!;
-                addLine(lines, width, theme.fg('accent', ` ${labelFor(currentTab)}`) + theme.fg('text', ` ${question.question}`));
+                addQuestionHeading(lines, width, theme.fg('accent', ` ${labelFor(currentTab)}`) + theme.fg('text', ` ${question.question}`));
                 if (question.multiSelect) addLine(lines, width, theme.fg('dim', ` 多选模式：已选 ${checked[currentTab]!.size + customAnswers[currentTab]!.length} 项`));
                 addLine(lines, width);
                 for (let index = 0; index < options.length; index++) {
@@ -592,7 +596,7 @@ const askQuestion = (pi: ExtensionAPI) => {
 
                     const lines: string[] = [];
                     lines.push(halfBlockLine(width, 'top'));
-                    addLine(lines, width, theme.fg('accent', ' ？') + theme.fg('text', ` ${params.question}`));
+                    addQuestionHeading(lines, width, theme.fg('accent', ' ？') + theme.fg('text', ` ${params.question}`));
                     if (multiSelect) {
                         const count = checked.size + customAnswers.length;
                         addLine(lines, width, theme.fg('dim', ` 多选模式：已选 ${count} 项`));
