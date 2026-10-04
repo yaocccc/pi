@@ -1,5 +1,6 @@
 /**
- * Preparation-only port of Pi 0.87.1 core/compaction/{compaction,utils}.ts.
+ * Preparation-only port of Pi 0.87.1 core/compaction/{compaction,utils}.ts,
+ * reviewed and updated against Pi 1.0.2 (including nested tool file tracking).
  * Copyright (c) 2025 Mario Zechner — MIT; see LICENSE.pi.
  * Pinned pure logic; only public package imports. Summary generation stays native.
  * Local deviation: carry file tracking from our marked fromHook compactions too.
@@ -14,7 +15,8 @@ import { buildSessionProjection, sessionEntryToContextMessages, estimateTokens, 
 export type CompactionPreparation = Parameters<typeof compact>[0];
 export type EffectiveCompactionSettings = CompactionPreparation["settings"];
 type CompactionSettings = EffectiveCompactionSettings;
-export const NATIVE_PREPARATION_VERSION = "0.87.1";
+export const NATIVE_PREPARATION_VERSION = "1.0.2";
+// Persisted format marker: keep reading checkpoints created by the original port.
 export const OCC_FILE_TRACKING = "sol-pi-occ-native-0.87.1";
 export interface ContextUsageEstimate {
 	tokens: number;
@@ -83,9 +85,14 @@ export function createFileOps(): FileOperations {
 }
 
 /**
- * Extract file operations from tool calls in an assistant message.
+ * Extract file operations from assistant calls and Pi's bounded nested-call records.
+ * Like native preparation, track attempted operations even if a call failed.
  */
 export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOperations): void {
+	if (message.role === "toolResult") {
+		for (const call of message.nestedCalls?.calls ?? []) addFileOp(call.name, call.arguments, fileOps);
+		return;
+	}
 	if (message.role !== "assistant") return;
 	if (!("content" in message) || !Array.isArray(message.content)) return;
 
@@ -94,23 +101,23 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 		if (!("type" in block) || block.type !== "toolCall") continue;
 		if (!("arguments" in block) || !("name" in block)) continue;
 
-		const args = block.arguments as Record<string, unknown> | undefined;
-		if (!args) continue;
+		addFileOp(block.name, block.arguments as Record<string, unknown> | undefined, fileOps);
+	}
+}
 
-		const path = typeof args.path === "string" ? args.path : undefined;
-		if (!path) continue;
-
-		switch (block.name) {
-			case "read":
-				fileOps.read.add(path);
-				break;
-			case "write":
-				fileOps.written.add(path);
-				break;
-			case "edit":
-				fileOps.edited.add(path);
-				break;
-		}
+function addFileOp(toolName: string, args: Record<string, unknown> | undefined, fileOps: FileOperations): void {
+	const path = typeof args?.path === "string" ? args.path : undefined;
+	if (!path) return;
+	switch (toolName) {
+		case "read":
+			fileOps.read.add(path);
+			break;
+		case "write":
+			fileOps.written.add(path);
+			break;
+		case "edit":
+			fileOps.edited.add(path);
+			break;
 	}
 }
 

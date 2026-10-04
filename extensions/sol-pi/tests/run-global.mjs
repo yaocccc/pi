@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = process.env.SOL_PI_GLOBAL_ROOT ?? execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
 const pi = join(root, "@earendil-works/pi-coding-agent");
 const { version } = JSON.parse(await readFile(join(pi, "package.json"), "utf8"));
-if (version !== "0.87.1") throw new Error(`Requires global Pi 0.87.1; found ${version}`);
+if (version !== "1.0.2") throw new Error(`Requires global Pi 1.0.2; found ${version}`);
 const dir = await mkdtemp(join(tmpdir(), "sol-pi-global-"));
 try {
   const modules = join(dir, "node_modules");

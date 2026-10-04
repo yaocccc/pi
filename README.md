@@ -11,7 +11,7 @@
 - `/codex-fast` 分别设置 Fast / Ultrafast 请求档位；Thinking 中文翻译与自动中文会话命名默认开启，可在对应配置中关闭。
 - Indexed Memory 按需检索本地记忆，也可用 `/summarize` 请求总结；记忆内容不随仓库分发。
 - [Worker](#worker) 在独立 Pi 子进程中协助完成指定任务；自动路由仅有 Fast、Normal、Deep 三档，Thinking 强度独立设置。路径检查不是安全沙箱，仍须核对修改。
-- SoL-Pi 提供文件修改后验证、长结果回读与计划步骤间的上下文压缩；工具结果过滤只降低常见敏感信息泄露风险，不保证脱敏。
+- SoL-Pi 提供长结果回读与计划步骤间的上下文压缩；工具结果过滤只降低常见敏感信息泄露风险，不保证脱敏。
 
 ## 本地扩展概览
 
@@ -26,8 +26,8 @@
 | [filter-output](extensions/filter-output/index.ts) | 在模型接收成功的工具结果前过滤常见敏感文本及部分敏感文件读取 | 自动 `tool_result` 钩子，非用户命令 | 无独立配置；不保证脱敏，不过滤错误结果；`.env.example` 读取直接放行 |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | 向 Herdr 的本地 socket 上报工作/阻塞/空闲状态与会话引用 | **内部桥接，非用户命令** | `HERDR_ENV=1` 且存在 `HERDR_SOCKET_PATH`、`HERDR_PANE_ID`；仅绑定有 UI 的主会话，由 Herdr 管理/覆盖 |
 | [memory](extensions/memory/index.ts) | 检索、读取、去重并总结 indexed memory | 工具 `memory_search`、`memory_get`、可选 `memory_summarize`；`/summarize`、`/memory_settings` | `~/.pi/agent/memory-settings.json`、`memory-index.md`、`memories/`；存储路径固定在此目录 |
-| [sol-pi](extensions/sol-pi/index.ts) | 统一注册下面三个 SoL-Pi 子组件 | 自动加载入口，非用户命令 | 无单独配置文件；详见 [SoL-Pi 文档](extensions/sol-pi/README.md) |
-| [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | 用归档引用替代重复的大型纯文本工具结果 | 自动上下文投影；工具 `obs_recall` | 由 `sol-pi` 注册；大于 10 KiB、非错误、纯文本结果前两次完整发送，之后引用；本地会话目录存档 |
+| [sol-pi](extensions/sol-pi/index.ts) | 统一注册下面两个 SoL-Pi 子组件 | 自动加载入口，非用户命令 | 无单独配置文件；详见 [SoL-Pi 文档](extensions/sol-pi/README.md) |
+| [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | 用归档引用替代重复的大型纯文本工具结果 | 自动上下文投影；工具 `obs_recall` | 由 `sol-pi` 注册；大于 10 KiB、非错误、纯文本结果前两次完整发送，之后引用；本地会话目录或私有临时目录存档 |
 | [SoL-Pi / OCC](extensions/sol-pi/extensions/online-context-compact/extension.ts) | 在完成计划步骤后按经济性评估上下文压缩 | 工具 `update_plan` 及回合边界钩子，非用户命令 | 由 `sol-pi` 注册；读取有效 `settings.json` 的 `compaction` / `retry`，项目设置须受信任；需持久化主会话，Worker 禁用 |
 | [telegram](extensions/telegram/index.ts) | 向目标聊天发送回合回复与部分提问通知 | 自动事件通知，非用户命令，不提供远程控制 | 环境变量 `PI_TG_TOKEN`、`PI_TG_CHAT`；缺少任一项不发送，无轮询；依赖 `node-telegram-bot-api` |
 | [thinking-translation](extensions/thinking-translation/index.ts) | 为短 Thinking 添加中文显示翻译，不改原会话内容或模型上下文 | `/thinking_translation` 切换；实时流自动触发 | `thinking-translation-settings.json`：`enabled`、`model`、`maxThinkingLength`；请求固定 minimal；本地缓存 `~/.pi/thinking-translations/` |
@@ -39,7 +39,7 @@
 
 ## 安装
 
-需要 Node.js **22.19+** 与 [Pi Coding Agent](https://github.com/earendil-works/pi)，Git 用于提交和 Worker 的改动检查。SoL-Pi 的 OCC 目前针对 Pi **0.87.1** 验证；升级 Pi 后需重新检查兼容性。
+需要 Node.js **22.19+** 与 [Pi Coding Agent](https://github.com/earendil-works/pi)，Git 用于提交和 Worker 的改动检查。SoL-Pi 的 OCC 目前针对 Pi **1.0.2** 验证；升级 Pi 后需重新检查兼容性。
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -146,8 +146,8 @@ Worker 可通过 `ask_parent` 向真正的主 Agent 提问，不使用额外的�
 
 `extensions/sol-pi/` 提供两项机制；文件修改与后续验证由 codemode 串联原生工具：
 
-1. **ObservationPack**：将重复的大型纯文本结果换成可用 `obs_recall` 按字节偏移分页回读的引用；归档保留在本地会话目录，不自动清理或脱敏。
-2. **Online Context Compact（OCC）**：`update_plan` 每次替换完整计划；仅当前回合成功更新计划、新完成步骤且仍有未完成工作时，才可能在经济性评估通过后压缩并继续任务，完成整个计划不会触发。需持久化主会话且有效 `compaction.enabled` 开启；摘要可能丢失细节，且会产生额外模型请求与费用，并非省钱保证。OCC 针对 Pi **0.87.1**，在 Worker 中禁用，ObservationPack 不因此禁用。
+1. **ObservationPack**：将重复的大型纯文本结果换成可用 `obs_recall` 按字节偏移分页回读的引用；归档保留在本地会话目录（无持久会话时使用私有临时目录），不自动清理或脱敏。
+2. **Online Context Compact（OCC）**：`update_plan` 每次替换完整计划；仅当前回合成功更新计划、完成先前登记的未完成步骤且仍有剩余工作时，才可能在经济性评估通过后压缩并继续任务，完成整个计划不会触发。需持久化主会话且有效 `compaction.enabled` 开启；摘要可能丢失细节，且会产生额外模型请求与费用，并非省钱保证。OCC 针对 Pi **1.0.2**，在 Worker 中禁用，ObservationPack 不因此禁用。
 
 OCC 的边界压缩不触发原生 `session_before_compact` / `session_compact` 钩子；依赖这些钩子拦截所有压缩的工作流应关闭 OCC/压缩。压缩后如 `memory_get` 提示复用但原内容已不在上下文，应显式读取原记忆，不将去重提示当作完整内容。
 

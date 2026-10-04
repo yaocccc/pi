@@ -11,7 +11,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration: custom exte
 - `/codex-fast` separately configures Fast / Ultrafast request tiers; Chinese thinking translation and automatic Chinese session naming are enabled by default and can be disabled in their configuration.
 - Indexed Memory retrieves local memories on demand; `/summarize` can request a summary. Memories are not distributed with the repository.
 - [Worker](#worker) assists with scoped tasks in separate Pi subprocesses. Automatic routing has only three tiers: Fast, Normal, and Deep; Thinking strength is configured independently. Path checks are not a security sandbox; inspect the resulting changes.
-- SoL-Pi supports verification after file edits, recall of long results, and context compaction between plan steps. Tool-result filtering reduces exposure to common secrets but does not guarantee redaction.
+- SoL-Pi supports recall of long results and context compaction between plan steps. Tool-result filtering reduces exposure to common secrets but does not guarantee redaction.
 
 ## Local extension inventory
 
@@ -26,8 +26,8 @@ Each row corresponds to current source under `extensions/`, excluding `node_modu
 | [filter-output](extensions/filter-output/index.ts) | Filter common sensitive text and certain sensitive-file reads before successful tool results reach the model | Automatic `tool_result` hook, not a user command | No separate configuration; redaction is not guaranteed; errors are not filtered and `.env.example` reads bypass filtering |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | Report working/blocked/idle state and session references to Herdr's local socket | **Internal bridge, not a user command** | `HERDR_ENV=1` with `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`; binds only to the main session with UI; managed/overwritten by Herdr |
 | [memory](extensions/memory/index.ts) | Search, read, deduplicate, and summarize indexed memory | Tools `memory_search`, `memory_get`, optional `memory_summarize`; `/summarize`, `/memory_settings` | `~/.pi/agent/memory-settings.json`, `memory-index.md`, `memories/`; storage paths are fixed to this directory |
-| [sol-pi](extensions/sol-pi/index.ts) | Register the three SoL-Pi subcomponents below | Auto-loaded entry, not a user command | No separate configuration file; see [SoL-Pi documentation](extensions/sol-pi/README.md) |
-| [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | Replace repeated large plain-text tool results with archive references | Automatic context projection; tool `obs_recall` | Registered by `sol-pi`; non-error plain-text results over 10 KiB are sent fully twice, then referenced; archived in the local session directory |
+| [sol-pi](extensions/sol-pi/index.ts) | Register the two SoL-Pi subcomponents below | Auto-loaded entry, not a user command | No separate configuration file; see [SoL-Pi documentation](extensions/sol-pi/README.md) |
+| [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | Replace repeated large plain-text tool results with archive references | Automatic context projection; tool `obs_recall` | Registered by `sol-pi`; non-error plain-text results over 10 KiB are sent fully twice, then referenced; archived in the local session directory or a private temporary directory |
 | [SoL-Pi / OCC](extensions/sol-pi/extensions/online-context-compact/extension.ts) | Evaluate context compaction economically after completing plan steps | Tool `update_plan` and turn-boundary hooks, not a user command | Registered by `sol-pi`; reads effective `compaction` / `retry` in `settings.json`, trusting project settings only after approval; requires a persistent main session, disabled in Workers |
 | [telegram](extensions/telegram/index.ts) | Send run replies and some question notifications to a target chat | Automatic event notifications, not a user command; no remote control | Environment variables `PI_TG_TOKEN`, `PI_TG_CHAT`; sends nothing if either is missing; no polling; depends on `node-telegram-bot-api` |
 | [thinking-translation](extensions/thinking-translation/index.ts) | Add Chinese display translations to short Thinking without changing source sessions or model context | `/thinking_translation` toggle; automatically triggered by live streaming | `thinking-translation-settings.json`: `enabled`, `model`, `maxThinkingLength`; requests always use minimal reasoning; local cache at `~/.pi/thinking-translations/` |
@@ -39,7 +39,7 @@ The old local `context`, `usage`, and `fast` extensions have been removed; their
 
 ## Installation
 
-Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi), with Git for commits and Worker change checks. SoL-Pi OCC has been verified against Pi **0.87.1**; recheck compatibility after upgrading Pi.
+Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi), with Git for commits and Worker change checks. SoL-Pi OCC has been verified against Pi **1.0.2**; recheck compatibility after upgrading Pi.
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -146,8 +146,8 @@ Unexpected disconnection during a pending question fails and cleans up the worke
 
 `extensions/sol-pi/` provides two mechanisms; codemode sequences native tools for file changes and follow-up verification:
 
-1. **ObservationPack**: replaces repeated large plain-text results with references that `obs_recall` reads back in pages by byte offset. Archives stay in local session directories and are neither automatically cleaned up nor redacted.
-2. **Online Context Compact (OCC)**: `update_plan` replaces the complete plan on every call. Only a successful plan update in the current turn that newly completes a step while work remains can lead to compaction and continuation after economic gates pass; completing the whole plan never triggers it. Requires a persistent main session and effective `compaction.enabled`. Summaries can lose detail and incur extra model requests and cost; savings are not guaranteed. OCC targets Pi **0.87.1** and is disabled in Workers; ObservationPack remain enabled independently.
+1. **ObservationPack**: replaces repeated large plain-text results with references that `obs_recall` reads back in pages by byte offset. Archives stay in local session directories (private temporary directories for nonpersistent sessions) and are neither automatically cleaned up nor redacted.
+2. **Online Context Compact (OCC)**: `update_plan` replaces the complete plan on every call. Only a successful plan update in the current turn that completes a previously registered unfinished step while work remains can lead to compaction and continuation after economic gates pass; completing the whole plan never triggers it. Requires a persistent main session and effective `compaction.enabled`. Summaries can lose detail and incur extra model requests and cost; savings are not guaranteed. OCC targets Pi **1.0.2** and is disabled in Workers; ObservationPack remains enabled independently.
 
 OCC boundary compaction does not fire native `session_before_compact` / `session_compact` hooks; workflows depending on them to intercept all compactions should disable OCC/compaction. After compaction, if `memory_get` asks to reuse content no longer in context, explicitly read the original memory rather than treating the deduplication notice as its contents.
 

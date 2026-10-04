@@ -1,17 +1,21 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
- * Pi 0.87.1 boundary-draft lifecycle port. No abort/settled-message continuation.
+ * Pi 1.0.2 boundary-draft lifecycle adapter. No abort/settled-message continuation.
  */
+import { createHash } from "node:crypto";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
 	buildSessionProjection, compact,
 	type ExtensionContext, type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_COMPACTION_ECONOMICS, decideCompaction } from "./economics.ts";
 import { analyzePlanTransition, formatPlanSnapshot, parsePlanSteps } from "./plan.ts";
+import { estimateNativeCompactionTokens } from "./projection.ts";
 import {
 	ONLINE_STATE_ENTRY, appendOnlineState, recordBoundary, recordCompaction,
-	recordCorrection, recordProviderRequest, restoreOnlineState,
+	recordCompletedPlanHandoff, recordCorrection, recordProviderRequest, restoreOnlineState,
 	type OnlineState, type ProgressSummary,
 } from "./state.ts";
 import {
@@ -20,6 +24,7 @@ import {
 import { resolveOnlineSettings, type SettingsResolver } from "./settings.ts";
 import { registerOnlineTools, type PlanUpdateInput } from "./tools.ts";
 
+/** Planning estimate, used unchanged for both the economic gate and committed debt. */
 export const DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE = 1_000;
 /** Heuristic, NOT a measured/model-specific cache price. */
 export const DEFAULT_CACHE_WRITE_READ_RATIO = 12.5;
@@ -27,7 +32,7 @@ export const BOUNDARY_COMPACTION_INSTRUCTIONS =
 	"Preserve completed work, verification results, important decisions, and remaining work.";
 export const POST_COMPACTION_PLAN_REMINDER =
 	"Online context compaction finished. The parent task is still active. " +
-	"Before continuing work, call update_plan with a fresh plan for the remaining work.";
+	"Continue the remaining work from the current plan. Preserve existing step IDs when updating progress.";
 
 export type OnlineContextCompactOptions = {
 	readonly cacheWriteReadRatio?: number | null;
@@ -46,6 +51,26 @@ function progressSummary(input: PlanUpdateInput, completedStepId: string): Progr
 	};
 }
 
+/** Match only an update we executed this turn to Pi's finalized, successful result. */
+function hasSuccessfulPlanResult(result: ToolResultMessage, id: string): boolean {
+	if (result.isError) return false;
+	if (result.toolCallId === id) return result.toolName === "update_plan";
+	// Pi 1.0.2 records ctx.executeTool calls on the outer result, not as transcript
+	// results of their own. Ignore text/details and incomplete or truncated records.
+	const nested = result.nestedCalls;
+	if (!nested?.complete || !id.startsWith(`${result.toolCallId}/`)) return false;
+	const call = nested.calls.find((item) => item.id === id);
+	if (call?.name !== "update_plan" || call.status !== "ok") return false;
+	// A successful inner plan cannot authorize a failed intermediate parent, even
+	// when the outer script catches that failure and returns successfully.
+	let parentId = id.slice(0, id.lastIndexOf("/"));
+	while (parentId !== result.toolCallId) {
+		if (nested.calls.find((item) => item.id === parentId)?.status !== "ok") return false;
+		parentId = parentId.slice(0, parentId.lastIndexOf("/"));
+	}
+	return true;
+}
+
 export function createOnlineContextCompactExtension(options: OnlineContextCompactOptions = {}): ExtensionFactory {
 	const ratio = options.cacheWriteReadRatio === undefined ? DEFAULT_CACHE_WRITE_READ_RATIO : options.cacheWriteReadRatio;
 	if (ratio !== null && (!Number.isFinite(ratio) || ratio < 0)) throw new Error("Invalid cacheWriteReadRatio");
@@ -54,16 +79,28 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 		if (Number(process.env.PI_WORKER_DEPTH ?? 0) > 0) return;
 		let generation = 0;
 		let controller: AbortController | undefined;
+		let observedMessages: readonly AgentMessage[] | undefined;
 		let pending: { id: string; generation: number; session: string }[] = [];
 		let disabledByUs = false;
+		// Pi 1.0.2 emits input at enqueue time, but no input/source/id at delivery.
+		// Bridge only unique, unchanged queued inputs; ambiguity loses an optional
+		// prediction reset, never authorizes one. Mixed-source queues are excluded:
+		// another input handler could transform an injected prompt into the same
+		// text as a user prompt. Keep only bounded, run-local hashes/tombstones.
+		const queuedInputs = new Map<string, { session: string; anchor: string } | null>();
+		let queueUncertain = false;
+		const inputKey = (content: unknown): string => createHash("sha256").update(JSON.stringify(content)).digest("hex");
+		const forgetQueuedInputs = (): void => { queuedInputs.clear(); queueUncertain = false; };
 		const identity = (ctx: ExtensionContext): string =>
 			`${ctx.sessionManager.getSessionFile()}\n${ctx.sessionManager.getSessionId()}`;
 		const cancel = (): void => {
 			generation++;
 			pending = [];
+			observedMessages = undefined;
 			controller?.abort();
 			controller = undefined;
 		};
+		const reset = (): void => { cancel(); forgetQueuedInputs(); };
 		const eligible = (ctx: ExtensionContext): boolean => {
 			if (!ctx.sessionManager.getSessionFile()) return false;
 			try { return resolveSettings(ctx).compaction.enabled === true; }
@@ -124,27 +161,70 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				};
 			},
 		});
-		pi.on("session_start", (_event, ctx) => { cancel(); syncTool(ctx); });
-		pi.on("session_tree", (_event, ctx) => { cancel(); syncTool(ctx); });
-		pi.on("session_before_tree", cancel);
-		pi.on("session_before_switch", cancel);
-		pi.on("session_before_fork", cancel);
-		pi.on("session_shutdown", cancel);
-		pi.on("model_select", (_event, ctx) => { cancel(); syncTool(ctx); });
-		pi.on("before_agent_start", (_event, ctx) => { cancel(); syncTool(ctx); });
+		pi.on("session_start", (_event, ctx) => { reset(); syncTool(ctx); });
+		pi.on("session_tree", (_event, ctx) => { reset(); syncTool(ctx); });
+		pi.on("session_before_tree", reset);
+		pi.on("session_before_switch", reset);
+		pi.on("session_before_fork", reset);
+		pi.on("session_shutdown", reset);
+		pi.on("model_select", (_event, ctx) => {
+			// A model change doesn't drain the SDK queues; don't re-authorize a
+			// later same-text input while an earlier injected message may remain.
+			reset(); queueUncertain = true; syncTool(ctx);
+		});
+		pi.on("before_agent_start", (_event, ctx) => { reset(); syncTool(ctx); });
+		// Queues drain inside the agent loop, before agent_end. Aborts also reach
+		// agent_end; never let an undelivered ticket survive into another run.
+		pi.on("agent_end", forgetQueuedInputs);
+		pi.on("agent_settled", forgetQueuedInputs);
+		pi.on("context_with_system", (event, ctx) => {
+			// Runs after all OP/context hooks; a read-only snapshot, never a replay.
+			if (eligible(ctx)) observedMessages = structuredClone(event.messages);
+		});
 		pi.on("turn_start", (_event, ctx) => {
 			pending = [];
+			observedMessages = undefined;
 			// Count main-agent turns as the request-horizon proxy, not transport attempts.
 			// CacheWarmer replays onPayload/before_provider_request even while streaming
 			// or awaiting our summary; only the agent lifecycle may repay OCC debt.
 			if (eligible(ctx)) appendOnlineState(pi, recordProviderRequest(reconcile(ctx), tokens(ctx)));
 		});
 		pi.on("input", (event, ctx) => {
+			if (event.streamingBehavior && eligible(ctx) && !queueUncertain) {
+				if (event.source === "extension" || event.streamingBehavior === "steer" ||
+					event.text.startsWith("CORRECTION:") || queuedInputs.size >= 128) {
+					forgetQueuedInputs(); queueUncertain = true;
+				} else {
+					const key = inputKey([{ type: "text", text: event.text }, ...(event.images ?? [])]);
+					const anchor = ctx.sessionManager.getLeafId();
+					queuedInputs.set(key, !queuedInputs.has(key) && anchor ? { session: identity(ctx), anchor } : null);
+				}
+			}
 			if (event.streamingBehavior === "steer" || event.text.startsWith("CORRECTION:")) {
 				cancel();
 				if (eligible(ctx)) appendOnlineState(pi, recordCorrection(reconcile(ctx)));
+			} else if (event.source !== "extension" && eligible(ctx)) {
+				// Only external user input can hand off a completed task. Tool results,
+				// boundary continuations and extension-injected prompts are not new tasks.
+				const state = reconcile(ctx);
+				const next = recordCompletedPlanHandoff(state);
+				if (next !== state) appendOnlineState(pi, next);
 			}
 			return { action: "continue" as const };
+		});
+		pi.on("message_start", (event, ctx) => {
+			if (event.message.role !== "user" || queueUncertain || !eligible(ctx)) return;
+			const content = typeof event.message.content === "string"
+				? [{ type: "text", text: event.message.content }] : event.message.content;
+			const key = inputKey(content);
+			const queued = queuedInputs.get(key);
+			if (!queued) return;
+			queuedInputs.set(key, null);
+			if (ctx.signal?.aborted || queued.session !== identity(ctx) ||
+				!ctx.sessionManager.getBranch().some(entry => entry.id === queued.anchor)) return;
+			const state = reconcile(ctx);
+			const next = recordCompletedPlanHandoff(state);
+			if (next !== state) { cancel(); appendOnlineState(pi, next); }
 		});
 		pi.on("session_before_compact", (event) => {
 			cancel();
@@ -167,7 +247,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			if (!eligible(ctx) || !ctx.model || controller || ctx.signal?.aborted || event.outcome !== "completed" ||
 				event.message.role !== "assistant" || !["stop", "toolUse"].includes(event.message.stopReason)) return;
 			if (!boundaries.some((boundary) => boundary.generation === generation && boundary.session === identity(ctx) &&
-				event.toolResults.some((item) => item.toolCallId === boundary.id && item.toolName === "update_plan" && !item.isError))) return;
+				event.toolResults.some((item) => hasSuccessfulPlanResult(item, boundary.id)))) return;
 			// The native preparation MUST see real IDs, never a speculative preview tree.
 			if (event.entries.some((entry) => entry.type !== "custom")) return;
 			const state = reconcile(ctx);
@@ -201,9 +281,10 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				if (!settings.compaction.enabled) return;
 				const preparation = prepareCompaction(ctx.sessionManager.getBranch(), settings.compaction);
 				if (!preparation) return;
+				// Native usage/full-context estimate is conservative when OP has shortened
+				// results without measured usage. Only the proven projected prefix earns savings.
 				const writeTokens = preparation.tokensBefore;
-				const fixedTokens = Math.ceil(Buffer.byteLength(ctx.getSystemPrompt()) / 4);
-				const archiveTokens = Math.max(0, writeTokens - fixedTokens - settings.compaction.keepRecentTokens);
+				const archiveTokens = estimateNativeCompactionTokens(preparation, observedMessages);
 				const decision = decideCompaction({
 					writeTokens, archiveTokens, memoTokens: DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE,
 					contextTokens: writeTokens, completedBoundaryRequestCounts: state.completedBoundaryRequestCounts,
@@ -211,6 +292,8 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 					averageContextTokenIncrement: state.positiveContextDeltaCount ? state.positiveContextDeltaTotal / state.positiveContextDeltaCount : null,
 					contextWindowTokens: ctx.model.contextWindow > 0 ? ctx.model.contextWindow : null,
 					priorCompactionCount: state.nativeCompactionCount, carriedDebtTokens: state.cacheDebtTokens,
+					requestsSinceLastCompaction: state.lastCompactionRequestCount === null
+						? null : state.requestCount - state.lastCompactionRequestCount,
 					cacheDebtRepaymentTokens: state.cacheDebtRepaymentTokens, cacheWriteReadRatio: ratio,
 					economics: { ...DEFAULT_COMPACTION_ECONOMICS, windowReserveTokens: settings.compaction.reserveTokens },
 				});
@@ -236,8 +319,10 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				const result = await compact(preparation, captured.model, undefined, undefined,
 					BOUNDARY_COMPACTION_INSTRUCTIONS, local.signal, ctx.thinkingLevel, stream, undefined, settings.retry);
 				if (!valid() || !result.summary.trim() || !eligible(ctx)) return;
+				// Keep the same estimated memo/cost basis as the gate (not actual summary
+				// length). This state exists only in the atomic boundary draft until commit.
 				const next = recordCompaction(state, {
-					debtTokens: decision.writeTokens * (decision.incrementalCacheCostRatio ?? 0),
+					debtTokens: decision.postCompactionTokens * (decision.incrementalCacheCostRatio ?? 0),
 					repaymentTokens: Math.max(0, decision.archiveTokens - decision.memoTokens),
 				});
 				return {

@@ -14,7 +14,8 @@
  * projection layer (`pi.on("context")`), so the stored session stays intact and
  * recall keeps working after native compaction or a session resume.
  *
- * Storage lives under the active Pi session directory.
+ * Storage lives under the active Pi session directory, or a private temporary
+ * root for in-memory sessions. Temporary archives are retained for parent recall.
  */
 
 import { join } from "node:path";
@@ -118,7 +119,15 @@ export function createObservationPackExtension(): ExtensionFactory {
 
 		pi.on("context", async (event, ctx: ExtensionContext) => {
 			const projected = [...event.messages];
-			const root = runtimeRoot(ctx);
+			let root: string;
+			try {
+				root = runtimeRoot(ctx);
+			} catch (error) {
+				// Temporary root creation/invalid session identity must also fail open.
+				const reason = error instanceof Error ? error.message : String(error);
+				console.error(`[observationpack] fail-open for runtime root: ${reason}`);
+				return { messages: projected };
+			}
 			// How many provider requests each message has already been part of,
 			// counted by the assistant messages that follow it.
 			const priorAssistantCounts = new Array<number>(event.messages.length);

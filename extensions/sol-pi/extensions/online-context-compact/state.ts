@@ -22,6 +22,8 @@ export type OnlineState = {
 	readonly plan: readonly PlanStep[];
 	readonly pendingProgress: readonly ProgressSummary[];
 	readonly requestCount: number;
+	/** Main-agent request count at the last compaction; null when unknown or never compacted. */
+	readonly lastCompactionRequestCount: number | null;
 	readonly lastBoundaryRequestCount: number;
 	readonly completedBoundaryRequestCounts: readonly number[];
 	readonly lastContextTokens: number | null;
@@ -39,6 +41,7 @@ export function initialOnlineState(): OnlineState {
 		plan: [],
 		pendingProgress: [],
 		requestCount: 0,
+		lastCompactionRequestCount: null,
 		lastBoundaryRequestCount: 0,
 		completedBoundaryRequestCounts: [],
 		lastContextTokens: null,
@@ -102,6 +105,8 @@ function parseOnlineState(value: unknown): OnlineState | undefined {
 		!completedBoundaryRequestCounts.every(nonNegativeInteger) ||
 		!nonNegativeInteger(record.epoch) ||
 		!nonNegativeInteger(record.requestCount) ||
+		(record.lastCompactionRequestCount !== undefined && record.lastCompactionRequestCount !== null &&
+			(!nonNegativeInteger(record.lastCompactionRequestCount) || record.lastCompactionRequestCount > record.requestCount)) ||
 		!nonNegativeInteger(record.lastBoundaryRequestCount) ||
 		record.lastBoundaryRequestCount > record.requestCount ||
 		!(record.lastContextTokens === null || nonNegativeInteger(record.lastContextTokens)) ||
@@ -119,6 +124,7 @@ function parseOnlineState(value: unknown): OnlineState | undefined {
 		plan,
 		pendingProgress: pendingProgress as readonly ProgressSummary[],
 		requestCount: record.requestCount,
+		lastCompactionRequestCount: record.lastCompactionRequestCount ?? null,
 		lastBoundaryRequestCount: record.lastBoundaryRequestCount,
 		completedBoundaryRequestCounts: completedBoundaryRequestCounts as readonly number[],
 		lastContextTokens: record.lastContextTokens,
@@ -180,14 +186,31 @@ export function recordCompaction(
 	return {
 		...state,
 		epoch: state.epoch + 1,
+		// Compaction changes the context representation, not the plan or its prediction history.
+		plan: [...state.plan],
+		lastCompactionRequestCount: state.requestCount,
+		pendingProgress: [],
+		// Do not compare context sizes across the replacement summary.
+		lastContextTokens: null,
+		nativeCompactionCount: state.nativeCompactionCount + 1,
+		cacheDebtTokens: state.cacheDebtTokens + Math.max(0, debt.debtTokens),
+		cacheDebtRepaymentTokens: state.cacheDebtRepaymentTokens + Math.max(0, debt.repaymentTokens),
+	};
+}
+
+/** A new user task resets its horizon, but does not forgive outstanding cache investment. */
+export function recordCompletedPlanHandoff(state: OnlineState): OnlineState {
+	if (state.plan.length === 0 || state.plan.some((step) => step.status !== "completed")) return state;
+	return {
+		...state,
+		epoch: state.epoch + 1,
 		plan: [],
 		pendingProgress: [],
+		lastBoundaryRequestCount: state.requestCount,
+		completedBoundaryRequestCounts: [],
 		lastContextTokens: null,
 		positiveContextDeltaTotal: 0,
 		positiveContextDeltaCount: 0,
-		nativeCompactionCount: state.nativeCompactionCount + 1,
-		cacheDebtTokens: Math.max(0, debt.debtTokens),
-		cacheDebtRepaymentTokens: Math.max(0, debt.repaymentTokens),
 	};
 }
 

@@ -7,7 +7,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createOnlineContextCompactExtension } from "../extensions/online-context-compact/extension.ts";
 import { resolveOnlineSettings } from "../extensions/online-context-compact/settings.ts";
-import { initialOnlineState, recordProviderRequest, recordBoundary, recordCompaction, recordCorrection, restoreOnlineState, ONLINE_STATE_ENTRY } from "../extensions/online-context-compact/state.ts";
+import { initialOnlineState, recordProviderRequest, recordBoundary, recordCompaction, recordCompletedPlanHandoff, recordCorrection, restoreOnlineState, ONLINE_STATE_ENTRY } from "../extensions/online-context-compact/state.ts";
 import { prepareCompaction, OCC_FILE_TRACKING } from "../extensions/online-context-compact/native-preparation.ts";
 import { analyzePlanTransition, parsePlanSteps } from "../extensions/online-context-compact/plan.ts";
 import { decideCompaction, DEFAULT_COMPACTION_ECONOMICS } from "../extensions/online-context-compact/economics.ts";
@@ -42,6 +42,7 @@ function harness() {
   };
   createOnlineContextCompactExtension({ cacheWriteReadRatio: 0, resolveSettings: () => settings })(pi);
   const boundary = async () => {
+    await tools.get("update_plan").execute("open", { steps: steps.map(s => ({ ...s, status: "pending" })) }, parent.signal, undefined, ctx);
     handlers.get("turn_start")({}, ctx);
     const message = fauxAssistantMessage(fauxToolCall("update_plan", { steps }, { id: "boundary" }), { stopReason: "toolUse" });
     manager.appendMessage(message);
@@ -161,7 +162,7 @@ test("economics keeps upstream saving, subsequent margin and carried debt gates"
     cacheWriteReadRatio: 12.5, economics: DEFAULT_COMPACTION_ECONOMICS };
   assert.equal(decideCompaction(input).reason, "economic");
   assert.equal(decideCompaction({ ...input, archiveTokens: 500 }).reason, "non_positive_saving");
-  assert.equal(decideCompaction({ ...input, priorCompactionCount: 1, remainingBoundaries: 8 }).reason, "deferred_subsequent_margin");
+  assert.equal(decideCompaction({ ...input, priorCompactionCount: 1, remainingBoundaries: 1 }).reason, "deferred_subsequent_margin");
   assert.equal(decideCompaction({ ...input, priorCompactionCount: 1, carriedDebtTokens: 10000000 }).reason, "deferred_carried_debt");
 });
 
