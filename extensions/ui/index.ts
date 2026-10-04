@@ -31,8 +31,12 @@ export default function ui(pi: ExtensionAPI) {
     let traceUsage: TokenUsage = {};
     let currentUsage: TokenUsage = {};
     let currentTurn: number | undefined;
-    let firstTokenLatencyMs: number | undefined;
     const workerUsage = new WorkerUsageTracker();
+
+    const clearTimer = () => {
+        if (timer) clearInterval(timer);
+        timer = undefined;
+    };
 
     const getMainUsage = (): TokenUsage => ({
         input: (traceUsage.input ?? 0) + (currentUsage.input ?? 0),
@@ -43,7 +47,7 @@ export default function ui(pi: ExtensionAPI) {
         const displayedUsage = combineTokenUsage(mainUsage, workerUsage.total());
         const elapsedSeconds = startedAt === undefined ? 0 : (Date.now() - startedAt) / 1000;
         const tps = calculateTps(displayedUsage, elapsedSeconds);
-        applyWorkingMessage(ctx, startedAt, displayedUsage, currentTurn, tps, firstTokenLatencyMs);
+        applyWorkingMessage(ctx, startedAt, displayedUsage, currentTurn, tps);
     };
 
     pi.events.on(WORKER_USAGE_EVENT, (data) => workerUsage.update(data));
@@ -61,12 +65,11 @@ export default function ui(pi: ExtensionAPI) {
     pi.on('agent_start', (_event, ctx) => {
         workerUsage.reset();
         setWorkingMessageActive(true);
-        if (timer) clearInterval(timer);
+        clearTimer();
         startedAt = Date.now();
         traceUsage = {};
         currentUsage = {};
         currentTurn = 1;
-        firstTokenLatencyMs = undefined;
         refreshWorkingMessage(ctx);
         timer = setInterval(() => refreshWorkingMessage(ctx), WORKING_FRAME_INTERVAL_MS);
     });
@@ -86,9 +89,6 @@ export default function ui(pi: ExtensionAPI) {
             input: reportedInput > 0 ? reportedInput : currentUsage.input,
             output: currentOutput,
         };
-        if (firstTokenLatencyMs === undefined && currentOutput > 0 && startedAt !== undefined) {
-            firstTokenLatencyMs = Date.now() - startedAt;
-        }
         refreshWorkingMessage(ctx);
     });
 
@@ -98,23 +98,18 @@ export default function ui(pi: ExtensionAPI) {
             input: (traceUsage.input ?? 0) + event.message.usage.input,
             output: (traceUsage.output ?? 0) + event.message.usage.output,
         };
-        if (firstTokenLatencyMs === undefined && event.message.usage.output > 0 && startedAt !== undefined) {
-            firstTokenLatencyMs = Date.now() - startedAt;
-        }
         currentUsage = {};
         refreshWorkingMessage(ctx);
     });
 
     pi.on('agent_end', (_event, ctx) => {
         setWorkingMessageActive(false);
-        if (timer) clearInterval(timer);
-        timer = undefined;
+        clearTimer();
         refreshWorkingMessage(ctx);
     });
 
     pi.on('session_shutdown', () => {
         setWorkingMessageActive(false);
-        if (timer) clearInterval(timer);
-        timer = undefined;
+        clearTimer();
     });
 }

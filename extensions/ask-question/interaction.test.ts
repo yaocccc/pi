@@ -94,6 +94,99 @@ for (const [kind, input] of [["single", single], ["questionnaire", multi]] as co
 	});
 }
 
+for (const wasCustom of [false, true]) {
+	test(`single: ${wasCustom ? "custom" : "fixed"} answer preserves the complete result`, async () => {
+		const h = harness();
+		const call = h.call({ question: "Choose?", options: [" A ", "A", "B", "\t"] });
+		await flush();
+		h.input("\x1b[B"); // B, after option normalization
+		if (wasCustom) {
+			h.input("\x1b[B"); h.input("\r");
+			h.input(" B "); // Even text matching a fixed option retains custom provenance.
+		}
+		h.input("\r");
+		const result = await call;
+		assert.deepEqual(result, {
+			content: [{ type: "text", text: wasCustom ? "用户输入：B" : "用户选择：B" }],
+			details: { question: "Choose?", options: ["A", "B"], answer: "B", multiSelect: false, wasCustom },
+		});
+		assert.deepEqual(Object.keys(result.details), ["question", "options", "answer", "multiSelect", "wasCustom"]);
+		assert.equal(h.closes(), 1);
+		assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+	});
+}
+
+for (const grouped of [false, true]) {
+	const kind = grouped ? "questionnaire" : "single";
+	const params = (multiSelect = false) => {
+		const question = { question: "Choose?", options: [" A ", "A", "B", "\t"], multiSelect };
+		return grouped ? { questions: [question] } : question;
+	};
+	const details = (result: any) => grouped ? result.details.questions[0] : result.details;
+	const rendered = (h: ReturnType<typeof harness>) => h.components[0].render(100).join("\n");
+	const submit = (h: ReturnType<typeof harness>) => {
+		h.input("\r");
+		assert.equal(h.closes(), grouped ? 0 : 1, "only a questionnaire requires final review");
+		if (grouped) h.input("\r");
+	};
+
+	test(`${kind}: multi-select validates, toggles, orders and appends custom answers`, async () => {
+		const h = harness(); const call = h.call(params(true)); await flush();
+		h.input("\r");
+		assert.match(rendered(h), /请至少勾选一项/);
+		h.input("\x1b[B"); h.input(" "); // B first
+		h.input("\x1b[A"); h.input(" "); h.input(" "); h.input(" "); // toggle A off and on
+		h.input("\x1b[B"); h.input("\x1b[B"); h.input(" "); // custom input
+		h.input(" custom "); h.input("\r");
+		assert.equal(h.closes(), 0, "adding custom text does not submit multi-select");
+		assert.match(rendered(h), /已选 3 项/);
+		h.input("\x1b[A"); submit(h);
+		const answer = details(await call);
+		assert.deepEqual(answer.options, ["A", "B"]);
+		assert.deepEqual(answer.answer, ["A", "B", "custom"]);
+		assert.deepEqual(answer.customAnswers, ["custom"]);
+		assert.equal(answer.wasCustom, false);
+	});
+
+	test(`${kind}: blank/custom input and Escape return to options without consent`, async () => {
+		const h = harness(); const call = h.call(params()); await flush();
+		if (!grouped) { h.input("\t"); h.input("\x1b[C"); } // single has no navigation
+		h.input("\x1b[B"); h.input("\x1b[B"); h.input("\r");
+		h.input(" "); h.input("\r"); // blank answer returns to options
+		assert.equal(h.closes(), 0);
+		h.input("\r"); h.input("discard me"); h.input("\x1b");
+		assert.equal(h.closes(), 0);
+		h.input("\r"); h.input(" custom "); submit(h);
+		const answer = details(await call);
+		assert.equal(answer.answer, "custom");
+		assert.equal(answer.wasCustom, true);
+	});
+
+	test(`${kind}: custom-only multi-select retains provenance`, async () => {
+		const h = harness(); const call = h.call(params(true)); await flush();
+		h.input("\x1b[B"); h.input("\x1b[B"); h.input("\r");
+		h.input("custom"); h.input("\r"); h.input("\x1b[A"); submit(h);
+		const answer = details(await call);
+		assert.deepEqual(answer.answer, ["custom"]);
+		assert.equal(answer.wasCustom, true);
+	});
+}
+
+test("questionnaire: incomplete review is blocked and editing invalidates the previous answer", async () => {
+	const h = harness();
+	const call = h.call({ questions: [{ question: "Choose?", options: ["A", "B"], multiSelect: true }] });
+	await flush();
+	h.input("\x1b[D"); h.input("\r"); // wrap to review without answering
+	assert.match(h.components[0].render(100).join("\n"), /尚未回答：问题 1/);
+	h.input("\t"); h.input(" "); h.input("\r"); // save A
+	h.input("\x1b[Z"); h.input("\x1b[B"); h.input(" "); // back, add B
+	h.input("\x1b[C"); h.input("\r");
+	assert.equal(h.closes(), 0, "changed draft must be confirmed again");
+	assert.match(h.components[0].render(100).join("\n"), /尚未回答：问题 1/);
+	h.input("\x1b[D"); h.input("\r"); h.input("\r");
+	assert.deepEqual((await call).details.questions[0].answer, ["A", "B"]);
+});
+
 test("parallel calls serialize the real Pi editor in FIFO order", async () => {
 	const h = harness();
 	const one = h.call(single); const two = h.call(multi);

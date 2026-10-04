@@ -2,9 +2,22 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { AGENT_DIR, DEFAULT_INDEX, MAX_GET_MEMORY_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH } from './constants';
-import type { GetMemoryResult, IndexEntry, MemoryDetail, MemoryType, SearchCacheEntry } from './types';
-import { clamp, cleanValue, codeWords, exists, limitSummary, redactSensitive, saveText } from './utils';
+import { AGENT_DIR, DEFAULT_INDEX, MAX_GET_MEMORY_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH } from './constants.ts';
+import type { CommitMemory, GetMemoryResult, IndexEntry, MemoryDetail, MemoryType, SearchCacheEntry } from './types';
+import { clamp, cleanValue, codeWords, exists, limitSummary, redactSensitive, saveText } from './utils.ts';
+
+export const indexEntryFromCommit = (memory: CommitMemory): IndexEntry => ({
+    heading: memory.heading,
+    file: memory.file,
+    type: memory.type,
+    project: memory.project,
+    tags: memory.tags,
+    keywords: memory.keywords,
+    summary: memory.summary,
+    whenToUse: memory.whenToUse,
+    constraints: memory.constraints,
+    updated: memory.updated,
+});
 
 export const ensureIndexedMemory = async () => {
     await mkdir(AGENT_DIR, { recursive: true });

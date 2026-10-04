@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { DEFAULT_OPTIONS, PRESETS, RESOLVED_PRESETS, inferPreset, loadRoutingConfig, resolveRoute, validateConfig, validateTask } from "./config.ts";
 import type { RoutingConfig, WorkerTask } from "./types.ts";
 
@@ -30,8 +30,8 @@ test("three-tier config requires no max preset and drops legacy max without muta
 	assert.deepEqual(validateConfig(settings()).config, settings());
 });
 
-test("loadRoutingConfig persists removal of only the legacy top-level max preset", (t) => {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "worker-settings-migrate-"));
+function settingsFile(t: TestContext): string {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "worker-settings-test-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	t.after(() => {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -39,7 +39,11 @@ test("loadRoutingConfig persists removal of only the legacy top-level max preset
 		fs.rmSync(root, { recursive: true, force: true });
 	});
 	process.env.PI_CODING_AGENT_DIR = root;
-	const file = path.join(root, "worker-settings.json");
+	return path.join(root, "worker-settings.json");
+}
+
+test("loadRoutingConfig persists removal of only the legacy top-level max preset", (t) => {
+	const file = settingsFile(t);
 	fs.writeFileSync(file, JSON.stringify({ ...settings(), max: { model: "fixture/old", thinking: "high" } }));
 	const first = loadRoutingConfig();
 	assert.equal("max" in first.config, false);
@@ -47,6 +51,53 @@ test("loadRoutingConfig persists removal of only the legacy top-level max preset
 	assert.equal("max" in onDisk, false);
 	assert.deepEqual(onDisk, settings());
 	assert.deepEqual(loadRoutingConfig().config, first.config);
+});
+
+test("flat defaults fill only missing options and preserve custom fields", (t) => {
+	const file = settingsFile(t);
+	for (const key of Object.keys(DEFAULT_OPTIONS)) {
+		const raw: Record<string, unknown> = { ...settings(), custom: { enabled: true }, automaticDelegationEnabled: false };
+		delete raw[key];
+		fs.writeFileSync(file, JSON.stringify(raw));
+		const expected = validateConfig({ ...DEFAULT_OPTIONS, ...raw } as RoutingConfig).config;
+		assert.deepEqual(loadRoutingConfig().config, expected, key);
+		assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), expected, key);
+	}
+});
+
+test("complete options are normalized without rewriting explicit falsy values", (t) => {
+	const file = settingsFile(t);
+	const raw = { ...settings(), version: 0, automaticDelegationEnabled: false, maxConcurrentWorkers: 0, defaultTimeoutMs: null, maxOutputBytes: "" };
+	const text = JSON.stringify(raw);
+	fs.writeFileSync(file, text);
+	const { config } = loadRoutingConfig();
+	assert.equal(config.version, 0);
+	assert.equal(config.automaticDelegationEnabled, false);
+	assert.equal(config.maxConcurrentWorkers, DEFAULT_OPTIONS.maxConcurrentWorkers);
+	assert.equal(config.defaultTimeoutMs, DEFAULT_OPTIONS.defaultTimeoutMs);
+	assert.equal(config.maxOutputBytes, DEFAULT_OPTIONS.maxOutputBytes);
+	assert.equal(fs.readFileSync(file, "utf8"), text);
+});
+
+test("legacy retry and per-preset output limits are removed and persisted", (t) => {
+	const file = settingsFile(t);
+	for (const raw of [
+		{ ...settings(), maxAutomaticRetries: 2 },
+		...RESOLVED_PRESETS.map((preset) => ({ ...settings(), [preset]: { ...settings()[preset], maxOutputBytes: 100 } })),
+	]) {
+		fs.writeFileSync(file, JSON.stringify(raw));
+		assert.deepEqual(loadRoutingConfig().config, settings());
+		assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), settings());
+	}
+});
+
+test("invalid settings remain untouched rather than persisting defaults", (t) => {
+	const file = settingsFile(t);
+	for (const text of ["{", "null", "[]", "42", '"text"', "{}", JSON.stringify({ fast: settings().fast })]) {
+		fs.writeFileSync(file, text);
+		assert.throws(() => loadRoutingConfig());
+		assert.equal(fs.readFileSync(file, "utf8"), text);
+	}
 });
 
 test("max preset is rejected and auto resolves only fast/normal/deep", (t) => {

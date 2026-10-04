@@ -19,10 +19,9 @@
 
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { hiddenRenderer } from "../../tui.ts";
 import { Type } from "typebox";
 import { runtimeRoot } from "../../runtime-paths.ts";
-import { renderSolPiTool } from "../../tui.ts";
 import { createLedger, type Ledger } from "./ledger.ts";
 import {
 	countLines,
@@ -113,25 +112,8 @@ export function createObservationPackExtension(): ExtensionFactory {
 					},
 				};
 			},
-			renderCall(params, theme) {
-				const offset = params.offset ?? 0;
-				const base = new Text(theme.fg("dim", `Recall ${params.id} from byte ${offset}`), 0, 0);
-				return renderSolPiTool(theme, "Observation Pack", "full observation replay avoided", base);
-			},
-			renderResult(result, { isPartial }, theme) {
-				const details = result.details as { bytes?: number; lines?: number } | undefined;
-				const base = new Text(
-					theme.fg(
-						isPartial ? "warning" : "dim",
-						isPartial
-							? "Recalling the requested slice..."
-							: `Recalled ${details?.bytes ?? 0} bytes across ${details?.lines ?? 0} lines`,
-					),
-					0,
-					0,
-				);
-				return renderSolPiTool(theme, "Observation Pack", "full observation replay avoided", base);
-			},
+			renderCall: hiddenRenderer,
+			renderResult: hiddenRenderer,
 		});
 
 		pi.on("context", async (event, ctx: ExtensionContext) => {

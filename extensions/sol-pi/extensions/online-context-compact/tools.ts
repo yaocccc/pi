@@ -4,7 +4,7 @@
  */
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { hiddenRenderer } from "../../tui.ts";
 import { Type } from "typebox";
 import { PLAN_STATUSES, type PlanStep } from "./plan.ts";
 
@@ -25,13 +25,6 @@ export type PlanUpdateInput = {
 export type OnlineToolHandlers = {
 	readonly updatePlan: (input: PlanUpdateInput) => Promise<AgentToolResult<Readonly<Record<string, unknown>>>>;
 };
-
-function hiddenRenderer(): Component {
-	return {
-		render: (_width) => [],
-		invalidate() {},
-	};
-}
 
 const progressSchema = Type.Object(
 	{
@@ -80,11 +73,7 @@ export function registerOnlineTools(pi: ExtensionAPI, handlers: OnlineToolHandle
 				signal,
 				context,
 			}),
-		renderCall() {
-			return hiddenRenderer();
-		},
-		renderResult() {
-			return hiddenRenderer();
-		},
+		renderCall: hiddenRenderer,
+		renderResult: hiddenRenderer,
 	});
 }

@@ -181,18 +181,18 @@ export function placeholderFor(observation: Observation): string {
 	const head = completeLineExcerpt(observation.text, headBudget, false);
 	const tail = completeLineExcerpt(observation.text, tailBudget, true);
 	return [
-		`[large tool result replaced after its first ${FULL_SENDS} provider requests]`,
+		`[full for first ${FULL_SENDS} provider requests; now packed]`,
 		`id: ${observation.id}`,
 		`tool: ${observation.toolName}`,
 		`original_bytes: ${observation.bytes}`,
 		`original_lines: ${observation.lines}`,
 		`estimated_tokens: ${observation.tokens}`,
-		`retrieve: call obs_recall with {"id":"${observation.id}","offset":0}; continue with returned next_offset`,
-		`[first complete lines, up to ${headBudget} bytes]`,
+		`retrieve: obs_recall {"id":"${observation.id}","offset":0}; continue with next_offset`,
+		`[first whole lines, <=${headBudget} bytes]`,
 		head,
-		`[middle omitted; last complete lines, up to ${tailBudget} bytes]`,
+		`[middle omitted; last whole lines, <=${tailBudget} bytes]`,
 		tail,
-		`[${observation.bytes} original bytes omitted]`,
+		`[end excerpts]`,
 	].join("\n");
 }
 

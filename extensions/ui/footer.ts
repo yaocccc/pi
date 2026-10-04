@@ -4,13 +4,14 @@ import { getAgentDir, type ExtensionContext } from '@earendil-works/pi-coding-ag
 import { truncateToWidth, visibleWidth, type Component } from '@earendil-works/pi-tui';
 import type { FooterData } from './types.ts';
 
-const fastConfigPath = join(getAgentDir(), 'fast.json');
+const fastConfigPath = join(getAgentDir(), 'codex-fast.json');
 
-function isFastEnabled(): boolean {
+function loadFastConfig(): { fast: boolean; ultrafast: boolean } {
     try {
-        return JSON.parse(readFileSync(fastConfigPath, 'utf8'))?.enabled === true;
+        const config = JSON.parse(readFileSync(fastConfigPath, 'utf8'));
+        return { fast: config?.fast === true, ultrafast: config?.ultrafast === true };
     } catch {
-        return false;
+        return { fast: false, ultrafast: false };
     }
 }
 
@@ -46,7 +47,8 @@ export class NoCostFooter implements Component {
         const model = this.ctx.model as any;
         const modelText = model?.name || model?.id || 'no-model';
         const thinkingLevel = this.ctx.thinkingLevel || 'off';
-        const rightText = `${isFastEnabled() ? '✨ ' : ''}${modelText} . ${thinkingLevel}`;
+        const fastConfig = loadFastConfig();
+        const rightText = `${fastConfig.fast ? '✨ ' : ''}${fastConfig.ultrafast ? '🌟 ' : ''}${modelText} . ${thinkingLevel}`;
         const statuses = Array.from(this.footerData.getExtensionStatuses().values()).map((s) => s.replace(/[\r\n\t]/g, ' ').trim()).filter(Boolean);
         const leftText = [pwd, statuses.join(' · '), contextText].filter(Boolean).join(' · ');
         const right = this.theme.fg('dim', rightText);

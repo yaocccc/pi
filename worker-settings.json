@@ -1,18 +1,18 @@
 {
   "version": 2,
   "fast": {
-    "model": "openai-codex/gpt-6-sol",
+    "model": "openai-codex/gpt-6.1-sol",
     "thinking": "medium"
   },
   "normal": {
-    "model": "openai-codex/gpt-6-sol",
+    "model": "openai-codex/gpt-6.1-sol",
     "thinking": "high"
   },
   "deep": {
     "model": "openai-codex/gpt-6-astra",
     "thinking": "high"
   },
-  "maxConcurrentWorkers": 3,
+  "maxConcurrentWorkers": 5,
   "automaticDelegationEnabled": true,
   "defaultTimeoutMs": 1800000,
   "maxOutputBytes": 131072

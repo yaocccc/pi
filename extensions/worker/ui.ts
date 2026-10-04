@@ -35,19 +35,12 @@ type ResultCompactProfile = {
 	stringBytes: number;
 	nestedItems: number;
 	objectKeys: number;
-	summary: number;
-	changedFiles: number;
-	validation: number;
-	acceptance: number;
-	findings: number;
-	risks: number;
-	outOfScope: number;
-	nextActions: number;
+	fields: Record<string, number>;
 };
 
 const RESULT_COMPACT_PROFILES: Record<"standard" | "minimal", ResultCompactProfile> = {
-	standard: { stringBytes: 768, nestedItems: 10, objectKeys: 10, summary: 4, changedFiles: 50, validation: 8, acceptance: 8, findings: 10, risks: 6, outOfScope: 4, nextActions: 4 },
-	minimal: { stringBytes: 256, nestedItems: 5, objectKeys: 8, summary: 2, changedFiles: 20, validation: 3, acceptance: 3, findings: 4, risks: 3, outOfScope: 2, nextActions: 2 },
+	standard: { stringBytes: 768, nestedItems: 10, objectKeys: 10, fields: { summary: 4, changed_files: 50, validation: 8, acceptance: 8, findings: 10, risks: 6, out_of_scope: 4, recommended_next_action: 4 } },
+	minimal: { stringBytes: 256, nestedItems: 5, objectKeys: 8, fields: { summary: 2, changed_files: 20, validation: 3, acceptance: 3, findings: 4, risks: 3, out_of_scope: 2, recommended_next_action: 2 } },
 };
 
 function compactResultText(value: string, maxBytes: number): string {
@@ -71,7 +64,8 @@ function compactExecution(value: unknown, profile: ResultCompactProfile): unknow
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const execution = value as Record<string, any>;
 	const usage = execution.usage && typeof execution.usage === "object" ? execution.usage as Record<string, any> : undefined;
-	return compactResultValue({
+	// These fixed protocol fields are not subject to the arbitrary-object key cap.
+	return Object.fromEntries(Object.entries({
 		resolved_preset: execution.resolved_preset,
 		actual_model_id: execution.actual_model_id ?? execution.resolved_model_id,
 		actual_thinking: execution.actual_thinking ?? execution.resolved_thinking,
@@ -89,42 +83,37 @@ function compactExecution(value: unknown, profile: ResultCompactProfile): unknow
 		termination: execution.termination,
 		termination_source: execution.termination_source,
 		warnings: execution.warnings,
-	}, profile);
+	}).map(([key, value]) => [key, compactResultValue(value, profile, 1)]));
 }
 
 export function compactWorkerResult(result: Record<string, any>, level: "standard" | "minimal" = "standard"): Record<string, any> {
 	const profile = RESULT_COMPACT_PROFILES[level];
-	const take = (key: string, limit: number) => Array.isArray(result[key])
-		? result[key].slice(0, limit).map((item: unknown) => compactResultValue(item, profile))
-		: [];
-	return {
+	const compact: Record<string, any> = {
 		status: result.status,
 		execution: compactExecution(result.execution, profile),
 		failure: compactResultValue(result.failure, profile),
-		summary: take("summary", profile.summary),
-		changed_files: take("changed_files", profile.changedFiles),
-		validation: take("validation", profile.validation),
-		acceptance: take("acceptance", profile.acceptance),
-		findings: take("findings", profile.findings),
-		risks: take("risks", profile.risks),
-		out_of_scope: take("out_of_scope", profile.outOfScope),
-		recommended_next_action: take("recommended_next_action", profile.nextActions),
 	};
+	for (const [key, limit] of Object.entries(profile.fields)) {
+		compact[key] = Array.isArray(result[key])
+			? result[key].slice(0, limit).map((item: unknown) => compactResultValue(item, profile))
+			: [];
+	}
+	return compact;
 }
 
 export function serializePayload(payload: Record<string, any>, maxBytes: number): { payload: Record<string, any>; text: string } {
 	let bounded = payload;
-	let text = JSON.stringify(bounded, null, 2);
+	let text = JSON.stringify(bounded);
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
 	bounded = Array.isArray(payload.results)
 		? { status: payload.status, truncated: true, results: payload.results.map((item: Record<string, any>) => compactWorkerResult(item, "minimal")) }
 		: { ...compactWorkerResult(payload, "minimal"), truncated: true };
-	text = JSON.stringify(bounded, null, 2);
+	text = JSON.stringify(bounded);
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
 	bounded = Array.isArray(payload.results)
 		? { status: payload.status, truncated: true, results: payload.results.map((item: Record<string, any>, index: number) => ({ index, status: item.status })) }
 		: { status: payload.status, truncated: true, summary: ["Worker 结果超过输出上限，详细字段已省略"] };
-	text = JSON.stringify(bounded, null, 2);
+	text = JSON.stringify(bounded);
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
 	bounded = { status: "failed", truncated: true, summary: ["Worker 结果超过输出上限"] };
 	return { payload: bounded, text: JSON.stringify(bounded) };

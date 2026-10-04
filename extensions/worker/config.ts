@@ -24,26 +24,6 @@ export function agentDir(): string {
 	return path.resolve(process.env.PI_CODING_AGENT_DIR || getAgentDir());
 }
 
-export function deepMergeMissing<T>(current: T, defaults: T): { value: T; changed: boolean } {
-	if (Array.isArray(defaults)) return { value: current === undefined ? defaults : current, changed: current === undefined };
-	if (defaults && typeof defaults === "object") {
-		const base = current && typeof current === "object" && !Array.isArray(current) ? { ...(current as object) } as Record<string, unknown> : {};
-		let changed = !(current && typeof current === "object" && !Array.isArray(current));
-		for (const [key, defaultValue] of Object.entries(defaults as Record<string, unknown>)) {
-			if (base[key] === undefined) {
-				base[key] = defaultValue;
-				changed = true;
-			} else {
-				const merged = deepMergeMissing(base[key], defaultValue);
-				base[key] = merged.value;
-				changed ||= merged.changed;
-			}
-		}
-		return { value: base as T, changed };
-	}
-	return { value: current === undefined ? defaults : current, changed: current === undefined };
-}
-
 export function atomicWriteJson(filePath: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const temp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
@@ -107,9 +87,10 @@ export function loadRoutingConfig(): { config: RoutingConfig; warnings: string[]
 	}));
 	const hadLegacyRetrySetting = Boolean(current && typeof current === "object" && "maxAutomaticRetries" in current);
 	const hadLegacyMaxPreset = Boolean(current && typeof current === "object" && "max" in current);
-	const merged = deepMergeMissing(current as Record<string, unknown>, DEFAULT_OPTIONS);
-	const validated = validateConfig(merged.value as RoutingConfig);
-	if (merged.changed || hadPresetOutputLimits || hadLegacyRetrySetting || hadLegacyMaxPreset) atomicWriteJson(configPath, validated.config);
+	// Defaults are flat and parsed JSON cannot contain undefined values.
+	const missingDefaults = Object.keys(DEFAULT_OPTIONS).some((key) => !Object.hasOwn(current ?? {}, key));
+	const validated = validateConfig({ ...DEFAULT_OPTIONS, ...current as RoutingConfig });
+	if (missingDefaults || hadPresetOutputLimits || hadLegacyRetrySetting || hadLegacyMaxPreset) atomicWriteJson(configPath, validated.config);
 	return { config: validated.config, warnings: validated.warnings, path: configPath };
 }
 

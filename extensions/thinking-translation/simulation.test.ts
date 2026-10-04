@@ -87,6 +87,30 @@ test("a new thinking block is a fast flush boundary for the preceding block", ()
     coordinator.shutdown();
 });
 
+test("repeated thinking starts preserve lazy blocks, pending jobs and finalized translations", async (t) => {
+    const { coordinator, requests } = harness(1_000);
+    t.after(() => coordinator.shutdown());
+    const key = translationBlockKey(225, 0);
+    coordinator.thinkingDelta(225, 0, "lazy block");
+    coordinator.thinkingStart(225, 0);
+    assert.equal(requests.length, 0, "starting the same block must not flush it");
+    coordinator.boundary(225);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]!.source, "lazy block");
+    coordinator.thinkingStart(225, 0);
+    assert.equal(requests[0]!.signal.aborted, false);
+    assert.deepEqual(coordinator.get(key, "lazy block"), { state: "pending" });
+
+    requests[0]!.resolve("惰性创建的块");
+    await delay(0);
+    coordinator.thinkingEnd(225, 0, "lazy block");
+    coordinator.thinkingStart(225, 0);
+    coordinator.thinkingDelta(225, 0, " ignored after finalization");
+    coordinator.finishMessage(225);
+    assert.equal(requests.length, 1, "restarting a finalized block must not reset its request limit or source");
+    assert.deepEqual(coordinator.get(key, "lazy block"), { state: "ready", translation: "惰性创建的块" });
+});
+
 test("a completed translation stays visible when its block grows and a second block appears", async () => {
     const { coordinator, requests } = harness();
     const firstKey = translationBlockKey(250, 0);

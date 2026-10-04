@@ -553,24 +553,19 @@ export function failureDetails(category: string, reason: string) {
 export async function executeTask(task: WorkerTask, config: RoutingConfig, warnings: string[], ctx: ExtensionContext, signal: AbortSignal | undefined, onProgress?: (patch: Partial<WorkerUiTask>) => void, hadConcurrentWriter: () => boolean = () => false, askParent?: AskParent, managedTimeout = false, owner: WorkerOwner = defaultOwner): Promise<Record<string, any>> {
 	const cwd = resolveTaskCwd(ctx.cwd, task.cwd);
 	const report = (patch: Partial<WorkerUiTask>) => present(() => onProgress?.(patch));
-	let route: Route;
+	let route: Route | null = null;
+	let before: WorkspaceSnapshot;
+	let stage = "route_or_contract";
 	report({ status: "running", phase: "解析模型路由" });
 	try {
 		route = resolveRoute(task, config, ctx);
 		report({ resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, phase: "记录 Git 状态" });
-	}
-	catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		const failure = failureDetails("route_or_contract", reason);
-		return { status: "blocked", execution: baseExecution(task, null, 0, warnings), failure, summary: [reason], changed_files: [], observed_changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
-	}
-	let before: WorkspaceSnapshot | null = null;
-	try {
+		stage = "workspace_snapshot";
 		before = await snapshotWorkspace(cwd, new Set(), signal);
 		report({ phase: "Git 状态记录完成" });
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
-		const failure = failureDetails("workspace_snapshot", reason);
+		const failure = failureDetails(stage, reason);
 		return { status: "blocked", execution: baseExecution(task, route, 0, warnings), failure, summary: [reason], changed_files: [], observed_changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
 	}
 	const systemPrompt = workerPromptBody();
@@ -591,7 +586,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	const parsed = parseStructuredResult(child.assistantText);
 	let delta = { changed: [] as string[] };
 	let deltaError: string | undefined;
-	try { if (before) delta = await changedSince(before, signal); }
+	try { delta = await changedSince(before, signal); }
 	catch (error) { deltaError = `未能校验最终 Git delta：${error instanceof Error ? error.message : String(error)}`; }
 	// Evaluate overlap after the snapshot delta: the scheduler mutates this
 	// execution context when a sibling starts after this task.

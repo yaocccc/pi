@@ -53,7 +53,7 @@ verificationCommands:
 outputRequirements:
 ```
 
-不要只发送“帮我把这个功能做好”。`relevantFiles` 只是读取提示，可包含绝对路径、`cwd` 外路径或 glob，不授予写权限。写入模式必须给出非空 `allowedPaths`；`allowedPaths` 和 `forbiddenPaths` 必须是 `task.cwd` 下的相对路径或 glob，敏感目录应加入 `forbiddenPaths`（例如 `secrets/**`）。`backend/file.ts` 是精确文件，包括待创建文件；`backend/**` 才匹配目录后代。既有目录的裸声明 `backend`、`./backend`、`backend/`（包括排除项）会在启动任意批次任务前报错并建议 `backend/**`。尚不存在的目录也请声明 `dir/**`；不存在的裸路径可能是新文件，不会自动扩成子树。路径检查仅拦截 `edit`/`write`，不是 `bash`、其他工具或 `then_run` 的安全沙箱。验收条件应可通过 diff、编译、测试或明确代码证据判断。
+不要只发送“帮我把这个功能做好”。`relevantFiles` 只是读取提示，可包含绝对路径、`cwd` 外路径或 glob，不授予写权限。写入模式必须给出非空 `allowedPaths`；`allowedPaths` 和 `forbiddenPaths` 必须是 `task.cwd` 下的相对路径或 glob，敏感目录应加入 `forbiddenPaths`（例如 `secrets/**`）。`backend/file.ts` 是精确文件，包括待创建文件；`backend/**` 才匹配目录后代。既有目录的裸声明 `backend`、`./backend`、`backend/`（包括排除项）会在启动任意批次任务前报错并建议 `backend/**`。尚不存在的目录也请声明 `dir/**`；不存在的裸路径可能是新文件，不会自动扩成子树。路径检查仅拦截 `edit`/`write`，不是 `bash` 或其他工具的安全沙箱。验收条件应可通过 diff、编译、测试或明确代码证据判断。
 
 ## 并行原则
 

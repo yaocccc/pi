@@ -4,7 +4,7 @@ import { estimateTokens, type ExtensionContext } from '@earendil-works/pi-coding
 import { readFile, readdir, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { MAX_COMMIT_CHARS, MAX_DETAIL_CHARS, MAX_INDEX_CHARS, MAX_MERGE_DETAIL_CHARS, MEMORIES_DIR, MEMORY_INDEX_PATH } from './constants';
-import { ensureIndexedMemory, extractKeywords, memoryFileRef, memoryPathFromRef, normalizeMemoryType, parseIndex, parseMemoryDetail, projectName, readIndex, renderIndex, renderIndexEntry } from './indexed';
+import { ensureIndexedMemory, extractKeywords, indexEntryFromCommit, memoryFileRef, memoryPathFromRef, normalizeMemoryType, parseIndex, parseMemoryDetail, projectName, readIndex, renderIndex, renderIndexEntry } from './indexed';
 import { readMemorySettings, resolveSummaryModel, resolveSummaryThinking, type MemorySettings } from './settings';
 import type { CommitMemory, CompactResult, IndexEntry, Obj, Progress } from './types';
 import { asObj, assistantText, clamp, clampTail, cleanValue, limitSummary, redactSensitive, saveText, stripFence, textOf, today } from './utils';
@@ -328,18 +328,7 @@ const compactIndexedMemories = async (entries: IndexEntry[], project: string, ct
             const mergedMarkdown = memoryMarkdown(memory);
             await saveText(join(MEMORIES_DIR, keepFileName), mergedMarkdown);
             details.set(memory.file, mergedMarkdown);
-            const nextEntry: IndexEntry = {
-                heading: memory.heading,
-                file: memory.file,
-                type: memory.type,
-                project: memory.project,
-                tags: memory.tags,
-                keywords: memory.keywords,
-                summary: memory.summary,
-                whenToUse: memory.whenToUse,
-                constraints: memory.constraints,
-                updated: memory.updated,
-            };
+            const nextEntry = indexEntryFromCommit(memory);
             kept = upsertIndexEntry(kept, nextEntry);
             touched.add(keepFileName);
             for (const drop of dropEntries) {
@@ -618,18 +607,7 @@ export const commitIndexedMemory = async (
         if (signal?.aborted) return '## Indexed Memory Commit\n\n总结已取消，未写入 indexed memory。';
         stagedDetails.set(fileName, memoryMarkdown(item));
         const oldIndex = entries.findIndex((e) => fileNameFromRef(e.file) === fileName);
-        const nextEntry: IndexEntry = {
-            heading: item.heading,
-            file: item.file,
-            type: item.type,
-            project: item.project,
-            tags: item.tags,
-            keywords: item.keywords,
-            summary: item.summary,
-            whenToUse: item.whenToUse,
-            constraints: item.constraints,
-            updated: item.updated,
-        };
+        const nextEntry = indexEntryFromCommit(item);
         const action = oldIndex >= 0 ? '更新' : '新增';
         entries = upsertIndexEntry(entries, nextEntry);
         committed.push({ memory: item, action });

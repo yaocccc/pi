@@ -6,18 +6,40 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration: custom exte
 
 ## Features
 
-- Custom TUI: interface, dark theme, and `Ctrl+Y` session resume.
-- `/context` shows context usage; `/usage` shows Codex usage.
+- Custom TUI: interface, dark theme, and `Ctrl+Y` session resume; the footer shows context usage, model, Thinking, and Codex Fast switches.
 - `ask_question` supports single-choice, multiple-choice, and multi-question confirmations; concurrent questionnaires are queued to avoid replacing each other. `/commit` generates a Conventional Commit message and commits (staging all changes).
-- `/fast` attempts the priority tier for eligible Codex requests; thinking translation and automatic Chinese session naming are optional.
-- `/impeccable` selects design instructions and inserts an editable prompt; this repository does not include the matching Skill.
+- `/codex-fast` separately configures Fast / Ultrafast request tiers; Chinese thinking translation and automatic Chinese session naming are enabled by default and can be disabled in their configuration.
 - Indexed Memory retrieves local memories on demand; `/summarize` can request a summary. Memories are not distributed with the repository.
-- [Worker](#worker) assists with scoped tasks in separate Pi subprocesses. Fast, Normal, and Deep can be selected automatically; **Max requires an explicit user request**. Path checks are not a security sandbox; inspect the resulting changes.
+- [Worker](#worker) assists with scoped tasks in separate Pi subprocesses. Automatic routing has only three tiers: Fast, Normal, and Deep; Thinking strength is configured independently. Path checks are not a security sandbox; inspect the resulting changes.
 - SoL-Pi supports verification after file edits, recall of long results, and context compaction between plan steps. Tool-result filtering reduces exposure to common secrets but does not guarantee redaction.
+
+## Local extension inventory
+
+Each row corresponds to current source under `extensions/`, excluding `node_modules`, tests, and helper modules. Pi discovers top-level `.ts` files and directories containing `index.ts`. SoL-Pi registers its own subcomponents; `ask-parent.ts` is explicitly loaded only in Worker subprocesses. Do not load these internal entries a second time.
+
+| Extension / source | Purpose | Entry point | Configuration / activation |
+| --- | --- | --- | --- |
+| [ask-question](extensions/ask-question/index.ts) | Queued single-choice, multiple-choice, custom-input, or multi-question forms | Agent tool `ask_question`, not a slash command | No separate configuration; interactive forms require TUI, other modes return unanswered questions only |
+| [autoname](extensions/autoname/index.ts) | Generate/update Chinese session names while preserving manual names | Automatic after the run fully settles | `autoname.json`: `enabled`, `notify`, `cooldownSeconds`, `model`, `reasoning` |
+| [codex-fast](extensions/codex-fast/index.ts) | Set Fast / Ultrafast for eligible Codex requests | Only the `/codex-fast` native selection menu | `codex-fast.json`: independent boolean switches `fast`, `ultrafast`, both off by default |
+| [commit](extensions/commit/index.ts) | Stage all changes, generate an English Conventional Commit with the current model, and commit immediately | `/commit` | No separate configuration; requires Git, an available model and authentication; no pre-commit confirmation menu |
+| [filter-output](extensions/filter-output/index.ts) | Filter common sensitive text and certain sensitive-file reads before successful tool results reach the model | Automatic `tool_result` hook, not a user command | No separate configuration; redaction is not guaranteed; errors are not filtered and `.env.example` reads bypass filtering |
+| [herdr-agent-state](extensions/herdr-agent-state.ts) | Report working/blocked/idle state and session references to Herdr's local socket | **Internal bridge, not a user command** | `HERDR_ENV=1` with `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`; binds only to the main session with UI; managed/overwritten by Herdr |
+| [memory](extensions/memory/index.ts) | Search, read, deduplicate, and summarize indexed memory | Tools `memory_search`, `memory_get`, optional `memory_summarize`; `/summarize`, `/memory_settings` | `~/.pi/agent/memory-settings.json`, `memory-index.md`, `memories/`; storage paths are fixed to this directory |
+| [sol-pi](extensions/sol-pi/index.ts) | Register the three SoL-Pi subcomponents below | Auto-loaded entry, not a user command | No separate configuration file; see [SoL-Pi documentation](extensions/sol-pi/README.md) |
+| [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | Replace repeated large plain-text tool results with archive references | Automatic context projection; tool `obs_recall` | Registered by `sol-pi`; non-error plain-text results over 10 KiB are sent fully twice, then referenced; archived in the local session directory |
+| [SoL-Pi / OCC](extensions/sol-pi/extensions/online-context-compact/extension.ts) | Evaluate context compaction economically after completing plan steps | Tool `update_plan` and turn-boundary hooks, not a user command | Registered by `sol-pi`; reads effective `compaction` / `retry` in `settings.json`, trusting project settings only after approval; requires a persistent main session, disabled in Workers |
+| [telegram](extensions/telegram/index.ts) | Send run replies and some question notifications to a target chat | Automatic event notifications, not a user command; no remote control | Environment variables `PI_TG_TOKEN`, `PI_TG_CHAT`; sends nothing if either is missing; no polling; depends on `node-telegram-bot-api` |
+| [thinking-translation](extensions/thinking-translation/index.ts) | Add Chinese display translations to short Thinking without changing source sessions or model context | `/thinking_translation` toggle; automatically triggered by live streaming | `thinking-translation-settings.json`: `enabled`, `model`, `maxThinkingLength`; requests always use minimal reasoning; local cache at `~/.pi/thinking-translations/` |
+| [ui](extensions/ui/index.ts) | Custom header, editor, footer, tool cards, and main-agent + Worker progress/usage | Automatic TUI rendering, not a user command | No separate configuration; footer reads `codex-fast.json`; theme/display settings in `settings.json`, shortcuts in `keybindings.json` |
+| [worker](extensions/worker/index.ts) | Bounded subprocess tasks, parallel scheduling, and progress cards | Agent tool `worker`; `/worker_settings` | `worker-settings.json`: required three-tier models/Thinking, concurrency, automatic delegation, timeout, and output limit; in subprocesses, this entry installs only the write guard, not nested delegation |
+| [Worker / ask-parent](extensions/worker/ask-parent.ts) | Let a Worker ask the real main agent for a decision | **Internal bridge tool `ask_parent`, not a user command** | Explicitly loaded by Worker; requires subprocess depth and the fd 3 control channel; default answer timeout 120 seconds, configurable to 1–600 seconds |
+
+The old local `context`, `usage`, and `fast` extensions have been removed; their `/context`, `/usage`, and `/fast` commands are no longer provided by these extensions. Context usage appears in the footer; Fast settings use `/codex-fast`. External packages are not part of this local inventory.
 
 ## Installation
 
-Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi). SoL-Pi OCC has been verified against Pi **0.87.1**; recheck compatibility after upgrading Pi.
+Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi), with Git for commits and Worker change checks. SoL-Pi OCC has been verified against Pi **0.87.1**; recheck compatibility after upgrading Pi.
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -37,21 +59,38 @@ Start Pi:
 pi
 ```
 
-Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs only local dependencies from the lockfile in `extensions/`. Once Pi starts, it separately manages the `pi-web-access` and `@ff-labs/pi-fff` extension packages declared in `settings.json`. Run `/login` on first use; run `/reload` after changing extensions, Skills, the theme, or keybindings.
+Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies from the lockfile in `extensions/` (runtime dependencies `typebox` and `node-telegram-bot-api`, plus Pi SDK / TypeScript development dependencies); it does not upgrade global Pi. Once Pi starts, it separately manages the `pi-web-access` and `@ff-labs/pi-fff` extension packages declared in `settings.json`. Run `/login` on first use; run `/reload` after changing extensions, Skills, the theme, or keybindings. Local SDK development dependencies in the lockfile do not replace the validated global host version; see [SoL-Pi documentation](extensions/sol-pi/README.md) for compatibility limits.
 
 ## Common commands
 
 | Command | Purpose |
 | --- | --- |
 | `/login`, `/model` | Configure authentication, choose a model |
-| `/context`, `/usage` | Inspect context usage, Codex usage |
 | `/summarize`, `/memory_settings` | Save reusable memory, adjust memory settings |
 | `/worker_settings` | Adjust Worker models, concurrency, and other settings |
 | `/commit` | Stage all changes, generate a commit message, and commit |
-| `/fast`, `/thinking_translation` | Toggle the optional priority tier, thinking translation |
-| `/impeccable`, `/reload` | Select a design instruction, reload configuration |
+| `/codex-fast` | Open the Fast / Ultrafast settings menu |
+| `/thinking_translation` | Toggle Chinese thinking translation |
+| `/reload` | Reload configuration |
 
-`/commit` sends the complete staged diff to the current model; ensure all working-tree changes belong in the same commit. `memory_search`, `memory_get`, `ask_question`, and `worker` are agent tools, not commands you need to run manually.
+`/login`, `/model`, and `/reload` are Pi built-in commands; the others come from the local extensions above. `/commit` sends the complete staged diff to the current model; ensure all working-tree changes belong in the same commit. `memory_search`, `memory_get`, `memory_summarize`, `ask_question`, `worker`, `obs_recall`, and `update_plan` are agent tools, not slash commands; optional tools depend on their activation conditions.
+
+### Codex Fast
+
+`/codex-fast` only opens the native selection menu; it does not accept subcommands such as `on` / `off`. Select Fast or Ultrafast with the arrow keys. **Enter toggles that switch and saves immediately** to `codex-fast.json`, keeping the menu open. **Esc exits** without undoing saved toggles. Menu saves take effect immediately; use `/reload` after editing the configuration file manually.
+
+Requests are modified only when the provider is `openai-codex` and the API is `openai-codex-responses`. If Ultrafast is enabled and the ID **exactly equals `gpt-6-astra`**, the payload uses `service_tier: "ultrafast"`; otherwise it falls back to `"priority"` only if Fast is enabled. Ultrafast alone leaves requests unchanged for nonmatching models. This is not a retry/downgrade after server rejection and guarantees neither server support nor speed.
+
+In the footer, **✨ means the Fast switch is on, and 🌟 means the Ultrafast switch is on**. These independent markers can appear together. They show saved switch states, not which request tier the current model actually uses.
+
+### Other default behavior
+
+These are source-code defaults, not copied local model or user settings; local configuration can override them.
+
+- **Autoname** is enabled with notifications by default, using the current model, minimal reasoning, and a 600-second cooldown. Automatic naming runs only after a session with UI fully settles and preserves manual names.
+- **Thinking translation** is enabled by default with a default 200-character limit and changes display only. A missing configuration file or unavailable configured model falls back to the current session model. History restoration reads existing cache only, never requesting missing historical translations; reload after changing model/length configuration.
+- **Memory** defaults to 100 entries, automatic summary requests enabled, summary model/Thinking following the current session, and popup results. `memory_summarize` explicitly requests a summary after the run; it does not unconditionally summarize every turn. `/summarize` manually starts background summarization. After changing the automatic switch, use `/reload` to synchronize tool registration; summarization sends session material to the summary model and writes local memory.
+- **Telegram** sends nothing without both environment variables; it only notifies and does not receive chat commands. The current question watcher recognizes only the top-level `question` in `ask_question`; multi-question `questions` forms do not produce matching question notifications. Failures are silently ignored; delivery is not guaranteed.
 
 ## Worker
 
@@ -67,10 +106,11 @@ Five modes are supported: `scout` for read-only investigation, `implement` for i
 
 - **Fast**: clear, local work that is easy to verify.
 - **Normal**: routine work and the default when unsure between Fast and Deep.
-- **Deep**: difficult work such as cross-module changes, unknown root causes, or concurrent state; it is the highest automatically routed complexity tier.
-- **Max**: not an automatic routing tier. Use it only when the user explicitly requests Max, maximum strength, or equivalent; never silently downgrade it.
+- **Deep**: difficult work such as cross-module changes, unknown root causes, or concurrent state; it is the highest task-complexity tier.
 
-Models and Thinking for every tier are read from the local `worker-settings.json`. Use `/worker_settings` to interactively change models, Thinking, concurrency, automatic delegation, timeout, and output limits; saved settings apply to subsequent tasks immediately. Configured models must be available.
+`preset` accepts only `auto`, `fast`, `normal`, and `deep`; **there is no Max execution tier**. Thinking levels `high`, `xhigh`, and `max` are independent per-tier reasoning strengths, not extra routing tiers, and must be supported by the model.
+
+Models and Thinking for every tier are read from local `worker-settings.json`; `fast`, `normal`, and `deep` must each specify a valid model. Missing/unavailable models produce errors, never guessed routes or silent downgrades. Loading legacy configuration removes and persists the obsolete top-level `max` entry. General source defaults are concurrency 3, automatic delegation enabled, 15-minute task timeout, and 64 KiB output limit. `/worker_settings` interactively edits these settings and per-tier models/Thinking; choosing “Save and exit” applies them immediately to subsequent tasks. When automatic delegation is off, explicit starts require `manual: true`.
 
 ### Questions and user confirmation
 
@@ -88,26 +128,27 @@ Each batch uses only its original Worker card, styled consistently with the tool
 
 Progress is truncated and filtered for common sensitive fields; this does not guarantee complete redaction. Cancellation, timeout, or output overflow triggers an attempt to terminate the subprocess; cancel calls wait for cleanup. Failures go to the main agent for handling and are not automatically retried. Reloading, switching sessions, or navigating the session tree cleans up background tasks. Historical cards use the latest persisted snapshot on the current branch and never resume subprocesses.
 
-`cwd` must remain inside the main working directory. `allowedPaths`/`forbiddenPaths` are checked only before `edit` and `write` tool calls. They are not a shell or filesystem sandbox and do not constrain `bash`, other extension tools, or `then_run` commands; do not treat them as an isolation boundary. The main agent must inspect actual changes, pre-existing worktree modifications, verification evidence, and task scope before accepting the result.
+`cwd` must remain inside the main working directory. `allowedPaths`/`forbiddenPaths` are checked only before `edit` and `write` tool calls. They are not a shell or filesystem sandbox and do not constrain `bash` or other extension tools; do not treat them as an isolation boundary. The main agent must inspect actual changes, pre-existing worktree modifications, verification evidence, and task scope before accepting the result.
 
 Unexpected disconnection during a pending question fails and cleans up the worker, even if it catches the IPC error and claims success. There is no automatic reconnect or redispatch. Failure diagnostics retain termination sources and necessary process identifiers; they cannot establish why historical runs were cancelled. Custom SDK hosts must emit and await `session_shutdown`: bare `AgentSession.dispose()` in Pi 0.87.1 does not emit it. See the [Worker extension documentation](extensions/worker/README.md) for protocol details, host limitations, and test commands.
 
 ## Configuration and security
 
-- `settings.json` declares Pi extension packages. `worker-settings.json`, `memory-settings.json`, `fast.json`, `autoname.json`, and `thinking-translation-settings.json` control their respective features.
+- `settings.json` declares Pi extension packages and theme/display preferences. `worker-settings.json`, `memory-settings.json`, `codex-fast.json`, `autoname.json`, and `thinking-translation-settings.json` control their respective features. `keybindings.json` configures `Ctrl+Y` session resume; theme source is [themes/pi.json](themes/pi.json).
 - Keep login credentials and model secrets (such as `auth.json`, `models.json`, and `models-store.json`), sessions and memories (such as `sessions/`, `memory-index.md`, and `memories/`) in ignored local files; do not commit or copy them into a public repository.
 - Create custom model configuration locally and prefer environment-variable references for secrets; see [model configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
 - `.gitignore` does not protect tracked files; check `git status --short --ignored` and `git diff --cached` before publishing. If credentials were exposed, remove the public content and rotate them.
 - Telegram notifications are not used by default. To enable them, first review the extension source and securely configure the chat target and Bot Token; **never put credentials in the repository**. Notifications may send task input, replies, and questions to the target chat, and delivery is not guaranteed.
-- Thinking translation and automatic session naming may send conversation content to their configured models; check the recipients before use.
-- `/usage` relies on an undocumented Codex usage endpoint that may change. Tool-result filtering cannot replace credential management or restrict extensions' local permissions.
+- Thinking translation, automatic session naming, and memory summarization may send Thinking or conversation content to their respective models, with extra requests and costs; check recipients before use. Treat local translation caches, SoL-Pi archives, and Herdr session references as sensitive data too.
+- Tool-result filtering is heuristic and may miss secrets or mask ordinary content. It cannot replace credential management, pre-commit review, or restrictions on extensions' local permissions.
 
 ## SoL-Pi
 
-`extensions/sol-pi/` provides three mechanisms:
+`extensions/sol-pi/` provides two mechanisms; codemode sequences native tools for file changes and follow-up verification:
 
-1. **Action Fusion**: `edit`/`write` can run a verification command via `then_run` after a successful change. A failed command does not roll back the change, and the command is not sandboxed.
-2. **ObservationPack**: replaces repeated large plain-text results with references that `obs_recall` can read back. Archives stay in local session directories and are neither automatically cleaned up nor redacted.
-3. **Online Context Compact (OCC)**: evaluates compaction after eligible plan steps and continues work. Summaries can lose detail and incur extra model requests and cost; savings are not guaranteed. OCC targets Pi **0.87.1** and is disabled in Workers.
+1. **ObservationPack**: replaces repeated large plain-text results with references that `obs_recall` reads back in pages by byte offset. Archives stay in local session directories and are neither automatically cleaned up nor redacted.
+2. **Online Context Compact (OCC)**: `update_plan` replaces the complete plan on every call. Only a successful plan update in the current turn that newly completes a step while work remains can lead to compaction and continuation after economic gates pass; completing the whole plan never triggers it. Requires a persistent main session and effective `compaction.enabled`. Summaries can lose detail and incur extra model requests and cost; savings are not guaranteed. OCC targets Pi **0.87.1** and is disabled in Workers; ObservationPack remain enabled independently.
+
+OCC boundary compaction does not fire native `session_before_compact` / `session_compact` hooks; workflows depending on them to intercept all compactions should disable OCC/compaction. After compaction, if `memory_get` asks to reuse content no longer in context, explicitly read the original memory rather than treating the deduplication notice as its contents.
 
 For provenance, settings, compatibility limitations, and offline test commands, see the [SoL-Pi extension documentation](extensions/sol-pi/README.md).

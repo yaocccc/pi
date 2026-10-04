@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.87.1",
+  "lastChangelogVersion": "1.0.2",
   "editorPaddingX": 1,
   "outputPad": 1,
   "defaultProvider": "openai-codex",
@@ -7,13 +7,15 @@
   "hideThinkingBlock": true,
   "enabledModels": [
     "gpt-6-astra",
-    "gpt-6-sol",
-    "gpt-6-luna"
+    "gpt-6.1-sol"
   ],
   "theme": "pi",
   "showHardwareCursor": true,
   "transport": "auto",
   "defaultThinkingLevel": "medium",
+  "defaultTools": [
+    "+codemode"
+  ],
   "packages": [
     "npm:pi-web-access",
     "npm:@ff-labs/pi-fff"
@@ -30,7 +32,7 @@
   "warnings": {
     "anthropicExtraUsage": false
   },
-  "enableSkillCommands": true,
+  "enableSkillCommands": false,
   "markdown": {
     "mermaid": "streaming"
   },
@@ -38,5 +40,6 @@
   "tuiMode": "fullscreen",
   "fullscreenScrollbar": "auto",
   "fullscreenCopyOnSelect": true,
-  "fullscreenExitOutput": "transcript"
+  "fullscreenExitOutput": "transcript",
+  "fullscreenWheelScrollLines": "auto"
 }

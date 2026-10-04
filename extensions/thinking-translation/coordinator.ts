@@ -69,16 +69,7 @@ export class TranslationCoordinator {
         if (!this.accepting()) return;
         const key = translationBlockKey(messageTimestamp, contentIndex);
         this.flushMessage(messageTimestamp, false, key);
-        if (!this.blocks.has(key)) {
-            this.blocks.set(key, {
-                key,
-                messageTimestamp,
-                source: "",
-                version: 0,
-                requestsStarted: 0,
-                finalized: false,
-            });
-        }
+        this.ensureBlock(messageTimestamp, contentIndex);
     }
 
     thinkingDelta(messageTimestamp: number, contentIndex: number, delta: string): void {
