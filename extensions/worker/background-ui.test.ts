@@ -43,6 +43,16 @@ function harness(execute: typeof executeTask) {
 	return { tools, handlers, commands, usage, ctx, branch, eventHandlers };
 }
 
+test("worker discovers its bundled orchestration skill", async () => {
+	const h = harness(async () => complete);
+	const resources = await h.handlers.get("resources_discover")();
+	assert.deepEqual(resources, {
+		skillPaths: [fileURLToPath(new URL("./SKILL.md", import.meta.url))],
+	});
+	const { readFile } = await import("node:fs/promises");
+	assert.match(await readFile(resources.skillPaths[0], "utf8"), /^name: worker-orchestration$/m);
+});
+
 // Exercise the installed Pi implementation, not a mock that assumes invalidate
 // works after execute. Resolve relative to the public package, without patching it.
 async function piToolComponent() {

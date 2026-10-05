@@ -1,3 +1,4 @@
 {
-  "app.session.resume": ["ctrl+y"]
+  "app.session.resume": ["ctrl+y"],
+  "tui.editor.cursorLeft": ["left"]
 }

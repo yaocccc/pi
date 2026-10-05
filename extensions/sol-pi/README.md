@@ -40,7 +40,6 @@ Aborted, deferred, empty, truncated, or tool-calling summaries never become chec
 
 OCC does not register a `before_provider_request` accounting hook: Pi 1.0.2 CacheWarmer reuses the main request's `onPayload` callback, including while the agent is streaming or awaiting a summary. Replays therefore append no OCC state, repay no OCC debt, and do not move the leaf through OCC. Successful native warming still appends its own `usage` entry and advances the raw session leaf; the summary validity guard permits **only a suffix of `usage(kind: "cache_warm")` entries after the captured leaf**. Other appends or branch changes still invalidate the summary. User cache-warming settings and native usage accounting are unchanged.
 
-**Known external limitation:** the existing `memory_get` deduplication can report “reuse the previous read” after compaction has removed that memory's contents from the model context. OCC does not fix or reset the external memory extension's read tracking. Treat that response as insufficient if the contents are no longer visible; retrieve the original memory through an available explicit read path instead.
 
 ### Pi 1.0.2 compatibility audit
 

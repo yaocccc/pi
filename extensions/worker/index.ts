@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
@@ -120,6 +121,9 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 		registerWorkerWriteGuard(pi);
 		return;
 	}
+	pi.on("resources_discover", () => ({
+		skillPaths: [fileURLToPath(new URL("./SKILL.md", import.meta.url))],
+	}));
 	let stopped = false;
 	const createSession = (branch: readonly any[] = [], awaitingHistory = false) => {
 		const history = workerBranchSnapshots(branch);

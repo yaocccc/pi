@@ -11,7 +11,6 @@
 | `codex-fast` | 保留：供应商请求路由行为敏感，没有值得改变的重复主会话提示。 |
 | `commit` | 保留：按需工作流说明承担操作约束，不为缩短文本删除提交安全规则。 |
 | `filter-output` | 保留：输出过滤规则与预览限额直接影响可见结果。 |
-| `memory` | 统一 CommitMemory 到 IndexEntry 的字段投影；不改持久化、压缩决策、清理顺序或记忆提示约束。 |
 | `sol-pi` | 仅保留 Observation Pack 与 OCC，缩短占位文字并隐藏额外界面；移除 Action Fusion，由 codemode 串联原生文件操作和后续命令。OCC 算法、版本门禁及上下文恢复协议不动。 |
 | `telegram` | 保留：通知、认证与异步生命周期不宜为减少行数重排。 |
 | `thinking-translation` | 新块初始化复用 `ensureBlock`；请求时机、版本失效、完成状态与原思考内容不变。 |

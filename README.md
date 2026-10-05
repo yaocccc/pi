@@ -9,7 +9,6 @@
 - 自定义 TUI：界面、深色主题和 `Ctrl+Y` 会话恢复；页脚显示上下文占用、模型、Thinking 与 Codex Fast 开关。
 - `ask_question` 支持单选、多选和多题确认；并发问卷排队显示，避免互相覆盖。`/commit` 生成 Conventional Commit 信息并提交（会暂存全部改动）。
 - `/codex-fast` 分别设置 Fast / Ultrafast 请求档位；Thinking 中文翻译与自动中文会话命名默认开启，可在对应配置中关闭。
-- Indexed Memory 按需检索本地记忆，也可用 `/summarize` 请求总结；记忆内容不随仓库分发。
 - [Worker](#worker) 在独立 Pi 子进程中协助完成指定任务；自动路由仅有 Fast、Normal、Deep 三档，Thinking 强度独立设置。路径检查不是安全沙箱，仍须核对修改。
 - SoL-Pi 提供长结果回读与计划步骤间的上下文压缩；工具结果过滤只降低常见敏感信息泄露风险，不保证脱敏。
 
@@ -25,7 +24,6 @@
 | [commit](extensions/commit/index.ts) | 暂存全部改动，用当前模型生成英文 Conventional Commit 并立即提交 | `/commit` | 无独立配置；需要 Git、可用模型及认证，无提交前确认菜单 |
 | [filter-output](extensions/filter-output/index.ts) | 在模型接收成功的工具结果前过滤常见敏感文本及部分敏感文件读取 | 自动 `tool_result` 钩子，非用户命令 | 无独立配置；不保证脱敏，不过滤错误结果；`.env.example` 读取直接放行 |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | 向 Herdr 的本地 socket 上报工作/阻塞/空闲状态与会话引用 | **内部桥接，非用户命令** | `HERDR_ENV=1` 且存在 `HERDR_SOCKET_PATH`、`HERDR_PANE_ID`；仅绑定有 UI 的主会话，由 Herdr 管理/覆盖 |
-| [memory](extensions/memory/index.ts) | 检索、读取、去重并总结 indexed memory | 工具 `memory_search`、`memory_get`、可选 `memory_summarize`；`/summarize`、`/memory_settings` | `~/.pi/agent/memory-settings.json`、`memory-index.md`、`memories/`；存储路径固定在此目录 |
 | [sol-pi](extensions/sol-pi/index.ts) | 统一注册下面两个 SoL-Pi 子组件 | 自动加载入口，非用户命令 | 无单独配置文件；详见 [SoL-Pi 文档](extensions/sol-pi/README.md) |
 | [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | 用归档引用替代重复的大型纯文本工具结果 | 自动上下文投影；工具 `obs_recall` | 由 `sol-pi` 注册；大于 10 KiB、非错误、纯文本结果前两次完整发送，之后引用；本地会话目录或私有临时目录存档 |
 | [SoL-Pi / OCC](extensions/sol-pi/extensions/online-context-compact/extension.ts) | 在完成计划步骤后按经济性评估上下文压缩 | 工具 `update_plan` 及回合边界钩子，非用户命令 | 由 `sol-pi` 注册；读取有效 `settings.json` 的 `compaction` / `retry`，项目设置须受信任；需持久化主会话，Worker 禁用 |
@@ -66,14 +64,13 @@ pi
 | 命令 | 用途 |
 | --- | --- |
 | `/login`、`/model` | 配置认证、选择模型 |
-| `/summarize`、`/memory_settings` | 保存可复用记忆、调整记忆设置 |
 | `/worker_settings` | 调整 Worker 模型与并发等设置 |
 | `/commit` | 暂存全部改动、生成提交信息并提交 |
 | `/codex-fast` | 打开 Fast / Ultrafast 设置菜单 |
 | `/thinking_translation` | 切换 Thinking 中文翻译 |
 | `/reload` | 重新加载配置 |
 
-`/login`、`/model`、`/reload` 是 Pi 内置命令，其余见上表本地扩展。`/commit` 会把完整的 staged diff 发给当前模型；使用前确认所有工作区改动都应进入同一次提交。`memory_search`、`memory_get`、`memory_summarize`、`ask_question`、`worker`、`obs_recall` 与 `update_plan` 是 Agent 工具，不是斜杠命令；其中可选工具受启用条件限制。
+`/login`、`/model`、`/reload` 是 Pi 内置命令，其余见上表本地扩展。`/commit` 会把完整的 staged diff 发给当前模型；使用前确认所有工作区改动都应进入同一次提交。`ask_question`、`worker`、`obs_recall` 与 `update_plan` 是 Agent 工具，不是斜杠命令；其中可选工具受启用条件限制。
 
 ### Codex Fast
 
@@ -89,7 +86,6 @@ pi
 
 - **Autoname** 默认开启并通知，使用当前模型、minimal reasoning，冷却 600 秒；自动命名仅在有 UI 的会话完全结束后处理，保留用户手动名称。
 - **Thinking 翻译** 默认开启，长度上限默认 200 个字符，只改显示；配置文件缺失或配置模型不可用时使用当前会话模型。历史恢复只读取已有缓存，不为缺失缓存补发翻译请求；修改模型/长度配置后重新加载。
-- **Memory** 默认上限 100 条，自动总结请求开关开启，总结模型/Thinking 跟随当前会话，结果以弹窗展示。`memory_summarize` 是显式请求在本轮结束后总结，并非每轮无条件总结；`/summarize` 可手动触发后台总结。更改自动开关后需 `/reload` 同步工具是否注册；总结会向总结模型发送会话材料并在本地写入记忆。
 - **Telegram** 未配置两个环境变量时不发送；只通知，不接收聊天指令。当前提问观察器只识别 `ask_question` 的顶层 `question`，多题 `questions` 问卷不会生成对应提问通知。失败被静默忽略，不保证送达。
 
 ## Worker
@@ -134,12 +130,12 @@ Worker 可通过 `ask_parent` 向真正的主 Agent 提问，不使用额外的�
 
 ## 配置与安全
 
-- `settings.json` 声明 Pi 扩展包和主题/界面等设置；`worker-settings.json`、`memory-settings.json`、`codex-fast.json`、`autoname.json` 与 `thinking-translation-settings.json` 控制对应功能。`keybindings.json` 配置 `Ctrl+Y` 会话恢复；主题源码在 [themes/pi.json](themes/pi.json)。
-- 登录凭据与模型密钥（如 `auth.json`、`models.json`、`models-store.json`）、会话和记忆（如 `sessions/`、`memory-index.md`、`memories/`）应保留在被忽略的本地文件中，不要提交或复制到公开仓库。
+- `settings.json` 声明 Pi 扩展包和主题/界面等设置；`worker-settings.json`、`codex-fast.json`、`autoname.json` 与 `thinking-translation-settings.json` 控制对应功能。`keybindings.json` 配置 `Ctrl+Y` 会话恢复；主题源码在 [themes/pi.json](themes/pi.json)。
+- 登录凭据与模型密钥（如 `auth.json`、`models.json`、`models-store.json`）、会话（如 `sessions/`）应保留在被忽略的本地文件中，不要提交或复制到公开仓库。
 - 自定义模型配置应在本地创建，并优先通过环境变量引用密钥；参见 [模型配置](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)。
 - `.gitignore` 不会保护已跟踪的文件；发布前检查 `git status --short --ignored` 和 `git diff --cached`。若凭据已泄露，应移除公开内容并轮换密钥。
 - Telegram 通知默认不使用；如需启用，先审查扩展源码并安全配置聊天目标与 Bot Token，**不要将凭据写入仓库**。通知可能把任务输入、回复和提问发往目标聊天，且不保证送达。
-- Thinking 翻译、自动会话命名和记忆总结可能向各自使用的模型发送 Thinking 或会话内容，产生额外请求与费用；使用前确认接收方。本地翻译缓存、SoL-Pi 归档和 Herdr 会话引用同样应按敏感数据处理。
+- Thinking 翻译和自动会话命名可能向各自使用的模型发送 Thinking 或会话内容，产生额外请求与费用；使用前确认接收方。本地翻译缓存、SoL-Pi 归档和 Herdr 会话引用同样应按敏感数据处理。
 - 工具结果过滤仅为启发式处理，可能遗漏秘密或误遮盖普通内容；它不能代替凭据管理、提交前审查或限制扩展的本机权限。
 
 ## SoL-Pi
@@ -149,6 +145,6 @@ Worker 可通过 `ask_parent` 向真正的主 Agent 提问，不使用额外的�
 1. **ObservationPack**：将重复的大型纯文本结果换成可用 `obs_recall` 按字节偏移分页回读的引用；归档保留在本地会话目录（无持久会话时使用私有临时目录），不自动清理或脱敏。
 2. **Online Context Compact（OCC）**：`update_plan` 每次替换完整计划；仅当前回合成功更新计划、完成先前登记的未完成步骤且仍有剩余工作时，才可能在经济性评估通过后压缩并继续任务，完成整个计划不会触发。需持久化主会话且有效 `compaction.enabled` 开启；摘要可能丢失细节，且会产生额外模型请求与费用，并非省钱保证。OCC 针对 Pi **1.0.2**，在 Worker 中禁用，ObservationPack 不因此禁用。
 
-OCC 的边界压缩不触发原生 `session_before_compact` / `session_compact` 钩子；依赖这些钩子拦截所有压缩的工作流应关闭 OCC/压缩。压缩后如 `memory_get` 提示复用但原内容已不在上下文，应显式读取原记忆，不将去重提示当作完整内容。
+OCC 的边界压缩不触发原生 `session_before_compact` / `session_compact` 钩子；依赖这些钩子拦截所有压缩的工作流应关闭 OCC/压缩。
 
 来源、配置、兼容限制及离线测试命令见 [SoL-Pi 扩展文档](extensions/sol-pi/README.md)。
