@@ -2,11 +2,11 @@
   "version": 2,
   "fast": {
     "model": "openai-codex/gpt-6.1-sol",
-    "thinking": "medium"
+    "thinking": "low"
   },
   "normal": {
     "model": "openai-codex/gpt-6.1-sol",
-    "thinking": "high"
+    "thinking": "medium"
   },
   "deep": {
     "model": "openai-codex/gpt-6-astra",

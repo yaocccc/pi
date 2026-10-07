@@ -10,34 +10,33 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration: custom exte
 - `ask_question` supports single-choice, multiple-choice, and multi-question confirmations; concurrent questionnaires are queued to avoid replacing each other. `/commit` generates a Conventional Commit message and commits (staging all changes).
 - `/codex-fast` separately configures Fast / Ultrafast request tiers; Chinese thinking translation and automatic Chinese session naming are enabled by default and can be disabled in their configuration.
 - [Worker](#worker) assists with scoped tasks in separate Pi subprocesses. Automatic routing has only three tiers: Fast, Normal, and Deep; Thinking strength is configured independently. Path checks are not a security sandbox; inspect the resulting changes.
-- SoL-Pi supports recall of long results and context compaction between plan steps. Tool-result filtering reduces exposure to common secrets but does not guarantee redaction.
+- [SoL-Pi](#context-management-sol-pi) archives large tool results and provides online context compaction. Tool-result filtering reduces exposure to common secrets but does not guarantee redaction.
 
 ## Local extension inventory
 
-Each row corresponds to current source under `extensions/`, excluding `node_modules`, tests, and helper modules. Pi discovers top-level `.ts` files and directories containing `index.ts`. SoL-Pi registers its own subcomponents; `ask-parent.ts` is explicitly loaded only in Worker subprocesses. Do not load these internal entries a second time.
+Each row corresponds to current source under `extensions/`, excluding `node_modules`, tests, and helper modules. Pi discovers top-level `.ts` files and directories containing `index.ts`. `ask-parent.ts` is explicitly loaded only in Worker subprocesses. Do not load these internal entries a second time.
 
 | Extension / source | Purpose | Entry point | Configuration / activation |
 | --- | --- | --- | --- |
 | [ask-question](extensions/ask-question/index.ts) | Queued single-choice, multiple-choice, custom-input, or multi-question forms | Agent tool `ask_question`, not a slash command | No separate configuration; interactive forms require TUI, other modes return unanswered questions only |
 | [autoname](extensions/autoname/index.ts) | Generate/update Chinese session names while preserving manual names | Automatic after the run fully settles | `autoname.json`: `enabled`, `notify`, `cooldownSeconds`, `model`, `reasoning` |
+| [btw](extensions/btw/index.ts) | Temporary read-only Q&A from a snapshot of the current context, without tools or writes to the main session | `/btw [question]`, `Ctrl+B` | Requires TUI; uses the current model and authentication; closing discards Q&A but API usage is still billed |
 | [codex-fast](extensions/codex-fast/index.ts) | Set Fast / Ultrafast for eligible Codex requests | Only the `/codex-fast` native selection menu | `codex-fast.json`: independent boolean switches `fast`, `ultrafast`, both off by default |
 | [commit](extensions/commit/index.ts) | Stage all changes, generate an English Conventional Commit with the current model, and commit immediately | `/commit` | No separate configuration; requires Git, an available model and authentication; no pre-commit confirmation menu |
 | [filter-output](extensions/filter-output/index.ts) | Filter common sensitive text and certain sensitive-file reads before successful tool results reach the model | Automatic `tool_result` hook, not a user command | No separate configuration; redaction is not guaranteed; errors are not filtered and `.env.example` reads bypass filtering |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | Report working/blocked/idle state and session references to Herdr's local socket | **Internal bridge, not a user command** | `HERDR_ENV=1` with `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`; binds only to the main session with UI; managed/overwritten by Herdr |
-| [sol-pi](extensions/sol-pi/index.ts) | Register the two SoL-Pi subcomponents below | Auto-loaded entry, not a user command | No separate configuration file; see [SoL-Pi documentation](extensions/sol-pi/README.md) |
-| [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | Replace repeated large plain-text tool results with archive references | Automatic context projection; tool `obs_recall` | Registered by `sol-pi`; non-error plain-text results over 10 KiB are sent fully twice, then referenced; archived in the local session directory or a private temporary directory |
-| [SoL-Pi / OCC](extensions/sol-pi/extensions/online-context-compact/extension.ts) | Evaluate context compaction economically after completing plan steps | Tool `update_plan` and turn-boundary hooks, not a user command | Registered by `sol-pi`; reads effective `compaction` / `retry` in `settings.json`, trusting project settings only after approval; requires a persistent main session, disabled in Workers |
+| [sol-pi](extensions/sol-pi/index.ts) | ObservationPack archives large tool results; Online Context Compact compacts context online | Automatic context hooks; agent tools `obs_recall`, `update_plan` | Auto-discovered entry; do not load twice. See [SoL-Pi docs](extensions/sol-pi/README.md) |
 | [telegram](extensions/telegram/index.ts) | Send run replies and some question notifications to a target chat | Automatic event notifications, not a user command; no remote control | Environment variables `PI_TG_TOKEN`, `PI_TG_CHAT`; sends nothing if either is missing; no polling; depends on `node-telegram-bot-api` |
 | [thinking-translation](extensions/thinking-translation/index.ts) | Add Chinese display translations to short Thinking without changing source sessions or model context | `/thinking_translation` toggle; automatically triggered by live streaming | `thinking-translation-settings.json`: `enabled`, `model`, `maxThinkingLength`; requests always use minimal reasoning; local cache at `~/.pi/thinking-translations/` |
 | [ui](extensions/ui/index.ts) | Custom header, editor, footer, tool cards, and main-agent + Worker progress/usage | Automatic TUI rendering, not a user command | No separate configuration; footer reads `codex-fast.json`; theme/display settings in `settings.json`, shortcuts in `keybindings.json` |
 | [worker](extensions/worker/index.ts) | Bounded subprocess tasks, parallel scheduling, and progress cards | Agent tool `worker`; `/worker_settings` | `worker-settings.json`: required three-tier models/Thinking, concurrency, automatic delegation, timeout, and output limit; in subprocesses, this entry installs only the write guard, not nested delegation |
 | [Worker / ask-parent](extensions/worker/ask-parent.ts) | Let a Worker ask the real main agent for a decision | **Internal bridge tool `ask_parent`, not a user command** | Explicitly loaded by Worker; requires subprocess depth and the fd 3 control channel; default answer timeout 120 seconds, configurable to 1–600 seconds |
 
-The old local `context`, `usage`, and `fast` extensions have been removed; their `/context`, `/usage`, and `/fast` commands are no longer provided by these extensions. Context usage appears in the footer; Fast settings use `/codex-fast`. External packages are not part of this local inventory.
+The old local `context`, `usage`, and `fast` extensions have been removed; their `/context`, `/usage`, and `/fast` commands are no longer provided by these extensions. Context usage appears in the footer; Fast settings use `/codex-fast`. `rolling-compact` and its configuration have been removed, and `/roll-compact` is no longer provided; context management uses SoL-Pi again. External packages are not part of this local inventory.
 
 ## Installation
 
-Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi), with Git for commits and Worker change checks. SoL-Pi OCC has been verified against Pi **1.0.2**; recheck compatibility after upgrading Pi.
+Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi), with Git for commits and Worker change checks.
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -57,7 +56,7 @@ Start Pi:
 pi
 ```
 
-Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies from the lockfile in `extensions/` (runtime dependencies `typebox` and `node-telegram-bot-api`, plus Pi SDK / TypeScript development dependencies); it does not upgrade global Pi. Once Pi starts, it separately manages the `pi-web-access` and `@ff-labs/pi-fff` extension packages declared in `settings.json`. Run `/login` on first use; run `/reload` after changing extensions, Skills, the theme, or keybindings. Local SDK development dependencies in the lockfile do not replace the validated global host version; see [SoL-Pi documentation](extensions/sol-pi/README.md) for compatibility limits.
+Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies from the lockfile in `extensions/` (runtime dependencies `typebox` and `node-telegram-bot-api`, plus Pi SDK / TypeScript development dependencies); it does not upgrade global Pi. Once Pi starts, it separately manages the `pi-web-access` extension package declared in `settings.json`. Run `/login` on first use; run `/reload` after changing extensions, Skills, the theme, or keybindings. Local SDK development dependencies in the lockfile do not replace the validated global host version. SoL-Pi's audit and test runner currently target Pi **1.0.2**; the global Pi inspected here is **1.0.4**, so its version gate stops the tests before execution. Compatibility with that version remains unverified.
 
 ## Common commands
 
@@ -66,6 +65,7 @@ Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies 
 | `/login`, `/model` | Configure authentication, choose a model |
 | `/worker_settings` | Adjust Worker models, concurrency, and other settings |
 | `/commit` | Stage all changes, generate a commit message, and commit |
+| `/btw [question]` | Open temporary read-only Q&A (also available via `Ctrl+B`) |
 | `/codex-fast` | Open the Fast / Ultrafast settings menu |
 | `/thinking_translation` | Toggle Chinese thinking translation |
 | `/reload` | Reload configuration |
@@ -135,16 +135,15 @@ Unexpected disconnection during a pending question fails and cleans up the worke
 - Create custom model configuration locally and prefer environment-variable references for secrets; see [model configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
 - `.gitignore` does not protect tracked files; check `git status --short --ignored` and `git diff --cached` before publishing. If credentials were exposed, remove the public content and rotate them.
 - Telegram notifications are not used by default. To enable them, first review the extension source and securely configure the chat target and Bot Token; **never put credentials in the repository**. Notifications may send task input, replies, and questions to the target chat, and delivery is not guaranteed.
-- Thinking translation and automatic session naming may send Thinking or conversation content to their respective models, with extra requests and costs; check recipients before use. Treat local translation caches, SoL-Pi archives, and Herdr session references as sensitive data too.
+- Thinking translation and automatic session naming may send Thinking or conversation content to their respective models, with extra requests and costs; check recipients before use. Treat local translation caches and Herdr session references as sensitive data too.
 - Tool-result filtering is heuristic and may miss secrets or mask ordinary content. It cannot replace credential management, pre-commit review, or restrictions on extensions' local permissions.
 
-## SoL-Pi
+## Context management: SoL-Pi
 
-`extensions/sol-pi/` provides two mechanisms; codemode sequences native tools for file changes and follow-up verification:
+[SoL-Pi](extensions/sol-pi/README.md) loads automatically through `extensions/sol-pi/index.ts`; do not explicitly load its internal entries again. This local version includes only ObservationPack and Online Context Compact, not Action Fusion, Reducer, or the upstream global configuration loader.
 
-1. **ObservationPack**: replaces repeated large plain-text results with references that `obs_recall` reads back in pages by byte offset. Archives stay in local session directories (private temporary directories for nonpersistent sessions) and are neither automatically cleaned up nor redacted.
-2. **Online Context Compact (OCC)**: `update_plan` replaces the complete plan on every call. Only a successful plan update in the current turn that completes a previously registered unfinished step while work remains can lead to compaction and continuation after economic gates pass; completing the whole plan never triggers it. Requires a persistent main session and effective `compaction.enabled`. Summaries can lose detail and incur extra model requests and cost; savings are not guaranteed. OCC targets Pi **1.0.2** and is disabled in Workers; ObservationPack remains enabled independently.
+- **ObservationPack**: plain-text, non-error tool results larger than 10 KiB remain full text for two provider requests, then become stable ID and head/tail references. The model can retrieve the originals in pages using `obs_recall`. Short text, errors, mixed media, and recall results are not packed; raw session history is not rewritten.
+- **Online compaction**: runs only in persistent main sessions, not Workers. `update_plan` must submit the complete plan; completing a previously registered unfinished step while work remains can trigger compaction and continuation only after economic checks pass. Completing the whole plan does not trigger it. Summaries may lose detail and incur extra model costs; savings are not guaranteed. This is not the former `/roll-compact` manual-summary workflow. Tool calls are hidden, with no promotional banners or savings notices.
+- **Local archives**: large results are stored under `sol-pi/<session-id>/observation-pack/` in the session directory. Non-persistent sessions use a temporary directory that survives exit, but mappings are not restored after a process restart. Treat these originals as sensitive data; they are not automatically deleted.
 
-OCC boundary compaction does not fire native `session_before_compact` / `session_compact` hooks; workflows depending on them to intercept all compactions should disable OCC/compaction.
-
-For provenance, settings, compatibility limitations, and offline test commands, see the [SoL-Pi extension documentation](extensions/sol-pi/README.md).
+See [SoL-Pi validation](extensions/sol-pi/README.md#offline-validation) for commands and version restrictions.

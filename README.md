@@ -10,34 +10,33 @@
 - `ask_question` 支持单选、多选和多题确认；并发问卷排队显示，避免互相覆盖。`/commit` 生成 Conventional Commit 信息并提交（会暂存全部改动）。
 - `/codex-fast` 分别设置 Fast / Ultrafast 请求档位；Thinking 中文翻译与自动中文会话命名默认开启，可在对应配置中关闭。
 - [Worker](#worker) 在独立 Pi 子进程中协助完成指定任务；自动路由仅有 Fast、Normal、Deep 三档，Thinking 强度独立设置。路径检查不是安全沙箱，仍须核对修改。
-- SoL-Pi 提供长结果回读与计划步骤间的上下文压缩；工具结果过滤只降低常见敏感信息泄露风险，不保证脱敏。
+- [SoL-Pi](#上下文管理sol-pi) 提供大工具结果归档与在线上下文压缩；工具结果过滤只降低常见敏感信息泄露风险，不保证脱敏。
 
 ## 本地扩展概览
 
-以下逐项对应当前 `extensions/` 源码，不含 `node_modules`、测试与辅助模块。Pi 自动发现顶层 `.ts` 文件和带 `index.ts` 的目录；SoL-Pi 子组件由其入口注册，`ask-parent.ts` 仅在 Worker 子进程中显式加载，不应重复加载这些内部入口。
+以下逐项对应当前 `extensions/` 源码，不含 `node_modules`、测试与辅助模块。Pi 自动发现顶层 `.ts` 文件和带 `index.ts` 的目录；`ask-parent.ts` 仅在 Worker 子进程中显式加载，不应重复加载这些内部入口。
 
 | 扩展 / 源码 | 用途 | 入口 | 配置 / 启用条件 |
 | --- | --- | --- | --- |
 | [ask-question](extensions/ask-question/index.ts) | 排队展示单选、多选、自定义输入或多题问卷 | Agent 工具 `ask_question`，非斜杠命令 | 无独立配置；交互问卷需 TUI，非 TUI 仅返回未回答的问题 |
 | [autoname](extensions/autoname/index.ts) | 自动生成/更新中文会话名称，保留用户手动命名 | 回合完全结束后自动运行 | `autoname.json`：`enabled`、`notify`、`cooldownSeconds`、`model`、`reasoning` |
+| [btw](extensions/btw/index.ts) | 基于当前上下文快照的临时只读问答，不提供工具、不回写主会话 | `/btw [问题]`、`Ctrl+B` | 需要 TUI；使用当前模型与认证，关闭后不保留问答，仍产生 API 用量 |
 | [codex-fast](extensions/codex-fast/index.ts) | 为符合条件的 Codex 请求设置 Fast / Ultrafast | 仅 `/codex-fast` 原生选择菜单 | `codex-fast.json`：独立布尔开关 `fast`、`ultrafast`，缺省均关闭 |
 | [commit](extensions/commit/index.ts) | 暂存全部改动，用当前模型生成英文 Conventional Commit 并立即提交 | `/commit` | 无独立配置；需要 Git、可用模型及认证，无提交前确认菜单 |
 | [filter-output](extensions/filter-output/index.ts) | 在模型接收成功的工具结果前过滤常见敏感文本及部分敏感文件读取 | 自动 `tool_result` 钩子，非用户命令 | 无独立配置；不保证脱敏，不过滤错误结果；`.env.example` 读取直接放行 |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | 向 Herdr 的本地 socket 上报工作/阻塞/空闲状态与会话引用 | **内部桥接，非用户命令** | `HERDR_ENV=1` 且存在 `HERDR_SOCKET_PATH`、`HERDR_PANE_ID`；仅绑定有 UI 的主会话，由 Herdr 管理/覆盖 |
-| [sol-pi](extensions/sol-pi/index.ts) | 统一注册下面两个 SoL-Pi 子组件 | 自动加载入口，非用户命令 | 无单独配置文件；详见 [SoL-Pi 文档](extensions/sol-pi/README.md) |
-| [SoL-Pi / ObservationPack](extensions/sol-pi/extensions/observation-pack/index.ts) | 用归档引用替代重复的大型纯文本工具结果 | 自动上下文投影；工具 `obs_recall` | 由 `sol-pi` 注册；大于 10 KiB、非错误、纯文本结果前两次完整发送，之后引用；本地会话目录或私有临时目录存档 |
-| [SoL-Pi / OCC](extensions/sol-pi/extensions/online-context-compact/extension.ts) | 在完成计划步骤后按经济性评估上下文压缩 | 工具 `update_plan` 及回合边界钩子，非用户命令 | 由 `sol-pi` 注册；读取有效 `settings.json` 的 `compaction` / `retry`，项目设置须受信任；需持久化主会话，Worker 禁用 |
+| [sol-pi](extensions/sol-pi/index.ts) | ObservationPack 大工具结果归档、Online Context Compact 在线上下文压缩 | 自动上下文钩子；Agent 工具 `obs_recall`、`update_plan` | 自动发现入口，不要重复加载；详见 [SoL-Pi 文档](extensions/sol-pi/README.md) |
 | [telegram](extensions/telegram/index.ts) | 向目标聊天发送回合回复与部分提问通知 | 自动事件通知，非用户命令，不提供远程控制 | 环境变量 `PI_TG_TOKEN`、`PI_TG_CHAT`；缺少任一项不发送，无轮询；依赖 `node-telegram-bot-api` |
 | [thinking-translation](extensions/thinking-translation/index.ts) | 为短 Thinking 添加中文显示翻译，不改原会话内容或模型上下文 | `/thinking_translation` 切换；实时流自动触发 | `thinking-translation-settings.json`：`enabled`、`model`、`maxThinkingLength`；请求固定 minimal；本地缓存 `~/.pi/thinking-translations/` |
 | [ui](extensions/ui/index.ts) | 自定义页头、编辑器、页脚、工具卡片及主 Agent + Worker 工作进度/用量 | 自动 TUI 渲染，非用户命令 | 无独立配置；页脚读取 `codex-fast.json`；主题与显示设置在 `settings.json`，快捷键在 `keybindings.json` |
 | [worker](extensions/worker/index.ts) | 有边界的独立子进程任务、并行调度及进度卡片 | Agent 工具 `worker`；`/worker_settings` | `worker-settings.json`：必需的三档模型/Thinking、并发、自动委派、超时及输出上限；此入口在子进程中仅安装写入检查，不可嵌套委派 |
 | [Worker / ask-parent](extensions/worker/ask-parent.ts) | Worker 向真正的主 Agent 请求决策 | **内部桥接工具 `ask_parent`，非用户命令** | Worker 显式加载，需子进程深度及 fd 3 控制通道；默认答复超时 120 秒，可选 1–600 秒 |
 
-旧的 `context`、`usage`、`fast` 本地扩展已删除；不再提供这些扩展的 `/context`、`/usage`、`/fast` 命令。上下文占用已在页脚展示，Fast 设置入口为 `/codex-fast`。外部包不在此本地扩展表中。
+旧的 `context`、`usage`、`fast` 本地扩展已删除；不再提供这些扩展的 `/context`、`/usage`、`/fast` 命令。上下文占用已在页脚展示，Fast 设置入口为 `/codex-fast`。`rolling-compact` 及其配置已移除，`/roll-compact` 不再提供；上下文管理恢复使用 SoL-Pi。外部包不在此本地扩展表中。
 
 ## 安装
 
-需要 Node.js **22.19+** 与 [Pi Coding Agent](https://github.com/earendil-works/pi)，Git 用于提交和 Worker 的改动检查。SoL-Pi 的 OCC 目前针对 Pi **1.0.2** 验证；升级 Pi 后需重新检查兼容性。
+需要 Node.js **22.19+** 与 [Pi Coding Agent](https://github.com/earendil-works/pi)，Git 用于提交和 Worker 的改动检查。
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -57,7 +56,7 @@ npm ci --prefix ~/.pi/agent/extensions
 pi
 ```
 
-如果没有现有 `~/.pi/agent`，跳过 `mv`。`npm ci` 安装 `extensions/` 锁文件中的本地依赖（运行时依赖为 `typebox`、`node-telegram-bot-api`，另含 Pi SDK / TypeScript 开发依赖），并不会升级全局 Pi；启动 Pi 后，`settings.json` 声明的 `pi-web-access`、`@ff-labs/pi-fff` 扩展包由 Pi 另行管理。首次使用执行 `/login`；更改扩展、Skill、主题或快捷键后执行 `/reload`。锁文件中的本地 SDK 开发依赖不能替代已验证的全局宿主版本；兼容限制见 [SoL-Pi 文档](extensions/sol-pi/README.md)。
+如果没有现有 `~/.pi/agent`，跳过 `mv`。`npm ci` 安装 `extensions/` 锁文件中的本地依赖（运行时依赖为 `typebox`、`node-telegram-bot-api`，另含 Pi SDK / TypeScript 开发依赖），并不会升级全局 Pi；启动 Pi 后，`settings.json` 声明的 `pi-web-access` 扩展包由 Pi 另行管理。首次使用执行 `/login`；更改扩展、Skill、主题或快捷键后执行 `/reload`。锁文件中的本地 SDK 开发依赖不能替代已验证的全局宿主版本。SoL-Pi 的审计与测试入口目前限定 Pi **1.0.2**；本次检查的全局 Pi 为 **1.0.4**，测试因版本门禁退出，尚未验证该版本兼容性。
 
 ## 常用命令
 
@@ -66,6 +65,7 @@ pi
 | `/login`、`/model` | 配置认证、选择模型 |
 | `/worker_settings` | 调整 Worker 模型与并发等设置 |
 | `/commit` | 暂存全部改动、生成提交信息并提交 |
+| `/btw [问题]` | 打开临时只读问答弹窗（也可用 `Ctrl+B`） |
 | `/codex-fast` | 打开 Fast / Ultrafast 设置菜单 |
 | `/thinking_translation` | 切换 Thinking 中文翻译 |
 | `/reload` | 重新加载配置 |
@@ -135,16 +135,15 @@ Worker 可通过 `ask_parent` 向真正的主 Agent 提问，不使用额外的�
 - 自定义模型配置应在本地创建，并优先通过环境变量引用密钥；参见 [模型配置](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)。
 - `.gitignore` 不会保护已跟踪的文件；发布前检查 `git status --short --ignored` 和 `git diff --cached`。若凭据已泄露，应移除公开内容并轮换密钥。
 - Telegram 通知默认不使用；如需启用，先审查扩展源码并安全配置聊天目标与 Bot Token，**不要将凭据写入仓库**。通知可能把任务输入、回复和提问发往目标聊天，且不保证送达。
-- Thinking 翻译和自动会话命名可能向各自使用的模型发送 Thinking 或会话内容，产生额外请求与费用；使用前确认接收方。本地翻译缓存、SoL-Pi 归档和 Herdr 会话引用同样应按敏感数据处理。
+- Thinking 翻译和自动会话命名可能向各自使用的模型发送 Thinking 或会话内容，产生额外请求与费用；使用前确认接收方。本地翻译缓存和 Herdr 会话引用同样应按敏感数据处理。
 - 工具结果过滤仅为启发式处理，可能遗漏秘密或误遮盖普通内容；它不能代替凭据管理、提交前审查或限制扩展的本机权限。
 
-## SoL-Pi
+## 上下文管理：SoL-Pi
 
-`extensions/sol-pi/` 提供两项机制；文件修改与后续验证由 codemode 串联原生工具：
+[SoL-Pi](extensions/sol-pi/README.md) 通过 `extensions/sol-pi/index.ts` 自动加载；不要再显式加载其内部入口。本地版本仅包含 ObservationPack 与 Online Context Compact，不包含 Action Fusion、Reducer 或上游全局配置加载器。
 
-1. **ObservationPack**：将重复的大型纯文本结果换成可用 `obs_recall` 按字节偏移分页回读的引用；归档保留在本地会话目录（无持久会话时使用私有临时目录），不自动清理或脱敏。
-2. **Online Context Compact（OCC）**：`update_plan` 每次替换完整计划；仅当前回合成功更新计划、完成先前登记的未完成步骤且仍有剩余工作时，才可能在经济性评估通过后压缩并继续任务，完成整个计划不会触发。需持久化主会话且有效 `compaction.enabled` 开启；摘要可能丢失细节，且会产生额外模型请求与费用，并非省钱保证。OCC 针对 Pi **1.0.2**，在 Worker 中禁用，ObservationPack 不因此禁用。
+- **ObservationPack**：超过 10 KiB 的纯文本、非错误工具结果先在两次 provider 请求中保留全文，之后替换为稳定 ID 与首尾摘要引用；模型可用 `obs_recall` 分页取回原文。短文本、错误、混合媒体及 recall 结果不打包，不重写原始会话历史。
+- **在线压缩**：仅在持久化主会话中运行，Worker 中禁用。`update_plan` 须提交完整计划；完成先前登记的未完成步骤、仍有剩余工作且通过经济性评估时，才可能压缩并续接任务。完成整个计划不会触发；摘要可能丢失细节并产生额外模型费用，不保证省钱。它不是旧的 `/roll-compact` 手动摘要流程。工具调用隐藏展示，不显示宣传横幅或节省提示。
+- **本地存档**：大结果保存在会话目录下的 `sol-pi/<session-id>/observation-pack/`。无持久会话时使用临时目录，退出后仍保留，但进程重启不恢复映射；这些原文应按敏感数据处理，不会自动删除。
 
-OCC 的边界压缩不触发原生 `session_before_compact` / `session_compact` 钩子；依赖这些钩子拦截所有压缩的工作流应关闭 OCC/压缩。
-
-来源、配置、兼容限制及离线测试命令见 [SoL-Pi 扩展文档](extensions/sol-pi/README.md)。
+验证命令与版本限制见 [SoL-Pi 文档](extensions/sol-pi/README.md#offline-validation)。

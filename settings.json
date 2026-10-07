@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.0.2",
+  "lastChangelogVersion": "1.0.4",
   "editorPaddingX": 1,
   "outputPad": 1,
   "defaultProvider": "openai-codex",
@@ -17,8 +17,7 @@
     "+codemode"
   ],
   "packages": [
-    "npm:pi-web-access",
-    "npm:@ff-labs/pi-fff"
+    "npm:pi-web-access"
   ],
   "treeFilterMode": "all",
   "enableInstallTelemetry": true,
