@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = process.env.SOL_PI_GLOBAL_ROOT ?? execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
 const pi = join(root, "@earendil-works/pi-coding-agent");
 const { version } = JSON.parse(await readFile(join(pi, "package.json"), "utf8"));
-if (version !== "1.0.2") throw new Error(`Requires global Pi 1.0.2; found ${version}`);
+if (version !== "1.0.4") throw new Error(`Requires global Pi 1.0.4; found ${version}`);
 const dir = await mkdtemp(join(tmpdir(), "sol-pi-global-"));
 try {
   const modules = join(dir, "node_modules");
@@ -41,7 +41,7 @@ try {
     console.log(`Global Pi ${version}; isolated offline tests (${files.length} files)`);
     args = ["--experimental-strip-types", "--test", ...files.map(name => join(dir, "sol-pi/tests", name))];
   }
-  const env = { ...process.env, PI_WORKER_DEPTH: "0" };
+  const env = { ...process.env, PI_WORKER_DEPTH: "0", PI_CODING_AGENT_DIR: join(dir, "agent") };
   const result = spawnSync(process.execPath, args, {
     env, stdio: "inherit", cwd: dir, timeout: 120_000,
   });

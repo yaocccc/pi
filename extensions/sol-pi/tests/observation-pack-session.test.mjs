@@ -12,7 +12,7 @@ import { createObservation, countLines, THRESHOLD_BYTES } from "../extensions/ob
 import { runtimeRoot } from "../runtime-paths.ts";
 
 async function setup(t, { history, persistent = false } = {}) {
-  assert.equal(VERSION, "1.0.2");
+  assert.equal(VERSION, "1.0.4");
   const cwd = await mkdtemp(join(tmpdir(), "op-sdk-test-"));
   const agentDir = join(cwd, "agent");
   await mkdir(agentDir);

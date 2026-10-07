@@ -22,7 +22,7 @@ const call = (id, steps, text = "") => fauxAssistantMessage([
 ], { stopReason: "toolUse" });
 
 async function setup(t, options = {}) {
-  assert.equal(VERSION, "1.0.2");
+  assert.equal(VERSION, "1.0.4");
   const cwd = await mkdtemp(join(tmpdir(), "occ-session-"));
   const agentDir = join(cwd, "agent");
   await mkdir(agentDir);
@@ -44,6 +44,7 @@ async function setup(t, options = {}) {
   }) };
   const counts = { main: 0, summary: 0, warm: 0, turns: 0, settled: 0, before: 0, compactHook: 0, requests: [], summaryRequests: [], errors: [] };
   let script = options.script ?? [call("open", plan()), call("boundary", plan(true)), fauxAssistantMessage("FINAL")];
+  let finalContinuation = false;
   let session;
   faux.setResponses(Array.from({ length: 40 }, () => async (context, request) => {
     assert.equal(request.apiKey, "offline-test-key", "main and summary calls retain registry request-time authentication");
@@ -63,9 +64,16 @@ async function setup(t, options = {}) {
       assert.ok(request.signal);
       return options.summary ? options.summary(context, request, counts, () => session) : fauxAssistantMessage("Checkpoint: work done; verification remains.");
     }
+    // Give fast background summaries a deterministic event-loop turn. The main
+    // request has already started: this is response latency, not a boundary wait.
+    await new Promise(resolve => setTimeout(resolve, 10));
     counts.main++;
     counts.requests.push(context);
-    if (!script.length) throw new Error("Unexpected extra main request");
+    if (!script.length) {
+      assert.equal(finalContinuation, false, "at most one final background-checkpoint continuation");
+      finalContinuation = true;
+      return fauxAssistantMessage("FINAL after background checkpoint");
+    }
     const next = script.shift();
     return typeof next === "function" ? next(context, request) : next;
   }));
@@ -96,9 +104,67 @@ async function setup(t, options = {}) {
   return { session, manager, counts, settings, faux, run: () => session.prompt("Finish the task", { expandPromptTemplates: false }) };
 }
 
-// Pi 1.0.2 test-only access: dispatch its real scheduled refresh immediately,
+test("real session remains interactive while summary runs; idle result commits later without losing new messages", { timeout: 5000 }, async t => {
+  let finish, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { finish = resolve; });
+  t.after(finish);
+  const h = await setup(t, {
+    script: [call("open", plan()), call("boundary", plan(true)), fauxAssistantMessage("FIRST RUN FINISHED"),
+      call("complete", plan(true, true)), fauxAssistantMessage("FINAL")],
+    summary: async () => { started(); await gate; return fauxAssistantMessage("Background checkpoint"); },
+  });
+  await h.run(); // Deliberately not releasing the summary: a blocking implementation hangs here.
+  await ready;
+  assert.equal(h.session.isIdle, true);
+  assert.equal(h.counts.main, 3);
+  assert.equal(h.manager.getBranch().some(e => e.type === "compaction"), false);
+  const prefix = h.manager.getBranch().map(e => e.id);
+  finish();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(h.manager.getBranch().map(e => e.id), prefix, "ready result must not write the session while idle");
+  await h.session.prompt("NEW USER MESSAGE DURING BACKGROUND CHECKPOINT", { expandPromptTemplates: false });
+  const compacted = h.manager.getBranch().filter(e => e.type === "compaction");
+  assert.equal(compacted.length, 1);
+  assert.ok(prefix.includes(compacted[0].firstKeptEntryId), "must retain the snapshot anchor, not the current leaf");
+  const nextRequest = JSON.stringify(h.counts.requests.at(-1));
+  assert.match(nextRequest, /Background checkpoint/);
+  assert.match(nextRequest, /NEW USER MESSAGE DURING BACKGROUND CHECKPOINT/);
+  assert.match(nextRequest, /FIRST RUN FINISHED/);
+  assert.equal(h.counts.main, 5, "completed plan adds no ghost continuation");
+  assert.equal(h.counts.settled, 2);
+  assert.deepEqual(h.counts.errors, []);
+});
+
+for (const kind of ["manual", "overflow"]) test(`native ${kind} compaction supersedes a pending background summary`, { timeout: 5000 }, async t => {
+  let finish, backgroundSignal;
+  const gate = new Promise(resolve => { finish = resolve; });
+  t.after(finish);
+  const h = await setup(t, {
+    script: [call("open", plan()), call("boundary", plan(true)),
+      kind === "overflow" ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "maximum context length exceeded" }) : fauxAssistantMessage("FINAL"),
+      fauxAssistantMessage("RECOVERED")],
+    summary: async (_ctx, request, counts) => {
+      if (counts.summary === 1) { backgroundSignal = request.signal; await gate; return fauxAssistantMessage("OBSOLETE BACKGROUND SUMMARY"); }
+      return fauxAssistantMessage("Native recovery checkpoint");
+    },
+  });
+  await h.run();
+  if (kind === "manual") await h.session.compact();
+  assert.equal(backgroundSignal.aborted, true);
+  assert.equal(h.counts.compactHook, 1);
+  finish(); await new Promise(resolve => setTimeout(resolve, 10));
+  const entries = h.manager.getBranch().filter(e => e.type === "compaction");
+  assert.equal(entries.length, 1);
+  assert.match(entries[0].summary, /Native recovery checkpoint/);
+  assert.doesNotMatch(entries[0].summary, /OBSOLETE/);
+  if (kind === "overflow") assert.equal(h.session.getLastAssistantText(), "RECOVERED");
+  assert.deepEqual(h.counts.errors, []);
+});
+
+// Pi 1.0.4 test-only access: dispatch its real scheduled refresh immediately,
 // without sleeps, remote providers, or mocking away the SDK's replayed onPayload.
-async function warmNow(session, manager, counts) {
+async function warmNow(session, manager, counts, concurrent = false) {
   const warmer = session._cacheWarmer;
   assert.equal(warmer.constructor.name, "CacheWarmer");
   const run = warmer.run;
@@ -110,12 +176,15 @@ async function warmNow(session, manager, counts) {
   clearTimeout(run.timer);
   await warmer.refresh(run);
   assert.equal(counts.warm, before.warm + 1, "refresh traversed the real provider onPayload callback");
-  assert.equal(counts.before, before.before + 1, "replay emitted before_provider_request");
-  assert.equal(counts.turns, before.turns, "warming emits no main turn_start");
-  assert.deepEqual(restoreOnlineState(manager.getBranch()), state, "warming cannot increment horizon or repay debt");
+  if (!concurrent) {
+    assert.equal(counts.before, before.before + 1, "replay emitted before_provider_request");
+    assert.equal(counts.turns, before.turns, "warming emits no main turn_start");
+    assert.deepEqual(restoreOnlineState(manager.getBranch()), state, "warming cannot increment horizon or repay debt");
+  }
   // Native usage accounting legitimately advances the raw leaf, but no OCC entry is appended.
   assert.deepEqual(manager.getBranch().slice(0, branch.length), branch);
-  const appended = manager.getBranch().slice(branch.length);
+  const appended = manager.getBranch().slice(branch.length).filter(e => !concurrent || e.type === "usage");
+  if (concurrent && appended.length === 0) return; // A new main request may supersede the replay.
   assert.equal(appended.length, 1);
   assert.equal(appended[0].type, "usage");
   assert.equal(appended[0].kind, "cache_warm");
@@ -159,22 +228,22 @@ test("native CacheWarmer during OCC summaries preserves valid commit and counts 
   let h;
   h = await setup(t, { warming: true, summary: async () => {
     assert.equal(h.session.isStreaming, true, "isStreaming cannot distinguish summary-time warming");
-    await warmNow(h.session, h.manager, h.counts);
+    await warmNow(h.session, h.manager, h.counts, true);
     return fauxAssistantMessage("Checkpoint survives native warming usage entries.");
   } });
   await h.run();
   assert.ok(h.counts.summary > 0);
   assert.equal(h.counts.warm, h.counts.summary);
-  assert.equal(h.counts.main, 3);
-  assert.equal(h.counts.turns, 3);
+  assert.equal(h.counts.main, 4);
+  assert.equal(h.counts.turns, 4);
   assert.equal(h.counts.before, h.counts.main + h.counts.warm);
   assert.equal(h.counts.settled, 1);
-  assert.equal(h.session.getLastAssistantText(), "FINAL");
+  assert.equal(h.session.getLastAssistantText(), "FINAL after background checkpoint");
   const branch = h.manager.getBranch();
   assert.equal(branch.filter(e => e.type === "compaction").length, 1);
   assert.equal(branch.filter(e => e.customType === "sol-pi-online-context-compact").length, 1);
   const state = restoreOnlineState(branch);
-  assert.equal(state.requestCount, 3);
+  assert.equal(state.requestCount, 4);
   assert.equal(state.nativeCompactionCount, 1);
   assert.deepEqual(h.counts.errors, []);
 });
@@ -182,8 +251,8 @@ test("native CacheWarmer during OCC summaries preserves valid commit and counts 
 test("native warming usage cannot hide an unrelated leaf append during an OCC summary", async t => {
   let h;
   h = await setup(t, { warming: true, summary: async () => {
-    h.manager.appendCustomEntry("unrelated-concurrent-edit", {});
-    await warmNow(h.session, h.manager, h.counts);
+    h.manager.appendContextEdit(h.manager.getBranch().find(e => e.type === "message").id, null);
+    await warmNow(h.session, h.manager, h.counts, true);
     return fauxAssistantMessage("Obsolete checkpoint");
   } });
   await h.run();
@@ -222,9 +291,9 @@ for (const rekey of [false, true]) test(`post-compaction ${rekey ? "rekeyed" : "
   const state = restoreOnlineState(h.manager.getBranch());
   assert.deepEqual(state.plan, next);
   assert.deepEqual(state.completedBoundaryRequestCounts, [2, 3]);
-  assert.equal(state.lastCompactionRequestCount, 5);
+  assert.equal(state.lastCompactionRequestCount, 6);
   assert.equal(state.nativeCompactionCount, 2);
-  assert.equal(h.counts.main, 6);
+  assert.equal(h.counts.main, 7);
   assert.equal(h.counts.settled, 1);
   assert.deepEqual(h.counts.errors, []);
 });
@@ -233,15 +302,15 @@ test("first post-compaction update can be real progress; cooldown defers only im
   const attempts = new Set(), snapshots = [];
   const h = await setup(t, {
     script: [call("open", phasePlan(0)), call("first", phasePlan(1)),
-      call("immediate", phasePlan(2)), call("later", phasePlan(3)), fauxAssistantMessage("FINAL")],
+      call("immediate", phasePlan(2)), call("cooldown", phasePlan(2)), call("later", phasePlan(3)), fauxAssistantMessage("FINAL")],
     summary: (_c, _r, counts) => { attempts.add(counts.main); return longCheckpoint(); },
     after: pi => pi.on("turn_end", (event, ctx) => {
       const before = restoreOnlineState(ctx.sessionManager.getBranch());
       if (event.toolResults.some(r => r.toolCallId === "immediate")) {
         assert.equal(event.toolResults[0].details.boundary, true, "no blanket first-restatement suppression");
         assert.deepEqual(before.completedBoundaryRequestCounts, [2, 1]);
-        assert.equal(before.lastCompactionRequestCount, 2);
-        assert.equal(event.entries.length, 0, "cooldown suppresses the otherwise profitable immediate draft");
+        assert.equal(before.lastCompactionRequestCount, null);
+        assert.ok(event.entries.some(e => e.type === "compaction"), "the ready first summary consumes this boundary, without duplicating work");
       }
       const after = event.entries.find(e => e.customType === ONLINE_STATE_ENTRY)?.data;
       if (after) {
@@ -254,11 +323,11 @@ test("first post-compaction update can be real progress; cooldown defers only im
     }),
   });
   await h.run();
-  assert.deepEqual([...attempts], [2, 4]);
+  assert.deepEqual([...attempts], [2, 5]);
   assert.equal(snapshots.length, 2);
   assert.ok(snapshots[0].positiveContextDeltaCount > 0);
-  assert.deepEqual(restoreOnlineState(h.manager.getBranch()).completedBoundaryRequestCounts, [2, 1, 1]);
-  assert.equal(h.counts.main, 5);
+  assert.deepEqual(restoreOnlineState(h.manager.getBranch()).completedBoundaryRequestCounts, [2, 1, 2]);
+  assert.equal(h.counts.main, 7);
   assert.equal(h.counts.settled, 1);
   assert.deepEqual(h.counts.errors, []);
 });
@@ -332,9 +401,9 @@ for (const cancellation of ["abort", "discard"]) test(`${cancellation} leaves no
         assert.equal(state.lastCompactionRequestCount, null);
         assert.equal(state.nativeCompactionCount, 0);
         assert.deepEqual(state.completedBoundaryRequestCounts, [2]);
-        assert.equal(event.entries.length, 0);
+        assert.equal(event.entries.length > 0, cancellation === "discard");
       }
-      if (cancellation === "discard" && event.toolResults.some(r => r.toolCallId === "first")) {
+      if (cancellation === "discard" && event.toolResults.some(r => r.toolCallId === "repeat")) {
         assert.ok(event.entries.some(e => e.type === "compaction"));
         return { entries: [], continue: false };
       }
@@ -357,9 +426,9 @@ for (const cancellation of ["abort", "discard"]) test(`${cancellation} leaves no
   const state = restoreOnlineState(h.manager.getBranch());
   assert.equal(state.lastCompactionRequestCount, state.requestCount - 1);
   assert.equal(state.nativeCompactionCount, 1);
-  assert.deepEqual(state.completedBoundaryRequestCounts, [2, state.lastCompactionRequestCount - 2]);
+  assert.deepEqual(state.completedBoundaryRequestCounts, [2, state.lastCompactionRequestCount - 3]);
   assert.equal(h.manager.getBranch().filter(e => e.type === "compaction").length, 1);
-  assert.equal(h.counts.main, 5);
+  assert.equal(h.counts.main, 6);
   assert.deepEqual(h.counts.errors, []);
 });
 
@@ -367,13 +436,13 @@ for (const n of [1, 2]) test(`real Pi: ${n} OCC boundary compactions finish natu
   const script = [];
   // Make the final tool pair exceed the tail budget, so native preparation can
   // actually remove the preceding large work message on the second compaction.
-  for (let i = 0; i < n; i++) script.push(call(`open-${i}`, plan(), i ? "More phase work " + "z".repeat(16000) : ""), call(`done-${i}`, plan(true), "Boundary reached " + "v".repeat(800)));
+  for (let i = 0; i < n; i++) script.push(call(`open-${i}`, plan(), i ? "More phase work " + "z".repeat(16000) : ""), call(`done-${i}`, plan(true), "Boundary reached " + "v".repeat(800)), call(`settle-${i}`, plan(true)));
   script.push(call("final-plan", plan(true, true)), fauxAssistantMessage("FINAL"));
   const { session, manager, counts, run } = await setup(t, { script });
   await run();
   assert.equal(session.getLastAssistantText(), "FINAL");
   assert.equal(session.isIdle, true);
-  assert.equal(counts.main, 2 * n + 2, "no extra model round from continue=true");
+  assert.equal(counts.main, 3 * n + 2, "no extra model round from continue=true");
   assert.equal(counts.before, counts.main, "direct summaries must not count as main requests");
   assert.equal(counts.settled, 1, "no stop/restart settlement loop");
   assert.equal(counts.compactHook, 0, "draft commits bypass native hooks");
@@ -417,7 +486,7 @@ test("native summary retry handles error response without extra main request", a
     ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "terminated" }) : fauxAssistantMessage("Valid checkpoint") });
   await run();
   assert.ok(counts.summary >= 2);
-  assert.equal(counts.main, 3);
+  assert.equal(counts.main, 4);
   assert.equal(manager.getBranch().filter(e => e.type === "compaction").length, 1);
 });
 
@@ -451,7 +520,7 @@ for (const enough of [true, false]) test(`default ratio 12.5 ${enough ? "compact
   const { run, manager, counts } = await setup(t, { ratio: "default", keepRecentTokens: 5000, script: [call("open", open), call("boundary", done), fauxAssistantMessage("FINAL")] });
   await run();
   assert.equal(manager.getBranch().filter(e => e.type === "compaction").length, enough ? 1 : 0);
-  assert.equal(counts.main, 3);
+  assert.equal(counts.main, enough ? 4 : 3);
 });
 
 for (const kind of ["ephemeral", "disabled", "worker"]) test(`${kind}: OCC unavailable and update_plan absent from provider tools`, async t => {
@@ -495,7 +564,7 @@ for (const kind of ["custom", "custom_message", "context_edit", "compaction"]) t
     return { entries: [...event.entries, draft] };
   }) });
   await run();
-  assert.equal(counts.main, 3);
+  assert.equal(counts.main, kind === "custom" ? 4 : 3);
   if (kind === "custom") {
     assert.ok(counts.summary > 0);
     assert.equal(manager.getBranch().filter(e => e.customType === "earlier").length, 1);
@@ -515,7 +584,7 @@ test("native manual compaction refreshes state once; persisted state restores in
   const state = restoreOnlineState(restored.getBranch());
   assert.equal(state.nativeCompactionCount, 2);
   assert.equal(state.epoch, 2);
-  assert.equal(state.requestCount, 4);
+  assert.equal(state.requestCount, 5);
 });
 
 for (const kind of ["steering", "model", "leaf"]) test(`real session ${kind} change during summary invalidates pending compaction`, async t => {
@@ -529,11 +598,11 @@ for (const kind of ["steering", "model", "leaf"]) test(`real session ${kind} cha
   await ready;
   if (kind === "steering") await session.steer("CORRECTION: stop the old plan and report");
   else if (kind === "model") await session.setModel({ ...faux.getModel(), name: "changed model snapshot" });
-  else manager.appendCustomEntry("concurrent-leaf-change", {});
+  else manager.appendContextEdit(manager.getBranch().find(e => e.type === "message").id, null);
   finish();
   await prompt;
   assert.equal(counts.summary, 1);
-  assert.equal(counts.main, 3);
+  assert.equal(counts.main, kind === "steering" ? 4 : 3);
   assert.equal(counts.settled, 1);
   assert.equal(manager.getBranch().filter(e => e.type === "compaction" || e.type === "custom_message").length, 0);
   assert.equal(restoreOnlineState(manager.getBranch()).nativeCompactionCount, 0);
@@ -622,11 +691,11 @@ for (const kind of ["success", "parent-error", "nested-error", "blocked", "forge
     const success = ["success", "deep-success"].includes(kind);
     assert.equal(branch.filter(e => e.type === "compaction").length, success ? 1 : 0);
     assert.equal(h.counts.summary > 0, success);
-    assert.equal(h.counts.main, 3);
-    assert.equal(h.counts.turns, 3);
-    assert.equal(restoreOnlineState(branch).requestCount, 3);
+    assert.equal(h.counts.main, success ? 4 : 3);
+    assert.equal(h.counts.turns, h.counts.main);
+    assert.equal(restoreOnlineState(branch).requestCount, h.counts.main);
     assert.equal(h.counts.settled, 1);
-    assert.equal(h.session.getLastAssistantText(), "FINAL");
+    assert.equal(h.session.getLastAssistantText(), success ? "FINAL after background checkpoint" : "FINAL");
     assert.deepEqual(h.counts.errors, []);
   });
 }
@@ -649,9 +718,9 @@ for (const kind of ["success", "script-error", "nested-error"]) test(`real built
   assert.equal(result.isError, kind !== "success");
   assert.equal(branch.filter(e => e.type === "compaction").length, kind === "success" ? 1 : 0);
   assert.equal(h.counts.summary > 0, kind === "success");
-  assert.equal(h.counts.main, 3);
+  assert.equal(h.counts.main, kind === "success" ? 4 : 3);
   assert.equal(h.counts.settled, 1);
-  assert.equal(restoreOnlineState(branch).requestCount, 3);
+  assert.equal(restoreOnlineState(branch).requestCount, h.counts.main);
   assert.deepEqual(h.counts.errors, []);
 });
 
@@ -689,7 +758,7 @@ test("real nested file tools carry their paths through OCC and subsequent manual
   assert.equal(compacted().length, 2);
   assert.ok(compacted()[1].details.readFiles.includes(paths[0]));
   assert.ok(compacted()[1].details.modifiedFiles.includes(paths[1]));
-  assert.equal(h.counts.main, 4);
+  assert.equal(h.counts.main, 5);
   assert.equal(h.counts.settled, 1);
   assert.deepEqual(h.counts.errors, []);
 });
@@ -915,21 +984,24 @@ test("queued delivery cannot transfer handoff authority to a different committed
 
 test("real commits accumulate outstanding debt and repayment using the same estimated post-context cost", async t => {
   let observed;
-  const commits = [];
+  const commits = [], preparations = [];
   const h = await setup(t, { ratio: 12.5,
     before: (_pi, manager) => manager.appendCustomEntry(ONLINE_STATE_ENTRY, carriedState()),
     script: [call("open-1", economicPlan(false)), call("done-1", economicPlan(true), "boundary ".repeat(100)),
-      call("open-2", economicPlan(false), "new work ".repeat(2000)), call("done-2", economicPlan(true), "boundary ".repeat(100)),
+      call("open-2", economicPlan(false), "new work ".repeat(2000)), call("wait-2", economicPlan(false)), call("done-2", economicPlan(true), "boundary ".repeat(100)),
       fauxAssistantMessage("FINAL")],
     summary: () => fauxAssistantMessage("A very short actual checkpoint"),
     after: pi => {
       pi.on("context_with_system", event => { observed = structuredClone(event.messages); });
       pi.on("turn_end", (event, ctx) => {
+        if (event.toolResults.some(r => r.toolCallId.startsWith("done-"))) {
+          const prep = prepareCompaction(ctx.sessionManager.getBranch(), { enabled: true, reserveTokens: 1024, keepRecentTokens: 150 });
+          preparations.push({ prep, saving: estimateNativeCompactionTokens(prep, observed) - DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE });
+        }
         if (!event.entries.some(e => e.type === "compaction")) return;
         const before = restoreOnlineState(ctx.sessionManager.getBranch());
         const next = event.entries.find(e => e.customType === ONLINE_STATE_ENTRY).data;
-        const prep = prepareCompaction(ctx.sessionManager.getBranch(), { enabled: true, reserveTokens: 1024, keepRecentTokens: 150 });
-        const saving = estimateNativeCompactionTokens(prep, observed) - DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE;
+        const { prep, saving } = preparations.shift();
         assert.ok(saving > 0);
         assert.equal(next.cacheDebtTokens, before.cacheDebtTokens + Math.max(0, prep.tokensBefore - saving) * 11.5);
         assert.equal(next.cacheDebtRepaymentTokens, before.cacheDebtRepaymentTokens + saving);
@@ -943,12 +1015,12 @@ test("real commits accumulate outstanding debt and repayment using the same esti
   });
   await h.run();
   assert.equal(commits.length, 2);
-  assert.equal(commits[1].before.cacheDebtTokens, Math.max(0, commits[0].next.cacheDebtTokens - 2 * commits[0].next.cacheDebtRepaymentTokens));
+  assert.equal(commits[1].before.cacheDebtTokens, Math.max(0, commits[0].next.cacheDebtTokens - 3 * commits[0].next.cacheDebtRepaymentTokens));
   assert.equal(commits[1].before.cacheDebtRepaymentTokens, commits[0].next.cacheDebtRepaymentTokens);
   const state = restoreOnlineState(h.manager.getBranch());
   assert.equal(state.nativeCompactionCount, 3);
   assert.equal(state.cacheDebtTokens, Math.max(0, commits[1].next.cacheDebtTokens - commits[1].next.cacheDebtRepaymentTokens));
-  assert.equal(h.counts.main, 5);
+  assert.equal(h.counts.main, 7);
   assert.equal(h.counts.settled, 1);
   assert.deepEqual(h.counts.errors, []);
   const persisted = SessionManager.open(h.manager.getSessionFile());

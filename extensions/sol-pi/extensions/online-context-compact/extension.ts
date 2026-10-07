@@ -1,14 +1,14 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
- * Pi 1.0.2 boundary-draft lifecycle adapter. No abort/settled-message continuation.
+ * Pi 1.0.4 background generation and boundary-draft lifecycle adapter. No abort/settled-message continuation.
  */
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
-	buildSessionProjection, compact,
-	type ExtensionContext, type ExtensionFactory,
+	buildSessionProjection, compact, estimateTokens,
+	type ExtensionContext, type ExtensionFactory, type BoundaryResult, type SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_COMPACTION_ECONOMICS, decideCompaction } from "./economics.ts";
 import { analyzePlanTransition, formatPlanSnapshot, parsePlanSteps } from "./plan.ts";
@@ -21,7 +21,7 @@ import {
 import {
 	estimateProjectedContextTokens, OCC_FILE_TRACKING, prepareCompaction,
 } from "./native-preparation.ts";
-import { resolveOnlineSettings, type SettingsResolver } from "./settings.ts";
+import { resolveOnlineSettings, resolveSummarySettings, type SettingsResolver } from "./settings.ts";
 import { registerOnlineTools, type PlanUpdateInput } from "./tools.ts";
 
 /** Planning estimate, used unchanged for both the economic gate and committed debt. */
@@ -38,6 +38,7 @@ export type OnlineContextCompactOptions = {
 	readonly cacheWriteReadRatio?: number | null;
 	/** SDK hosts must inject their effective SettingsManager here (including runtime overrides). */
 	readonly resolveSettings?: SettingsResolver;
+	readonly resolveSummarySettings?: typeof resolveSummarySettings;
 };
 
 function progressSummary(input: PlanUpdateInput, completedStepId: string): ProgressSummary | undefined {
@@ -79,6 +80,42 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 		if (Number(process.env.PI_WORKER_DEPTH ?? 0) > 0) return;
 		let generation = 0;
 		let controller: AbortController | undefined;
+		let takeReady: ((ctx: ExtensionContext, entries: SessionBoundaryDraft[]) => BoundaryResult | undefined) | undefined;
+		let submittedSummary: { summary: string; leafId: string | null; startedAt: number; generationMs: number } | undefined;
+		const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" = "info"): void => {
+			if (ctx.hasUI) ctx.ui.notify(message, level);
+		};
+		const notifyApplied = (ctx: ExtensionContext): void => {
+			if (!submittedSummary) return;
+			const branch = ctx.sessionManager.getBranch();
+			const anchor = branch.findIndex(entry => entry.id === submittedSummary?.leafId);
+			const index = branch.findIndex((entry, i) => i > anchor && entry.type === "compaction" && entry.summary === submittedSummary?.summary);
+			if (ctx.hasUI && anchor >= 0 && index >= 0) {
+				// Compare the same committed history on both sides, not an old snapshot
+				// against a newer conversation. Include our continuation reminder, but no later messages.
+				let end = index + 1;
+				while (end < branch.length) {
+					const entry = branch[end];
+					if (entry.type !== "custom" && !(entry.type === "custom_message" && entry.customType === "sol-pi-online-context-compact")) break;
+					end++;
+				}
+				// Use one content estimator on both sides; provider usage can be stale after compaction.
+				const estimate = (entries: typeof branch) => buildSessionProjection(entries).messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+				const before = estimate(branch.slice(0, index)), after = estimate(branch.slice(0, end));
+				const delta = before - after;
+				const change = delta === 0 ? "不变" : `${delta > 0 ? "减少" : "增加"} ${Math.abs(delta).toLocaleString("en-US")}${before > 0 ? `，${(Math.abs(delta) / before * 100).toFixed(1)}%` : ""}`;
+				notify(ctx, `上下文已压缩：约 ${before.toLocaleString("en-US")} → ${after.toLocaleString("en-US")} tokens（${change}）；生成 ${(submittedSummary.generationMs / 1000).toFixed(1)}s，总耗时 ${((performance.now() - submittedSummary.startedAt) / 1000).toFixed(1)}s（含等待安全边界）。新增消息已保留。`);
+			}
+			submittedSummary = undefined;
+		};
+		const consumeReady = (ctx: ExtensionContext, entries: SessionBoundaryDraft[], outcome: string): BoundaryResult | undefined => {
+			notifyApplied(ctx);
+			if (outcome !== "completed" || ctx.signal?.aborted || entries.some(entry => entry.type !== "custom")) {
+				cancel();
+				return;
+			}
+			return takeReady?.(ctx, entries);
+		};
 		let observedMessages: readonly AgentMessage[] | undefined;
 		let pending: { id: string; generation: number; session: string }[] = [];
 		let disabledByUs = false;
@@ -99,6 +136,8 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			observedMessages = undefined;
 			controller?.abort();
 			controller = undefined;
+			takeReady = undefined;
+			submittedSummary = undefined;
 		};
 		const reset = (): void => { cancel(); forgetQueuedInputs(); };
 		const eligible = (ctx: ExtensionContext): boolean => {
@@ -172,16 +211,20 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			// later same-text input while an earlier injected message may remain.
 			reset(); queueUncertain = true; syncTool(ctx);
 		});
-		pi.on("before_agent_start", (_event, ctx) => { reset(); syncTool(ctx); });
+		pi.on("before_agent_start", (_event, ctx) => {
+			pending = []; observedMessages = undefined; forgetQueuedInputs(); syncTool(ctx);
+		});
 		// Queues drain inside the agent loop, before agent_end. Aborts also reach
 		// agent_end; never let an undelivered ticket survive into another run.
 		pi.on("agent_end", forgetQueuedInputs);
-		pi.on("agent_settled", forgetQueuedInputs);
+		pi.on("agent_settled", (_event, ctx) => { notifyApplied(ctx); forgetQueuedInputs(); });
+		pi.on("agent_before_settle", (event, ctx) => consumeReady(ctx, event.entries, event.outcome));
 		pi.on("context_with_system", (event, ctx) => {
 			// Runs after all OP/context hooks; a read-only snapshot, never a replay.
 			if (eligible(ctx)) observedMessages = structuredClone(event.messages);
 		});
 		pi.on("turn_start", (_event, ctx) => {
+			notifyApplied(ctx);
 			pending = [];
 			observedMessages = undefined;
 			// Count main-agent turns as the request-horizon proxy, not transport attempts.
@@ -208,7 +251,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				// boundary continuations and extension-injected prompts are not new tasks.
 				const state = reconcile(ctx);
 				const next = recordCompletedPlanHandoff(state);
-				if (next !== state) appendOnlineState(pi, next);
+				if (next !== state) { cancel(); appendOnlineState(pi, next); }
 			}
 			return { action: "continue" as const };
 		});
@@ -241,7 +284,9 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			if (ctx.sessionManager.getSessionFile()) appendOnlineState(pi, reconcile(ctx));
 		});
 
-		pi.on("turn_end", async (event, ctx) => {
+		pi.on("turn_end", (event, ctx) => {
+			const ready = consumeReady(ctx, event.entries, event.outcome);
+			if (ready) { pending = []; return ready; }
 			const boundaries = pending;
 			pending = []; // Consume once, even on failure or a later extension dropping the drafts.
 			if (!eligible(ctx) || !ctx.model || controller || ctx.signal?.aborted || event.outcome !== "completed" ||
@@ -255,93 +300,108 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			if (!remaining.length) return;
 			const local = new AbortController();
 			controller = local;
-			const parentSignal = ctx.signal; // Capture once: ctx.signal is a live getter.
-			const abort = (): void => local.abort();
-			parentSignal?.addEventListener("abort", abort, { once: true });
-			const modelKey = (): string => JSON.stringify([ctx.model?.provider, ctx.model?.id, ctx.model?.api]);
-			const captured = { generation, session: identity(ctx), leaf: ctx.sessionManager.getLeafId(), model: ctx.model, modelKey: modelKey() };
-			const leafUnchanged = (): boolean => {
-				if (ctx.sessionManager.getLeafId() === captured.leaf) return true;
-				// Native CacheWarmer appends non-context usage after a successful replay.
-				// Permit only that suffix; any other append or branch change is stale.
-				const branch = ctx.sessionManager.getBranch();
-				for (let i = branch.length - 1; i >= 0; i--) {
-					const entry = branch[i];
-					if (entry.id === captured.leaf) return true;
-					if (entry.type !== "usage" || entry.kind !== "cache_warm") return false;
-				}
-				return false;
+			// Independent of a single agent run: a finished turn is not a cancelled job.
+			const modelKey = (current: ExtensionContext): string => JSON.stringify([current.model?.provider, current.model?.id, current.model?.api]);
+			const branch = ctx.sessionManager.getBranch();
+			const captured = { generation, session: identity(ctx), prefix: JSON.stringify(branch), length: branch.length,
+				model: ctx.model, modelKey: modelKey(ctx) };
+			const valid = (current = ctx): boolean => {
+				const branch = current.sessionManager.getBranch();
+				return !local.signal.aborted && generation === captured.generation && identity(current) === captured.session &&
+					current.model === captured.model && modelKey(current) === captured.modelKey &&
+					JSON.stringify(branch.slice(0, captured.length)) === captured.prefix &&
+					!branch.slice(captured.length).some(entry => ["compaction", "branch_summary", "context_edit"].includes(entry.type));
 			};
-			const valid = (): boolean => !local.signal.aborted && !parentSignal?.aborted && generation === captured.generation &&
-				identity(ctx) === captured.session && leafUnchanged() &&
-				ctx.model === captured.model && modelKey() === captured.modelKey;
-			try {
-				if (!valid()) return;
-				const settings = resolveSettings(ctx);
-				if (!settings.compaction.enabled) return;
-				const preparation = prepareCompaction(ctx.sessionManager.getBranch(), settings.compaction);
-				if (!preparation) return;
-				// Native usage/full-context estimate is conservative when OP has shortened
-				// results without measured usage. Only the proven projected prefix earns savings.
-				const writeTokens = preparation.tokensBefore;
-				const archiveTokens = estimateNativeCompactionTokens(preparation, observedMessages);
-				const decision = decideCompaction({
-					writeTokens, archiveTokens, memoTokens: DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE,
-					contextTokens: writeTokens, completedBoundaryRequestCounts: state.completedBoundaryRequestCounts,
-					remainingBoundaries: remaining.length,
-					averageContextTokenIncrement: state.positiveContextDeltaCount ? state.positiveContextDeltaTotal / state.positiveContextDeltaCount : null,
-					contextWindowTokens: ctx.model.contextWindow > 0 ? ctx.model.contextWindow : null,
-					priorCompactionCount: state.nativeCompactionCount, carriedDebtTokens: state.cacheDebtTokens,
-					requestsSinceLastCompaction: state.lastCompactionRequestCount === null
-						? null : state.requestCount - state.lastCompactionRequestCount,
-					cacheDebtRepaymentTokens: state.cacheDebtRepaymentTokens, cacheWriteReadRatio: ratio,
-					economics: { ...DEFAULT_COMPACTION_ECONOMICS, windowReserveTokens: settings.compaction.reserveTokens },
-				});
-				if (!decision.compact) return;
-				const stream: NonNullable<Parameters<typeof compact>[7]> = (model, context, requestOptions) => {
-					if (!valid()) throw new Error("Stale OCC summary");
-					// Registry supplies request-time auth. No main-session onPayload/onResponse hooks.
-					const response = ctx.modelRegistry.streamSimple(model, context, { ...requestOptions, signal: local.signal });
-					const result = response.result.bind(response);
-					response.result = async () => {
-						const message = await result();
-						if (!valid()) throw new Error("Cancelled OCC summary");
-						// Leave error responses intact for native retryAssistantCall classification/retry.
-						if (message.stopReason === "error") return message;
-						if (message.stopReason === "aborted" || message.stopReason === "deferred" ||
-							!message.content.some((part) => part.type === "text" && part.text.trim())) {
-							throw new Error("OCC summary was aborted, deferred, or empty");
-						}
-						return message;
+			const startedAt = performance.now();
+			// Deliberately detached: only a later native boundary may consume its result.
+			void (async () => {
+				try {
+					if (!valid()) return;
+					const settings = structuredClone(resolveSettings(ctx));
+					if (!settings.compaction.enabled) return;
+					const preparation = prepareCompaction(structuredClone(branch), settings.compaction);
+					if (!preparation) return;
+					// Native usage/full-context estimate is conservative when OP has shortened
+					// results without measured usage. Only the proven projected prefix earns savings.
+					const writeTokens = preparation.tokensBefore;
+					const archiveTokens = estimateNativeCompactionTokens(preparation, observedMessages);
+					const decision = decideCompaction({
+						writeTokens, archiveTokens, memoTokens: DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE,
+						contextTokens: writeTokens, completedBoundaryRequestCounts: state.completedBoundaryRequestCounts,
+						remainingBoundaries: remaining.length,
+						averageContextTokenIncrement: state.positiveContextDeltaCount ? state.positiveContextDeltaTotal / state.positiveContextDeltaCount : null,
+						contextWindowTokens: captured.model.contextWindow > 0 ? captured.model.contextWindow : null,
+						priorCompactionCount: state.nativeCompactionCount, carriedDebtTokens: state.cacheDebtTokens,
+						requestsSinceLastCompaction: state.lastCompactionRequestCount === null
+							? null : state.requestCount - state.lastCompactionRequestCount,
+						cacheDebtRepaymentTokens: state.cacheDebtRepaymentTokens, cacheWriteReadRatio: ratio,
+						economics: { ...DEFAULT_COMPACTION_ECONOMICS, windowReserveTokens: settings.compaction.reserveTokens },
+					});
+					if (!decision.compact) return;
+					const summarySettings = (options.resolveSummarySettings ?? resolveSummarySettings)(ctx);
+					const serviceTier = summarySettings.service_tier ?? "auto";
+					const stream: NonNullable<Parameters<typeof compact>[7]> = (model, context, requestOptions) => {
+						if (!valid()) throw new Error("Stale OCC summary");
+						// Registry supplies request-time auth. No main-session onPayload/onResponse hooks.
+						const response = ctx.modelRegistry.streamSimple(model, context, {
+							...requestOptions, signal: local.signal,
+							...(serviceTier === "auto" ? {} : {
+								onPayload: async (payload, requestModel) => {
+									const body = await requestOptions?.onPayload?.(payload, requestModel) ?? payload;
+									if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+									return { ...body as Record<string, unknown>, service_tier: serviceTier };
+								},
+							}),
+						});
+						const result = response.result.bind(response);
+						response.result = async () => {
+							const message = await result();
+							if (!valid()) throw new Error("Cancelled OCC summary");
+							// Leave error responses intact for native retryAssistantCall classification/retry.
+							if (message.stopReason === "error") return message;
+							if (message.stopReason === "aborted" || message.stopReason === "deferred" ||
+								!message.content.some((part) => part.type === "text" && part.text.trim())) {
+								throw new Error("OCC summary was aborted, deferred, or empty");
+							}
+							return message;
+						};
+						return response;
 					};
-					return response;
-				};
-				const result = await compact(preparation, captured.model, undefined, undefined,
-					BOUNDARY_COMPACTION_INSTRUCTIONS, local.signal, ctx.thinkingLevel, stream, undefined, settings.retry);
-				if (!valid() || !result.summary.trim() || !eligible(ctx)) return;
-				// Keep the same estimated memo/cost basis as the gate (not actual summary
-				// length). This state exists only in the atomic boundary draft until commit.
-				const next = recordCompaction(state, {
-					debtTokens: decision.postCompactionTokens * (decision.incrementalCacheCostRatio ?? 0),
-					repaymentTokens: Math.max(0, decision.archiveTokens - decision.memoTokens),
-				});
-				return {
-					entries: [...event.entries,
-						{ type: "compaction" as const, summary: result.summary, firstKeptEntryId: result.firstKeptEntryId,
-							usage: result.usage, details: { ...result.details as object, preparation: OCC_FILE_TRACKING } },
-						{ type: "custom" as const, customType: ONLINE_STATE_ENTRY, data: next },
-						{ type: "custom_message" as const, customType: "sol-pi-online-context-compact", display: false,
-							content: `${POST_COMPACTION_PLAN_REMINDER}\nRemaining work: ${JSON.stringify(remaining)}` },
-					],
-					continue: true,
-				};
-			} catch {
-				// Optional optimization: fail open to the existing scheduler; never enqueue a ghost turn.
-				return;
-			} finally {
-				parentSignal?.removeEventListener("abort", abort);
-				if (controller === local) controller = undefined;
-			}
+					const result = await compact(preparation, summarySettings.model, undefined, undefined,
+						BOUNDARY_COMPACTION_INSTRUCTIONS, local.signal, summarySettings.thinking, stream, undefined, settings.retry);
+					if (!valid() || !result.summary.trim() || !eligible(ctx)) return;
+					const generationMs = performance.now() - startedAt;
+					takeReady = (current, entries) => {
+						takeReady = undefined;
+						if (controller === local) controller = undefined;
+						if (!valid(current) || !eligible(current)) return;
+						// Rebase accounting and the reminder on the latest committed plan.
+						const state = reconcile(current);
+						const remaining = state.plan.filter(step => step.status !== "completed");
+						const next = recordCompaction(state, {
+							debtTokens: decision.postCompactionTokens * (decision.incrementalCacheCostRatio ?? 0),
+							repaymentTokens: Math.max(0, decision.archiveTokens - decision.memoTokens),
+						});
+						submittedSummary = { summary: result.summary, leafId: current.sessionManager.getLeafId(), startedAt, generationMs };
+						return {
+							entries: [...entries,
+								{ type: "compaction" as const, summary: result.summary, firstKeptEntryId: result.firstKeptEntryId,
+									usage: result.usage, details: { ...result.details as object, preparation: OCC_FILE_TRACKING } },
+								{ type: "custom" as const, customType: ONLINE_STATE_ENTRY, data: next },
+								...(remaining.length ? [{ type: "custom_message" as const, customType: "sol-pi-online-context-compact", display: false,
+									content: `${POST_COMPACTION_PLAN_REMINDER}\nRemaining work: ${JSON.stringify(remaining)}` }] : []),
+							],
+							continue: remaining.length > 0,
+						};
+					};
+					notify(ctx, `上下文摘要已就绪，生成耗时 ${(generationMs / 1000).toFixed(1)}s；将在下一个安全边界应用。`);
+				} catch {
+					// Optional optimization: no ghost turn and no notification for obsolete jobs.
+					if (valid()) notify(ctx, `后台上下文压缩未完成（耗时 ${((performance.now() - startedAt) / 1000).toFixed(1)}s），当前对话不受影响；请检查模型配置或连接。`, "warning");
+				} finally {
+					if (controller === local && !takeReady) controller = undefined;
+				}
+			})();
 		});
 	};
 }

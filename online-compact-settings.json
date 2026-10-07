@@ -1,0 +1,5 @@
+{
+  "model": "openai-codex/gpt-6.1-sol",
+  "thinking": "medium",
+  "service_tier": "fast"
+}

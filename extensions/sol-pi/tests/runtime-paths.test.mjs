@@ -21,7 +21,7 @@ function temporaryRoot(t, manager) {
 }
 
 test("Pi 1.0.2 persistent session/resume paths are unchanged and lazily created", async t => {
-  assert.equal(VERSION, "1.0.2");
+  assert.equal(VERSION, "1.0.4");
   const cwd = await sandbox(t);
   const manager = SessionManager.create(cwd, join(cwd, "sessions"));
   const root = runtimeRoot(context(manager));
