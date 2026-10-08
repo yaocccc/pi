@@ -6,7 +6,7 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration: custom exte
 
 ## Features
 
-- Custom TUI: interface, dark theme, and `Ctrl+Y` session resume; the footer shows context usage, model, Thinking, and Codex Fast switches.
+- Custom TUI: interface, dark theme, and `Ctrl+Y` session resume; the footer shows context usage, model, Thinking, Codex Fast switches, and remaining subscription quota/reset countdown.
 - `ask_question` supports single-choice, multiple-choice, and multi-question confirmations; concurrent questionnaires are queued to avoid replacing each other. `/commit` generates a Conventional Commit message and commits (staging all changes).
 - `/codex-fast` separately configures Fast / Ultrafast request tiers; Chinese thinking translation and automatic Chinese session naming are enabled by default and can be disabled in their configuration.
 - [Worker](#worker) assists with scoped tasks in separate Pi subprocesses. Automatic routing has only three tiers: Fast, Normal, and Deep; Thinking strength is configured independently. Path checks are not a security sandbox; inspect the resulting changes.
@@ -79,6 +79,12 @@ Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies 
 Requests are modified only when the provider is `openai-codex` and the API is `openai-codex-responses`. If Ultrafast is enabled and the ID **exactly equals `gpt-6-astra`**, the payload uses `service_tier: "ultrafast"`; otherwise it falls back to `"priority"` only if Fast is enabled. Ultrafast alone leaves requests unchanged for nonmatching models. This is not a retry/downgrade after server rejection and guarantees neither server support nor speed.
 
 In the footer, **✨ means the Fast switch is on, and 🌟 means the Ultrafast switch is on**. These independent markers can appear together. They show saved switch states, not which request tier the current model actually uses.
+
+### Remaining Codex subscription quota
+
+The right side of the footer shows `[77% · 5d12h]` immediately before the model and Thinking: the percentage is the **remaining quota**, followed by the countdown to its next reset. A weekly quota window takes priority; otherwise, the secondary window is preferred, falling back to the primary window. Below one day, the countdown uses hours/minutes.
+
+Shown only when the current model uses `openai-codex`, the official `https://chatgpt.com` origin, and available authentication. It reuses the current login to fetch `https://chatgpt.com/backend-api/wham/usage`, with no extra configuration. A request runs immediately on startup or switching to an eligible model, then every **10 minutes**; the countdown is checked locally every **30 seconds**, without extra API requests. The badge is hidden for non-Codex models, proxy origins, unavailable authentication, failed requests, or elapsed reset times. Narrow terminals prioritize the model information.
 
 ### Other default behavior
 

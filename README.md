@@ -6,7 +6,7 @@
 
 ## 功能概览
 
-- 自定义 TUI：界面、深色主题和 `Ctrl+Y` 会话恢复；页脚显示上下文占用、模型、Thinking 与 Codex Fast 开关。
+- 自定义 TUI：界面、深色主题和 `Ctrl+Y` 会话恢复；页脚显示上下文占用、模型、Thinking、Codex Fast 开关及订阅余量/重置倒计时。
 - `ask_question` 支持单选、多选和多题确认；并发问卷排队显示，避免互相覆盖。`/commit` 生成 Conventional Commit 信息并提交（会暂存全部改动）。
 - `/codex-fast` 分别设置 Fast / Ultrafast 请求档位；Thinking 中文翻译与自动中文会话命名默认开启，可在对应配置中关闭。
 - [Worker](#worker) 在独立 Pi 子进程中协助完成指定任务；自动路由仅有 Fast、Normal、Deep 三档，Thinking 强度独立设置。路径检查不是安全沙箱，仍须核对修改。
@@ -79,6 +79,12 @@ pi
 仅当 provider 为 `openai-codex`、API 为 `openai-codex-responses` 时修改请求：Ultrafast 开启且 ID **精确等于 `gpt-6-astra`** 时发送 `service_tier: "ultrafast"`；否则仅在 Fast 开启时回退发送 `"priority"`。仅开 Ultrafast 而模型不匹配时不修改请求；这不是服务端拒绝后的重试/降级机制，也不保证服务端支持或加速。
 
 页脚 **✨ 表示 Fast 开关开启，🌟 表示 Ultrafast 开关开启**；两个标记独立，可同时出现。它们表示保存的开关状态，不代表当前模型实际使用了对应请求档位。
+
+### Codex 订阅余量
+
+页脚右侧、模型与 Thinking 左侧显示 `[77% · 5d12h]`：百分比是**剩余额度**，后面是下次重置的倒计时。优先显示周额度窗口，否则优先使用 secondary 窗口，再回退到 primary 窗口；不足一天时显示小时/分钟。
+
+仅在当前模型为 `openai-codex`、使用官方 `https://chatgpt.com` 来源且认证可用时显示。复用当前登录认证，通过 `https://chatgpt.com/backend-api/wham/usage` 获取数据，无需额外配置。启动或切换到符合条件的模型时立即请求，此后每 **10 分钟**刷新余量；倒计时每 **30 秒**本地检查更新，不额外请求 API。非 Codex、代理来源、认证不可用、请求失败或重置时间已过时隐藏；终端过窄时优先保留模型信息。
 
 ### 其他默认行为
 
