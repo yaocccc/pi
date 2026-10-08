@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import ui from './index.ts';
+import type { NoCostFooter } from './footer.ts';
+import { USAGE_TICK_MS } from './codex-usage.ts';
 import { WORKER_USAGE_EVENT } from '../worker/events.ts';
 import { getWorkingMessageLine, setWorkingMessageActive, WORKING_FRAME_INTERVAL_MS } from './working-message.ts';
 
@@ -58,6 +60,78 @@ function setup(t: TestContext) {
         tick: () => { for (const callback of intervals.values()) callback(); },
     };
 }
+
+test('installed footer integrates Codex model changes, session replacement, redraw and shutdown disposal', async (t) => {
+    t.mock.method(Date, 'now', () => 1_800_000_000_000);
+    const handlers = new Map<string, (event: any, ctx: ExtensionContext) => void>();
+    const intervals = new Map<NodeJS.Timeout, () => void>();
+    t.mock.method(globalThis, 'setInterval', (callback: () => void, delay: number) => {
+        assert.equal(delay, USAGE_TICK_MS);
+        const handle = {} as NodeJS.Timeout;
+        intervals.set(handle, callback);
+        return handle;
+    });
+    t.mock.method(globalThis, 'clearInterval', (handle: NodeJS.Timeout) => assert.ok(intervals.delete(handle)));
+    let requests = 0;
+    const fetch = t.mock.method(globalThis, 'fetch', async () => {
+        requests++;
+        return new Response(JSON.stringify({ rate_limit: { secondary_window: {
+            used_percent: 23, reset_at: Date.now() / 1000 + 5.5 * 86400,
+        } } }));
+    });
+    let footer: NoCostFooter | undefined;
+    let redraws = 0;
+    const theme = { fg: (_color: string, text: string) => text };
+    const ctx = {
+        cwd: '/project', model: { provider: 'openai-codex', id: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex' },
+        thinkingLevel: 'high',
+        modelRegistry: {
+            getProvider: () => ({ baseUrl: 'https://chatgpt.com' }),
+            getProviderAuth: async () => undefined,
+            getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'fixture-secret' }),
+        },
+        ui: {
+            theme, setWorkingVisible() {}, setHeader() {}, setEditorComponent() {},
+            setFooter(factory: any) {
+                footer?.dispose();
+                footer = factory({ requestRender: () => redraws++ }, theme, {
+                    getGitBranch: () => null, getExtensionStatuses: () => new Map(), getAvailableProviderCount: () => 1,
+                });
+            },
+        },
+    } as unknown as ExtensionContext;
+    ui({ on: (name: string, handler: any) => handlers.set(name, handler), events: { on() {} } } as unknown as ExtensionAPI);
+    const emit = (name: string) => handlers.get(name)!({}, ctx);
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    t.after(() => emit('session_shutdown'));
+    emit('session_start');
+    assert.equal(intervals.size, 1);
+    assert.ok(!footer!.render(120)[0]!.includes('[77% · '), 'factory returns before network finishes');
+    await flush();
+    const line = footer!.render(120)[0]!;
+    assert.ok(line.includes('[77% · 5d12h] '));
+    assert.ok(line.endsWith('codex . high'));
+    assert.equal(redraws, 1);
+    (ctx.model as any).provider = 'other';
+    emit('model_select');
+    assert.equal(intervals.size, 0);
+    assert.ok(!footer!.render(120)[0]!.includes('[77% · '));
+    (ctx.model as any).provider = 'openai-codex';
+    emit('model_select');
+    await flush();
+    assert.equal(requests, 2);
+    assert.equal(intervals.size, 1);
+    const previous = footer!;
+    emit('session_start');
+    await flush();
+    assert.equal(intervals.size, 1, 'session replacement retains just one usage timer');
+    assert.ok(!previous.render(120)[0]!.includes('[77% · '));
+    assert.equal(fetch.mock.callCount(), 3);
+    emit('session_shutdown');
+    emit('session_shutdown');
+    assert.equal(intervals.size, 0);
+    assert.ok(!footer!.render(120)[0]!.includes('[77% · '));
+});
 
 test('agent restart clears its timer before refreshing reset usage and scheduling one replacement', (t) => {
     const fixture = setup(t);

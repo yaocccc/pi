@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { getAgentDir, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { truncateToWidth, visibleWidth, type Component } from '@earendil-works/pi-tui';
 import type { FooterData } from './types.ts';
+import type { CodexUsageBadge } from './codex-usage.ts';
 
 const fastConfigPath = join(getAgentDir(), 'codex-fast.json');
 
@@ -30,7 +31,15 @@ export class NoCostFooter implements Component {
         private ctx: ExtensionContext,
         private theme: any,
         private footerData: FooterData,
+        private codexUsage?: CodexUsageBadge,
     ) {}
+
+    setContext(ctx: ExtensionContext): void {
+        this.ctx = ctx;
+        this.codexUsage?.setContext(ctx);
+    }
+
+    dispose(): void { this.codexUsage?.dispose(); }
 
     render(width: number): string[] {
         const home = process.env.HOME || process.env.USERPROFILE;
@@ -48,7 +57,11 @@ export class NoCostFooter implements Component {
         const modelText = model?.name || model?.id || 'no-model';
         const thinkingLevel = this.ctx.thinkingLevel || 'off';
         const fastConfig = loadFastConfig();
-        const rightText = `${fastConfig.fast ? '✨ ' : ''}${fastConfig.ultrafast ? '🌟 ' : ''}${modelText} . ${thinkingLevel}`;
+        const modelSection = `${fastConfig.fast ? '✨ ' : ''}${fastConfig.ultrafast ? '🌟 ' : ''}${modelText} . ${thinkingLevel}`;
+        const badge = model?.provider === 'openai-codex' ? this.codexUsage?.getBadge() : undefined;
+        // Preserve the model/thinking section first on narrow terminals.
+        const rightText = badge && visibleWidth(`${badge} ${modelSection}`) + 2 < width
+            ? `${badge} ${modelSection}` : modelSection;
         const statuses = Array.from(this.footerData.getExtensionStatuses().values()).map((s) => s.replace(/[\r\n\t]/g, ' ').trim()).filter(Boolean);
         const leftText = [pwd, statuses.join(' · '), contextText].filter(Boolean).join(' · ');
         const right = this.theme.fg('dim', rightText);

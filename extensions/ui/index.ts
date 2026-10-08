@@ -2,6 +2,7 @@ import { estimateTokens, type ExtensionAPI, type ExtensionContext } from '@earen
 import { WORKER_USAGE_EVENT } from '../worker/events.ts';
 import { TextAreaEditor } from './editor.ts';
 import { NoCostFooter } from './footer.ts';
+import { CodexUsageBadge } from './codex-usage.ts';
 import { StartupHeader } from './header.ts';
 import { patchCollapsedThinkingPreview, patchCompactToolDisplay, patchFinalResponseSeparator, patchFullscreenScrollbar, patchMergeConsecutiveTools, patchPaddedBackgroundHalfBlocks, patchThinkingSpacing, patchUserMessageHalfBlocks } from './patches.ts';
 import type { TokenUsage } from './types.ts';
@@ -28,6 +29,7 @@ export default function ui(pi: ExtensionAPI) {
 
     let startedAt: number | undefined;
     let timer: NodeJS.Timeout | undefined;
+    let footer: NoCostFooter | undefined;
     let traceUsage: TokenUsage = {};
     let currentUsage: TokenUsage = {};
     let currentTurn: number | undefined;
@@ -59,8 +61,17 @@ export default function ui(pi: ExtensionAPI) {
         refreshWorkingMessage(ctx);
         ctx.ui.setHeader((_tui, theme) => new StartupHeader(theme));
         ctx.ui.setEditorComponent((tui, theme, keybindings) => new TextAreaEditor(tui, theme, keybindings));
-        ctx.ui.setFooter((_tui, theme, footerData) => new NoCostFooter(ctx, theme, footerData));
+        footer?.dispose();
+        footer = undefined;
+        ctx.ui.setFooter((tui, theme, footerData) => {
+            footer?.dispose();
+            const usage = new CodexUsageBadge(ctx, () => tui.requestRender());
+            footer = new NoCostFooter(ctx, theme, footerData, usage);
+            return footer;
+        });
     });
+
+    pi.on('model_select', (_event, ctx) => footer?.setContext(ctx));
 
     pi.on('agent_start', (_event, ctx) => {
         workerUsage.reset();
@@ -111,5 +122,7 @@ export default function ui(pi: ExtensionAPI) {
     pi.on('session_shutdown', () => {
         setWorkingMessageActive(false);
         clearTimer();
+        footer?.dispose();
+        footer = undefined;
     });
 }

@@ -7,6 +7,7 @@ import test, { type TestContext } from 'node:test';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import type { FooterData } from './types.ts';
+import type { CodexUsageBadge } from './codex-usage.ts';
 
 let importId = 0;
 const theme = { fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[22m` };
@@ -27,11 +28,11 @@ async function setup(t: TestContext) {
         getExtensionStatuses: () => new Map([['fixture', '状态\nready\tgo']]),
         getAvailableProviderCount: () => 1,
     };
-    const footer = (model: object | null = { provider: 'other-provider', id: 'unsupported-model', name: '模型中文' }) =>
+    const footer = (model: object | null = { provider: 'other-provider', id: 'unsupported-model', name: '模型中文' }, codexUsage?: CodexUsageBadge) =>
         new NoCostFooter({
             cwd: '/project/长路径/'.repeat(10), model: model ?? undefined, thinkingLevel: 'high',
             getContextUsage: () => ({ tokens: 1_500, contextWindow: 200_000, percent: 0.75 }),
-        } as unknown as ExtensionContext, theme, data);
+        } as unknown as ExtensionContext, theme, data, codexUsage);
     return { file, footer, save: (config: unknown) => writeFileSync(file, JSON.stringify(config)) };
 }
 
@@ -103,6 +104,44 @@ test('footer rejects legacy and truthy flags and defaults off on invalid or unre
     check(false, false);
     mkdirSync(fixture.file);
     check(false, false);
+});
+
+test('Codex usage badge sits immediately left of model/thinking, preserves icons and hides on other providers', async (t) => {
+    const fixture = await setup(t);
+    fixture.save({ fast: true, ultrafast: true });
+    const usage = { getBadge: () => '[77% · 5d12h]' } as CodexUsageBadge;
+    const codex = fixture.footer({ provider: 'openai-codex', name: '模型中文' }, usage);
+    const line = stripTerminalSequences(codex.render(160)[0]!);
+    assert.ok(line.endsWith('  [77% · 5d12h] ✨ 🌟 模型中文 . high'));
+    assert.equal(visibleWidth(codex.render(160)[0]!), 160);
+    const other = fixture.footer({ provider: 'other', name: '模型中文' }, usage);
+    assert.ok(!stripTerminalSequences(other.render(160)[0]!).includes('[77% · '));
+    const empty = fixture.footer({ provider: 'openai-codex', name: '模型中文' }, { getBadge: () => undefined } as unknown as CodexUsageBadge);
+    assert.ok(!stripTerminalSequences(empty.render(160)[0]!).includes('[77% · '));
+    for (let width = 0; width <= 100; width++) {
+        const rendered = codex.render(width)[0]!;
+        assert.ok(visibleWidth(rendered) <= width);
+        if (width <= visibleWidth('[77% · 5d12h] ✨ 🌟 模型中文 . high') + 2) {
+            assert.ok(!stripTerminalSequences(rendered).includes('[77% · '), 'drop badge before truncating model');
+        }
+    }
+});
+
+test('footer forwards context replacement and disposal to its usage cache', async (t) => {
+    const fixture = await setup(t);
+    let updated: ExtensionContext | undefined;
+    let disposed = false;
+    const footer = fixture.footer(undefined, {
+        getBadge: () => undefined,
+        setContext: (ctx: ExtensionContext) => { updated = ctx; },
+        dispose: () => { disposed = true; },
+    } as unknown as CodexUsageBadge);
+    const ctx = { cwd: '/next', model: { provider: 'openai-codex', name: 'new-model' }, thinkingLevel: 'low' } as unknown as ExtensionContext;
+    footer.setContext(ctx);
+    assert.equal(updated, ctx);
+    assert.ok(stripTerminalSequences(footer.render(120)[0]!).endsWith('new-model . low'));
+    footer.dispose();
+    assert.equal(disposed, true);
 });
 
 test('footer preserves right-first truncation and visible width for narrow terminals with both icons', async (t) => {

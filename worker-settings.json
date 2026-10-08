@@ -10,7 +10,7 @@
   },
   "deep": {
     "model": "openai-codex/gpt-6-astra",
-    "thinking": "high"
+    "thinking": "medium"
   },
   "maxConcurrentWorkers": 5,
   "automaticDelegationEnabled": true,
