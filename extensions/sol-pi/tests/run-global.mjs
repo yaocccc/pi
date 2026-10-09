@@ -41,7 +41,8 @@ try {
     console.log(`Global Pi ${version}; isolated offline tests (${files.length} files)`);
     args = ["--experimental-strip-types", "--test", ...files.map(name => join(dir, "sol-pi/tests", name))];
   }
-  const env = { ...process.env, PI_WORKER_DEPTH: "0", PI_CODING_AGENT_DIR: join(dir, "agent") };
+  // Keep offline tests isolated from real home-directory state.
+  const env = { ...process.env, HOME: join(dir, "home"), PI_WORKER_DEPTH: "0", PI_CODING_AGENT_DIR: join(dir, "agent") };
   const result = spawnSync(process.execPath, args, {
     env, stdio: "inherit", cwd: dir, timeout: 120_000,
   });

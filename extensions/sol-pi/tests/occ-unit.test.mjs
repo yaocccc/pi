@@ -15,7 +15,7 @@ import { decideCompaction, DEFAULT_COMPACTION_ECONOMICS } from "../extensions/on
 const steps = [{ id: "done", goal: "work", status: "completed" }, { id: "next", goal: "verify", status: "pending" }];
 const settings = { compaction: { enabled: true, keepRecentTokens: 150, reserveTokens: 1024 }, retry: { enabled: false, maxRetries: 0, baseDelayMs: 1 } };
 
-function harness(options = {}) {
+function harness({ summaryResult = () => fauxAssistantMessage("Checkpoint"), ...options } = {}) {
   let manager = SessionManager.inMemory();
   manager.appendMessage({ role: "user", content: "history " + "x".repeat(16000), timestamp: 1 });
   manager.appendMessage(fauxAssistantMessage("prior " + "x".repeat(16000)));
@@ -40,13 +40,14 @@ function harness(options = {}) {
     modelRegistry: { streamSimple(_model, _context, options) {
       nestedSignal = options.signal;
       requests.push({ model: _model, options });
-      return { result: async () => { started(); await release; return fauxAssistantMessage("Checkpoint"); } };
+      return { result: async () => { started(); await release; return summaryResult(); } };
     } },
   };
   createOnlineContextCompactExtension({ cacheWriteReadRatio: 0, resolveSettings: () => settings, ...options })(pi);
-  const boundary = async () => {
+  const boundary = async ({ observe = false } = {}) => {
     await tools.get("update_plan").execute("open", { steps: steps.map(s => ({ ...s, status: "pending" })) }, parent.signal, undefined, ctx);
     handlers.get("turn_start")({}, ctx);
+    if (observe) handlers.get("context_with_system")({ messages: buildSessionProjection(manager.getBranch()).messages }, ctx);
     const message = fauxAssistantMessage(fauxToolCall("update_plan", { steps }, { id: "boundary" }), { stopReason: "toolUse" });
     manager.appendMessage(message);
     const result = await tools.get("update_plan").execute("boundary", { steps }, parent.signal, undefined, ctx);
@@ -63,6 +64,38 @@ function harness(options = {}) {
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const settle = h => h.handlers.get("agent_before_settle")({ entries: [], outcome: "completed" }, h.ctx);
+
+test("ordinary turns do not read history for diagnostic-only economic evaluation", async () => {
+  const h = harness();
+  let reads = 0;
+  h.ctx.sessionManager.getBranch = () => { reads++; return h.manager().getBranch(); };
+  const result = h.handlers.get("turn_end")({ outcome: "completed", message: fauxAssistantMessage("done"),
+    toolResults: [], entries: [], continue: false }, h.ctx);
+  assert.equal(result, undefined);
+  assert.equal(reads, 0);
+  assert.equal(h.requests.length, 0);
+});
+
+test("background decision prices verified replayed reasoning at an unchanged plan boundary", async () => {
+  const h = harness({ cacheWriteReadRatio: 12.5,
+    resolveSummarySettings: () => ({ model: { id: "test", provider: "faux", api: "faux" }, thinking: "off" }) });
+  Object.assign(h.ctx.model, { id: "same-model", provider: "openai-codex", api: "openai-codex-responses", contextWindow: 800000 });
+  h.manager().appendMessage({ role: "user", content: "x".repeat(500000), timestamp: 100 });
+  const old = fauxAssistantMessage("old");
+  Object.assign(old, { model: h.ctx.model.id, provider: h.ctx.model.provider, api: h.ctx.model.api, timestamp: 101,
+    content: [{ type: "thinking", thinking: "hint", thinkingSignature: JSON.stringify({
+      type: "reasoning", id: "reasoning-old", encrypted_content: "not-a-token-estimate" }) }] });
+  old.usage = { ...old.usage, reasoning: 190000, output: 190020, input: 328339, totalTokens: 518359 };
+  h.manager().appendMessage(old);
+  h.manager().appendMessage({ role: "user", content: "tail ".repeat(200), timestamp: 102 });
+  h.manager().appendCustomEntry(ONLINE_STATE_ENTRY, { ...initialOnlineState(), nativeCompactionCount: 1,
+    requestCount: 20, lastCompactionRequestCount: 0, completedBoundaryRequestCounts: [50] });
+  await h.boundary({ observe: true });
+  await tick();
+  assert.equal(h.requests.length, 1, "replayed reasoning savings make the registered boundary economic");
+  h.finish(); await tick();
+  assert.ok(settle(h)?.entries.some(e => e.type === "compaction"));
+});
 
 test("background summary does not block, survives another run, preserves new messages and current plan", async () => {
   const h = harness();
@@ -189,7 +222,7 @@ test("summary model and thinking are frozen independently of the main session", 
   h.finish(); await tick(); assert.ok(settle(h));
 });
 
-for (const tier of [undefined, "auto", "fast", "ultrafast"]) {
+for (const tier of [undefined, "auto", "priority", "fast", "ultrafast"]) {
   test(`summary service_tier ${tier ?? "omitted"} is request-local, literal and frozen`, async () => {
     let summarySettings;
     const h = harness({ resolveSummarySettings: ctx => {
@@ -231,14 +264,74 @@ test("summary configuration defaults, explicit provider/model, reload and valida
   await writeFile(path, JSON.stringify({ model: "auto", thinking: "auto" }));
   ctx.thinkingLevel = "low";
   assert.deepEqual(resolveSummarySettings(ctx, path), { model, thinking: "low", service_tier: "auto" });
-  for (const service_tier of ["fast", "ultrafast", "auto"]) {
+  for (const service_tier of ["priority", "fast", "ultrafast", "auto"]) {
     await writeFile(path, JSON.stringify({ service_tier }));
     assert.deepEqual(resolveSummarySettings(ctx, path), { model, thinking: "low", service_tier });
   }
   for (const config of ["{", "null", "[]", '{"model":"unknown"}', '{"model":"bad/id"}', '{"thinking":"invalid"}',
-    ...["priority", "invalid", 1, true, [], {}].map(service_tier => JSON.stringify({ service_tier }))]) {
+    ...["invalid", 1, true, [], {}].map(service_tier => JSON.stringify({ service_tier }))]) {
     await writeFile(path, config); assert.throws(() => resolveSummarySettings(ctx, path));
   }
+});
+
+test("provider summary failure displays its reason without changing the configured tier", async () => {
+  const h = harness({
+    resolveSummarySettings: ctx => ({ model: ctx.model, thinking: "off", service_tier: "fast" }),
+    summaryResult: () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 Unsupported value for service_tier: fast" }),
+  });
+  await h.boundary(); await h.ready; h.finish(); await tick();
+  assert.equal(h.notices.length, 1);
+  assert.equal(h.notices[0][1], "warning");
+  assert.match(h.notices[0][0], /原因：.*400 Unsupported value for service_tier: fast/);
+  assert.doesNotMatch(h.notices[0][0], /tokens|已压缩/);
+  assert.equal(settle(h), undefined);
+  assert.equal(h.requests.length, 1, "no silent fallback or extra request");
+  assert.equal((await h.requests[0].options.onPayload({}, h.ctx.model)).service_tier, "fast");
+});
+
+test("summary failure details are bounded, single-line and redact common credentials", async () => {
+  const h = harness({ summaryResult: () => { throw new Error(
+    '\u001b[31m401 denied\u001b[0m\nBearer bearer-secret api_key="api-secret" token=token-secret ' +
+    "https://user:pass@example.test/api?key=url-secret sk-key-secret eyJhbGci.test.signature " + "x".repeat(500),
+  ); } });
+  await h.boundary(); await h.ready; h.finish(); await tick();
+  const notice = h.notices[0][0], reason = notice.split("原因：")[1];
+  assert.match(reason, /^401 denied/);
+  assert.match(reason, /\[REDACTED\]/);
+  assert.match(reason, /\[URL\]/);
+  assert.ok(reason.length <= 301);
+  assert.ok(reason.endsWith("…"));
+  assert.doesNotMatch(notice, /bearer-secret|api-secret|token-secret|user:pass|url-secret|key-secret|eyJhbGci|[\u0000-\u001f\u007f-\u009f]/);
+  assert.equal(settle(h), undefined);
+});
+
+for (const thrown of ["network disconnected", {}, undefined]) {
+  test(`non-Error summary failure remains safe: ${typeof thrown}`, async () => {
+    const h = harness({ summaryResult: () => { throw thrown; } });
+    await h.boundary(); await h.ready; h.finish(); await tick();
+    assert.equal(h.notices.length, 1);
+    assert.ok(h.notices[0][0].endsWith(`原因：${typeof thrown === "string" ? thrown : "未知错误"}`));
+    assert.equal(settle(h), undefined);
+  });
+}
+
+test("obsolete summary failures stay silent and do not prevent the next job", async () => {
+  let failing = true;
+  const h = harness({ summaryResult: () => {
+    if (failing) throw new Error("late provider failure");
+    return fauxAssistantMessage("Checkpoint");
+  } });
+  await h.boundary(); await h.ready;
+  h.handlers.get("model_select")({}, h.ctx);
+  h.finish(); await tick();
+  assert.equal(h.notices.length, 0);
+  const requestsBefore = h.requests.length;
+  failing = false;
+  await h.boundary(); await tick();
+  assert.ok(h.requests.length > requestsBefore, "a fresh job can generate its native summary sections");
+  assert.equal(h.notices.length, 1);
+  assert.match(h.notices[0][0], /摘要已就绪/);
+  assert.ok(settle(h));
 });
 
 test("invalid summary configuration fails open with one warning", async () => {
@@ -249,6 +342,7 @@ test("invalid summary configuration fails open with one warning", async () => {
   assert.equal(h.notices.length, 1);
   assert.equal(h.notices[0][1], "warning");
   assert.match(h.notices[0][0], /未完成（耗时 \d+\.\ds）/);
+  assert.match(h.notices[0][0], /原因：bad config/);
   assert.doesNotMatch(h.notices[0][0], /tokens|已压缩/);
 });
 
@@ -290,6 +384,37 @@ for (const change of ["replaceSession", "replaceModel", "mutateModel"]) test(`${
   assert.equal(await pending, undefined);
   assert.equal(h.handlers.get("agent_before_settle")({ entries: [], outcome: "completed" }, h.ctx), undefined);
   assert.deepEqual(h.notices, []);
+});
+
+for (const event of ["session_shutdown", "session_before_switch", "no_lifecycle_event"]) {
+  for (const failure of [false, true]) test(`invalidated ctx after ${event}: late summary ${failure ? "failure" : "success"} is discarded`, async () => {
+    const h = harness({ summaryResult: () => {
+      if (failure) throw new Error("late provider failure");
+      return fauxAssistantMessage("obsolete summary");
+    } });
+    await h.boundary(); await h.ready;
+    const fresh = { ...h.ctx };
+    let staleReads = 0;
+    Object.defineProperty(h.ctx, "sessionManager", { get() {
+      staleReads++;
+      throw new Error("This extension ctx is stale after session replacement or reload.");
+    } });
+    if (event !== "no_lifecycle_event") h.handlers.get(event)({}, fresh);
+    h.finish(); await tick(); await tick();
+    assert.equal(staleReads, event === "no_lifecycle_event" ? 1 : 0,
+      "cancelled jobs must short-circuit before touching stale ctx; unannounced invalidation is checked only once");
+    assert.equal(h.notices.length, 0, "obsolete jobs must not notify through captured ctx");
+    assert.equal(h.handlers.get("agent_before_settle")({ entries: [], outcome: "completed" }, fresh), undefined);
+  });
+}
+
+test("a throwing UI cannot turn an optional background job into an unhandled rejection", async () => {
+  const h = harness();
+  await h.boundary(); await h.ready;
+  h.ctx.ui.notify = () => { throw new Error("UI became unavailable"); };
+  h.finish(); await tick(); await tick();
+  assert.equal(h.signal().aborted, true);
+  assert.equal(settle(h), undefined, "failed completion must not leave a ready draft");
 });
 
 test("Worker depth skips all OCC registration, not just execution", () => {

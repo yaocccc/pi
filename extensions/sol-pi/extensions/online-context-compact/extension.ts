@@ -4,6 +4,7 @@
  * Pi 1.0.4 background generation and boundary-draft lifecycle adapter. No abort/settled-message continuation.
  */
 import { createHash } from "node:crypto";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
@@ -12,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_COMPACTION_ECONOMICS, decideCompaction } from "./economics.ts";
 import { analyzePlanTransition, formatPlanSnapshot, parsePlanSteps } from "./plan.ts";
-import { estimateNativeCompactionTokens } from "./projection.ts";
+import { estimateCompactionPricing } from "./pricing.ts";
 import {
 	ONLINE_STATE_ENTRY, appendOnlineState, recordBoundary, recordCompaction,
 	recordCompletedPlanHandoff, recordCorrection, recordProviderRequest, restoreOnlineState,
@@ -40,6 +41,19 @@ export type OnlineContextCompactOptions = {
 	readonly resolveSettings?: SettingsResolver;
 	readonly resolveSummarySettings?: typeof resolveSummarySettings;
 };
+
+/** UI-only, best-effort redaction. Never serialize request/response objects or error stacks. */
+function summaryFailureReason(error: unknown): string {
+	const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "未知错误";
+	const reason = stripVTControlCharacters(raw)
+		.replace(/https?:\/\/[^\s"'<>]+/gi, "[URL]")
+		.replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer [REDACTED]")
+		.replace(/(["']?(?:authorization|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|secret|password|cookie)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi, "$1[REDACTED]")
+		.replace(/\bsk-[\w-]+/g, "[REDACTED]")
+		.replace(/\beyJ[\w-]*\.[\w-]+\.[\w-]+/g, "[REDACTED]")
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
+	return reason.length > 300 ? `${reason.slice(0, 300)}…` : reason || "未知错误";
+}
 
 function progressSummary(input: PlanUpdateInput, completedStepId: string): ProgressSummary | undefined {
 	const step = input.steps.find((item) => item.id === completedStepId);
@@ -306,11 +320,21 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			const captured = { generation, session: identity(ctx), prefix: JSON.stringify(branch), length: branch.length,
 				model: ctx.model, modelKey: modelKey(ctx) };
 			const valid = (current = ctx): boolean => {
-				const branch = current.sessionManager.getBranch();
-				return !local.signal.aborted && generation === captured.generation && identity(current) === captured.session &&
-					current.model === captured.model && modelKey(current) === captured.modelKey &&
-					JSON.stringify(branch.slice(0, captured.length)) === captured.prefix &&
-					!branch.slice(captured.length).some(entry => ["compaction", "branch_summary", "context_edit"].includes(entry.type));
+				// Pi can revoke ctx getters on reload/replacement. Cancellation must be
+				// checked BEFORE any captured-context access, including in error handling.
+				if (local.signal.aborted || generation !== captured.generation) return false;
+				try {
+					const branch = current.sessionManager.getBranch();
+					return identity(current) === captured.session && current.model === captured.model &&
+						modelKey(current) === captured.modelKey &&
+						JSON.stringify(branch.slice(0, captured.length)) === captured.prefix &&
+						!branch.slice(captured.length).some(entry => ["compaction", "branch_summary", "context_edit"].includes(entry.type));
+				} catch {
+					// SDK disposal/reload may invalidate ctx without a cancellation hook.
+					// Latch invalidity so a late rejection never reads that ctx again.
+					local.abort();
+					return false;
+				}
 			};
 			const startedAt = performance.now();
 			// Deliberately detached: only a later native boundary may consume its result.
@@ -321,10 +345,8 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 					if (!settings.compaction.enabled) return;
 					const preparation = prepareCompaction(structuredClone(branch), settings.compaction);
 					if (!preparation) return;
-					// Native usage/full-context estimate is conservative when OP has shortened
-					// results without measured usage. Only the proven projected prefix earns savings.
-					const writeTokens = preparation.tokensBefore;
-					const archiveTokens = estimateNativeCompactionTokens(preparation, observedMessages);
+					const pricing = estimateCompactionPricing({ preparation, branch, observedMessages, model: captured.model });
+					const { writeTokens, archiveTokens } = pricing;
 					const decision = decideCompaction({
 						writeTokens, archiveTokens, memoTokens: DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE,
 						contextTokens: writeTokens, completedBoundaryRequestCounts: state.completedBoundaryRequestCounts,
@@ -395,13 +417,19 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 						};
 					};
 					notify(ctx, `上下文摘要已就绪，生成耗时 ${(generationMs / 1000).toFixed(1)}s；将在下一个安全边界应用。`);
-				} catch {
+				} catch (error) {
 					// Optional optimization: no ghost turn and no notification for obsolete jobs.
-					if (valid()) notify(ctx, `后台上下文压缩未完成（耗时 ${((performance.now() - startedAt) / 1000).toFixed(1)}s），当前对话不受影响；请检查模型配置或连接。`, "warning");
+					if (valid()) notify(ctx, `后台上下文压缩未完成（耗时 ${((performance.now() - startedAt) / 1000).toFixed(1)}s），当前对话不受影响。原因：${summaryFailureReason(error)}`, "warning");
 				} finally {
 					if (controller === local && !takeReady) controller = undefined;
 				}
-			})();
+			})().catch(() => {
+				// Last-resort sink for this detached optimization (e.g. a revoked UI
+				// throwing while reporting failure). Never touch ctx/pi here, or erase
+				// a newer job that started after this one was cancelled.
+				local.abort();
+				if (controller === local) { controller = undefined; takeReady = undefined; }
+			});
 		});
 	};
 }

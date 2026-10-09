@@ -104,6 +104,38 @@ async function setup(t, options = {}) {
   return { session, manager, counts, settings, faux, run: () => session.prompt("Finish the task", { expandPromptTemplates: false }) };
 }
 
+for (const kind of ["reload", "dispose"]) {
+  for (const failure of [false, true]) test(`real session ${kind} safely discards late summary ${failure ? "failure" : "success"}`, { timeout: 5000 }, async t => {
+    let finish, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const gate = new Promise(resolve => { finish = resolve; });
+    t.after(finish);
+    const h = await setup(t, {
+      script: [call("open", plan()), call("boundary", plan(true)), fauxAssistantMessage("FIRST RUN FINISHED"),
+        fauxAssistantMessage("AFTER RELOAD")],
+      summary: async () => {
+        started(); await gate;
+        if (failure) throw new Error("Late provider failure after context invalidation");
+        return fauxAssistantMessage("OBSOLETE CHECKPOINT");
+      },
+    });
+    await h.run(); await ready;
+    if (kind === "reload") await h.session.reload();
+    else h.session.dispose();
+    const branch = h.manager.getBranch().map(e => e.id);
+    finish();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.deepEqual(h.manager.getBranch().map(e => e.id), branch, "old task must not write into the current session");
+    assert.equal(h.manager.getBranch().some(e => e.type === "compaction"), false);
+    assert.deepEqual(h.counts.errors, []);
+    if (kind === "reload") {
+      await h.session.prompt("Continue after reload", { expandPromptTemplates: false });
+      assert.equal(h.counts.main, 4, "reloaded session remains usable without a ghost continuation");
+      assert.equal(h.manager.getBranch().some(e => e.type === "compaction"), false);
+    }
+  });
+}
+
 test("real session remains interactive while summary runs; idle result commits later without losing new messages", { timeout: 5000 }, async t => {
   let finish, started;
   const ready = new Promise(resolve => { started = resolve; });

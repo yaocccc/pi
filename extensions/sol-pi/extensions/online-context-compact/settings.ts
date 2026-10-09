@@ -8,7 +8,7 @@ export interface SummarySettings {
 	model: NonNullable<ExtensionContext["model"]>;
 	thinking: ThinkingLevel | undefined;
 	/** Optional for SDK resolvers; omission behaves like auto. */
-	service_tier?: "auto" | "fast" | "ultrafast";
+	service_tier?: "auto" | "priority" | "fast" | "ultrafast";
 }
 
 /** Read afresh when starting a job; never read an untrusted project's configuration. */
@@ -20,7 +20,7 @@ export function resolveSummarySettings(ctx: ExtensionContext, path = join(getAge
 	const modelName = config.model ?? "auto";
 	const thinking = config.thinking ?? "auto";
 	const serviceTier = config.service_tier ?? "auto";
-	if (serviceTier !== "auto" && serviceTier !== "fast" && serviceTier !== "ultrafast") {
+	if (serviceTier !== "auto" && serviceTier !== "priority" && serviceTier !== "fast" && serviceTier !== "ultrafast") {
 		throw new Error("Invalid online compaction service_tier");
 	}
 	if (typeof modelName !== "string" || typeof thinking !== "string" ||

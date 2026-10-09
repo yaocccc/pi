@@ -1,0 +1,12 @@
+[
+  {
+    "timestamp": "2026-10-09T05:46:35.785Z",
+    "version": "1.1.0",
+    "kind": "uncaught_exception",
+    "message": "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+    "stack": "Error: This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().\n    at ExtensionRunner.assertActive (file:///home/chenyc/.nvm/versions/node/v22.19.0/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/chunks/chunk-OIM2DMFI.js:523:13443)\n    at get sessionManager (file:///home/chenyc/.nvm/versions/node/v22.19.0/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/chunks/chunk-OIM2DMFI.js:523:16330)\n    at valid (/home/chenyc/.pi/agent/extensions/sol-pi/extensions/online-context-compact/extension.ts:373:32)\n    at /home/chenyc/.pi/agent/extensions/sol-pi/extensions/online-context-compact/extension.ts:469:87\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)",
+    "sessionFile": "/home/chenyc/.pi/agent/sessions/--home-chenyc-.pi-agent--/2026-10-08T03-04-44-581Z_01a11978-6b24-7069-bfb5-4bf40c707b71.jsonl",
+    "cwd": "/home/chenyc/.pi/agent",
+    "notified": true
+  }
+]
