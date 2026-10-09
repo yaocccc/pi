@@ -38,7 +38,7 @@
   "defaultProjectTrust": "ask",
   "tuiMode": "fullscreen",
   "fullscreenScrollbar": "auto",
-  "fullscreenCopyOnSelect": true,
+  "fullscreenCopyOnSelect": false,
   "fullscreenExitOutput": "transcript",
   "fullscreenWheelScrollLines": "auto"
 }
