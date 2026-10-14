@@ -3,8 +3,8 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 const PROVIDER = 'openai-codex';
 export const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 export const USAGE_TIMEOUT_MS = 15_000;
-export const USAGE_REFRESH_MS = 10 * 60_000;
-export const USAGE_TICK_MS = 30_000;
+export const USAGE_REFRESH_MS = 1 * 60_000;
+export const USAGE_TICK_MS = 10_000;
 
 export type CodexUsage = { usedPercent: number; resetAt: number };
 

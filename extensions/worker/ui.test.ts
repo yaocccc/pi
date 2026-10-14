@@ -3,7 +3,7 @@ import test from "node:test";
 import { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkerUiActivity, WorkerUiDetails } from "./types.ts";
-import { compactWorkerResult, serializePayload, createThinkingActivityRecorder, renderWorkerDetails, uiActivityLine, workerUsageText } from "./ui.ts";
+import { compactWorkerResult, serializePayload, createThinkingActivityRecorder, renderWorkerDetails, sanitizeStructuredValue, uiActivityLine, workerUsageText } from "./ui.ts";
 
 test("worker usage groups input and output without a dot separator", () => {
 	assert.equal(
@@ -51,11 +51,34 @@ test("tool activity lines fit 70 visible columns including wide Chinese and elli
 	assert.ok(line.startsWith("→ 中文工具 · "));
 });
 
+test("completed tool estimates appear between name and preview, without tok or background resets", () => {
+	const theme = { fg: (_: string, text: string) => text } as Theme;
+	const activity: WorkerUiActivity = { id: "tool:tokens", type: "tool", status: "completed", label: "read", contextSizeEstimate: 775, detail: "func (s *Store) Kline(ctx context.Context, key string) (*model.Kline, error)", at: 0 };
+	const sanitized = sanitizeStructuredValue({ ...activity, apiToken: 'secret-value' }) as WorkerUiActivity & { apiToken: string };
+	assert.equal(sanitized.contextSizeEstimate, 775, 'estimate survives the actual snapshot sanitization path');
+	assert.equal(sanitized.apiToken, '[已隐藏]', 'credential redaction remains enabled');
+	const line = uiActivityLine(sanitized, theme);
+	assert.ok(line.startsWith("✓ read · ≈775 · func"));
+	assert.equal(visibleWidth(line), 70);
+	assert.ok(line.endsWith("…"));
+	assert.doesNotMatch(line, /tok|\x1b\[0m/);
+	assert.doesNotMatch(uiActivityLine({ ...activity, status: "running" }, theme), /≈/);
+	assert.doesNotMatch(uiActivityLine({ ...activity, contextSizeEstimate: undefined }, theme), /≈/);
+	assert.match(uiActivityLine({ ...activity, status: "failed", detail: undefined }, theme), /^✗ read · ≈775$/);
+});
+
+test("worker tool estimates use orange from 5k and red from 10k", () => {
+	const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` } as Theme;
+	const activity: WorkerUiActivity = { id: "colors", type: "tool", status: "completed", label: "read", at: 0 };
+	assert.ok(uiActivityLine({ ...activity, contextSizeEstimate: 5000 }, theme).includes("\x1b[38;2;255;165;0m≈5.0k\x1b[39m"));
+	assert.ok(uiActivityLine({ ...activity, contextSizeEstimate: 10000 }, theme).includes("<error>≈10.0k</error>"));
+});
+
 test("truncated tool lines preserve an enclosing ANSI background", () => {
 	const colors = { accent: "#00aaff", warning: "#ffaa00", success: "#00ff00", error: "#ff0000", dim: "#777777", muted: "#888888", text: "#ffffff", thinkingXhigh: "#aaaaaa" } as ConstructorParameters<typeof Theme>[0];
 	const theme = new Theme(colors, { selectedBg: "#223344" } as ConstructorParameters<typeof Theme>[1], "truecolor");
-	const line = uiActivityLine({ id: "tool:2", type: "tool", status: "completed", label: "read", detail: "中文摘要".repeat(25), at: 0 }, theme);
-	assert.equal(visibleWidth(line), 70);
+	const line = uiActivityLine({ id: "tool:2", type: "tool", status: "completed", label: "read", contextSizeEstimate: 775, detail: "中文摘要".repeat(25), at: 0 }, theme);
+	assert.ok(visibleWidth(line) <= 70);
 	assert.ok(stripTerminalSequences(line).endsWith("…"));
 	assert.doesNotMatch(line, /\x1b\[0m/, "a full SGR reset would clear the enclosing background");
 	const framed = theme.bg("selectedBg", line + " ".repeat(10));

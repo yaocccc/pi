@@ -80,6 +80,8 @@ export interface WorkerUiActivity {
 	status: WorkerUiActivityStatus;
 	label: string;
 	detail?: string;
+	/** Historical argument + result token estimate, independent of the UI preview. */
+	contextSizeEstimate?: number;
 	at: number;
 }
 

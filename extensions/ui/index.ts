@@ -1,4 +1,5 @@
 import { estimateTokens, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { patchToolContext } from './tool-context.ts';
 import { WORKER_USAGE_EVENT } from '../worker/events.ts';
 import { TextAreaEditor } from './editor.ts';
 import { NoCostFooter } from './footer.ts';
@@ -26,6 +27,7 @@ export default function ui(pi: ExtensionAPI) {
     patchFullscreenScrollbar();
     patchPaddedBackgroundHalfBlocks();
     patchUserMessageHalfBlocks();
+    patchToolContext();
 
     let startedAt: number | undefined;
     let timer: NodeJS.Timeout | undefined;

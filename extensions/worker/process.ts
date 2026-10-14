@@ -1,3 +1,4 @@
+import { estimateToolTokens } from '../ui/tool-tokens.ts';
 import { spawn, type ChildProcess } from "node:child_process";
 import { present } from "./presentation.ts";
 import { captureWorkerSession, workerSessionArgs, type WorkerSessionSnapshot } from "./session.ts";
@@ -5,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildTaskPrompt, workerPromptBody } from "./prompt.ts";
 import { resolveRoute, resolveTaskCwd } from "./config.ts";
 import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard.ts";
@@ -119,6 +120,14 @@ export async function runPiWorker(
 	const owner = control?.owner ?? defaultOwner;
 	const activities: WorkerUiActivity[] = [];
 	const seenToolIds = new Set<string>();
+	// Keep only counts, not potentially large or sensitive raw arguments.
+	const toolArgumentTokens = new Map<string, number>();
+	const recordToolArgs = (id: string, args: unknown) => {
+		if (args !== undefined) toolArgumentTokens.set(id, estimateToolTokens(args, { content: [] }));
+	};
+	const toolTokens = (id: string, result: any): number | undefined => Array.isArray(result?.content)
+		? (toolArgumentTokens.get(id) ?? 0) + estimateTokens({ ...result, role: 'toolResult' })
+		: undefined;
 	let phase = "等待执行槽位";
 	let toolCalls = 0;
 	let lastEmitAt = 0;
@@ -145,7 +154,7 @@ export async function runPiWorker(
 		appendUiActivity(activities, { id: `phase:${value}`, type: "phase", status, label: value, at: Date.now() });
 		emit(true);
 	};
-	const upsertTool = (id: string, name: string, status: WorkerUiActivityStatus, detail?: string) => {
+	const upsertTool = (id: string, name: string, status: WorkerUiActivityStatus, detail?: string, contextSizeEstimate?: number) => {
 		if (!seenToolIds.has(id)) {
 			seenToolIds.add(id);
 			toolCalls++;
@@ -158,6 +167,7 @@ export async function runPiWorker(
 			status,
 			label: uiSnippet(name, 32) || "未知工具",
 			detail: detail || previous?.detail,
+			contextSizeEstimate: contextSizeEstimate ?? previous?.contextSizeEstimate,
 			at: Date.now(),
 		});
 		emit(status !== "running");
@@ -344,11 +354,15 @@ export async function runPiWorker(
 					streamUsage = emptyWorkerUsage();
 					activeTurn = false;
 					for (const part of event.message.content ?? []) {
-						if (part?.type === "toolCall") upsertTool(part.id, part.name, "running", summarizeToolArgs(part.arguments));
+						if (part?.type === "toolCall") {
+							recordToolArgs(part.id, part.arguments);
+							upsertTool(part.id, part.name, "running", summarizeToolArgs(part.arguments));
+						}
 					}
 					return;
 				}
 				if (event.type === "tool_execution_start" && event.toolCallId && event.toolName) {
+					recordToolArgs(event.toolCallId, event.args);
 					upsertTool(event.toolCallId, event.toolName, "running", summarizeToolArgs(event.args));
 					return;
 				}
@@ -357,11 +371,11 @@ export async function runPiWorker(
 					return;
 				}
 				if (event.type === "tool_execution_end" && event.toolCallId && event.toolName) {
-					upsertTool(event.toolCallId, event.toolName, event.isError ? "failed" : "completed", summarizeToolResult(event.result));
+					upsertTool(event.toolCallId, event.toolName, event.isError ? "failed" : "completed", summarizeToolResult(event.result), toolTokens(event.toolCallId, event.result));
 					return;
 				}
 				if ((event.type === "message_end" || event.type === "tool_result_end") && event.message?.role === "toolResult") {
-					upsertTool(event.message.toolCallId, event.message.toolName, event.message.isError ? "failed" : "completed", summarizeToolResult(event.message));
+					upsertTool(event.message.toolCallId, event.message.toolName, event.message.isError ? "failed" : "completed", summarizeToolResult(event.message), toolTokens(event.message.toolCallId, event.message));
 				}
 			};
 			child.stdout!.on("data", (chunk: Buffer) => {

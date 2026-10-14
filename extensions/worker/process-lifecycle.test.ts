@@ -17,6 +17,18 @@ const launch = (owner: WorkerOwner, scenario: string, signal?: AbortSignal, time
 	{ owner, invocation: { command: process.execPath, args: ["--experimental-transform-types", fixture, scenario] } },
 );
 
+test("tool activities estimate complete payloads once across duplicate completion events", async () => {
+	const owner = createWorkerOwner();
+	const snapshots: ChildProgress[] = [];
+	try {
+		await launch(owner, "tool-tokens", undefined, 10_000, (progress) => snapshots.push(progress));
+		const activity = snapshots.at(-1)!.activities.find((item) => item.id === "tool:read-1")!;
+		assert.equal(activity.contextSizeEstimate, Math.ceil(JSON.stringify({ path: "example.ts" }).length / 4) + 750);
+		assert.ok(activity.detail!.length < 3000, "count uses full result, not preview");
+		assert.equal(snapshots.at(-1)!.toolCalls, 1);
+	} finally { beginWorkerShutdown(owner); }
+});
+
 test("owner shutdown rejects only its own waiters and slot releases are idempotent", async () => {
 	const a = createWorkerOwner(), b = createWorkerOwner();
 	const releaseA = await acquireSlot(1, undefined, 1_000, a);

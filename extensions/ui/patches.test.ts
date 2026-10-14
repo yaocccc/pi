@@ -97,4 +97,16 @@ test('hot reload upgrades a live v9 tool wrapper and a v2 final separator withou
     worker.render(40);
     new UserMessageComponent('下一个问题').render(40);
     assert.equal(final().length, 1, 'user input resets the shared reload-safe activity state');
+
+    const { patchToolContext } = await import('./tool-context.ts');
+    patchToolContext();
+    for (const tool of [worker, ordinary, compact]) {
+        tool.updateResult({ content: [{ type: 'text', text: 'done' }], isError: false }, false);
+        const lines = tool.render(40);
+        assert.match(stripTerminalSequences(lines.join('\n')), /≈\d+ tok/);
+        assert.equal(boundaries(lines).length, 2, 'token badge preserves tool shell');
+        tool.setExpanded(true);
+        assert.equal((stripTerminalSequences(tool.render(40).join('\n')).match(/≈\d+ tok/g) ?? []).length, 1);
+    }
+    assert.deepEqual(hidden.render(40), [], 'token badge does not reveal hidden worker controls');
 });

@@ -19,5 +19,12 @@ if (scenario === "group-stubborn") {
 	emit({ type: "tool_execution_end", toolCallId: "fixture-ready", toolName: "fixture-ready", result: {} });
 
 } else {
+	if (scenario === "tool-tokens") {
+		const args = { path: "example.ts" };
+		const result = { content: [{ type: "text", text: "x".repeat(3000) }], isError: false };
+		emit({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args });
+		emit({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", result });
+		emit({ type: "message_end", message: { ...result, role: "toolResult", toolCallId: "read-1", toolName: "read" } });
+	}
 	emit({ type: "message_end", message: { role: "assistant", provider: "fixture", model: "local", content: [{ type: "text", text: JSON.stringify({ status: scenario === "blocked" ? "blocked" : "completed", summary: [scenario === "blocked" ? "Required decision is missing" : "done"] }) }], usage: { input: 20, output: 10 } } });
 }

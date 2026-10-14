@@ -1,3 +1,4 @@
+import { colorToolTokens, formatToolTokens } from '../ui/tool-tokens.ts';
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkerUiActivity, WorkerUiDetails, WorkerUiStatus, WorkerUiTask, WorkerUsage } from "./types";
@@ -280,7 +281,9 @@ export function uiActivityLine(activity: WorkerUiActivity, theme: Theme): string
 	const icon = activity.status === "running" ? theme.fg("warning", "→") : activity.status === "completed" ? theme.fg("success", "✓") : theme.fg("error", "✗");
 	const label = activity.type === "tool" ? theme.fg("accent", activity.label) : theme.fg("muted", activity.label);
 	if (activity.type !== "tool") return `${icon} ${label}${activity.detail ? theme.fg("dim", ` · ${uiSnippet(activity.detail, 96)}`) : ""}`;
-	const prefix = `${icon} ${label}`;
+	const tokens = activity.status !== "running" && Number.isFinite(activity.contextSizeEstimate) && activity.contextSizeEstimate! >= 0
+		? theme.fg("dim", " · ") + colorToolTokens(activity.contextSizeEstimate!, formatToolTokens(activity.contextSizeEstimate!).replace(/ tok$/, ""), theme) : "";
+	const prefix = `${icon} ${label}${tokens}`;
 	const detailWidth = UI_TOOL_LINE_WIDTH - visibleWidth(prefix) - 3; // " · "
 	// truncateToWidth adds full ANSI resets when clipping; remove them before applying the theme color.
 	const detail = activity.detail && detailWidth > 0
