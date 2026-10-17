@@ -18,7 +18,7 @@ Each row corresponds to current source under `extensions/`, excluding `node_modu
 
 | Extension / source | Purpose | Entry point | Configuration / activation |
 | --- | --- | --- | --- |
-| [ask-question](extensions/ask-question/index.ts) | Queued single-choice, multiple-choice, custom-input, or multi-question forms | Agent tool `ask_question`, not a slash command | No separate configuration; interactive forms require TUI, other modes return unanswered questions only |
+| [ask-question](extensions/ask-question/index.ts) | Queued single-choice, multiple-choice, custom-input, or multi-question forms | Agent tool `ask_question`, not a slash command | No separate configuration; TUI uses the full custom form, while RPC/Pi Web uses standard dialogs for single choice, custom input, sequential questionnaires, and emulated multiple choice; modes without UI return unanswered questions only |
 | [autoname](extensions/autoname/index.ts) | Generate/update Chinese session names while preserving manual names | Automatic after the run fully settles | `autoname.json`: `enabled`, `notify`, `cooldownSeconds`, `model`, `reasoning` |
 | [btw](extensions/btw/index.ts) | Temporary read-only Q&A from a snapshot of the current context, without tools or writes to the main session | `/btw [question]`, `Ctrl+B` | Requires TUI; uses the current model and authentication; closing discards Q&A but API usage is still billed |
 | [codex-fast](extensions/codex-fast/index.ts) | Set Fast / Ultrafast for eligible Codex requests | Only the `/codex-fast` native selection menu | `codex-fast.json`: independent boolean switches `fast`, `ultrafast`, both off by default |

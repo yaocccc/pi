@@ -375,6 +375,61 @@ const showQuestions = (questions: AskQuestionInput[], review: boolean, ctx: Exte
         };
     });
 
+const askRpcQuestion = async (question: AskQuestionInput, ctx: ExtensionContext, signal?: AbortSignal): Promise<AskQuestionResult | null> => {
+    const customLabel = '自己输入…';
+    const options = normalizeOptions(question.options);
+    const dialogOptions = signal ? { signal } : undefined;
+
+    if (!question.multiSelect) {
+        const selected = await ctx.ui.select(question.label || question.question, [...options, customLabel], dialogOptions);
+        if (!selected) return null;
+        if (selected !== customLabel) return { answers: [selected], wasCustom: false };
+        const custom = (await ctx.ui.input(question.question, '请输入你的答案', dialogOptions))?.trim();
+        return custom ? { answers: [custom], wasCustom: true, customAnswers: [custom] } : null;
+    }
+
+    const selected = new Set<string>();
+    const customAnswers: string[] = [];
+    while (true) {
+        const choices = [
+            ...options.map((option) => `${selected.has(option) ? '[✓]' : '[ ]'} ${option}`),
+            customLabel,
+            `完成（已选 ${selected.size + customAnswers.length} 项）`,
+        ];
+        const choice = await ctx.ui.select(question.label || question.question, choices, dialogOptions);
+        if (!choice) return null;
+        if (choice === customLabel) {
+            const custom = (await ctx.ui.input(question.question, '请输入你的答案', dialogOptions))?.trim();
+            if (custom && !customAnswers.includes(custom)) customAnswers.push(custom);
+            continue;
+        }
+        if (choice.startsWith('完成（')) {
+            const answers = [...options.filter((option) => selected.has(option)), ...customAnswers];
+            if (answers.length > 0) return {
+                answers,
+                wasCustom: selected.size === 0 && customAnswers.length > 0,
+                customAnswers: customAnswers.length > 0 ? customAnswers : undefined,
+            };
+            ctx.ui.notify('请至少选择或输入一项。', 'warning');
+            continue;
+        }
+        const option = choice.slice(4);
+        if (selected.has(option)) selected.delete(option);
+        else selected.add(option);
+    }
+};
+
+const askQuestions = async (questions: AskQuestionInput[], review: boolean, ctx: ExtensionContext, interactions: QuestionInteractions, signal?: AbortSignal) => {
+    if (ctx.mode === 'tui') return showQuestions(questions, review, ctx, interactions, signal);
+    const answers: QuestionnaireAnswer[] = [];
+    for (const question of questions) {
+        const answer = await askRpcQuestion(question, ctx, signal);
+        if (!answer) return null;
+        answers.push({ ...answer, completed: true });
+    }
+    return { answers, cancelled: false };
+};
+
 const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, ctx: ExtensionContext, interactions: QuestionInteractions, signal?: AbortSignal) => {
     const questions = params.questions.map((question) => ({
         question: question.question,
@@ -383,7 +438,7 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
         multiSelect: question.multiSelect === true,
     }));
 
-    if (!ctx.hasUI || ctx.mode !== 'tui') {
+    if (!ctx.hasUI) {
         const details = questionnaireDetails(questions, []);
         return {
             content: [{ type: 'text' as const, text: `需要询问用户（${questions.length} 个问题）：\n${questions.map((q, i) => `${q.label || `问题 ${i + 1}`}：${q.question}\n${q.multiSelect ? '可多选：' : '选项：'}${q.options.join(' / ')}`).join('\n')}` }],
@@ -391,7 +446,7 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
         };
     }
 
-    const result = await showQuestions(questions, true, ctx, interactions, signal);
+    const result = await askQuestions(questions, true, ctx, interactions, signal);
     // Esc cancels the submission, including any unsubmitted draft choices.
     const indexedAnswers = questions.map((_question, index) => result && !result.cancelled ? result.answers[index] : undefined);
     const details = questionnaireDetails(questions, indexedAnswers);
@@ -431,14 +486,14 @@ const askQuestion = (pi: ExtensionAPI) => {
             const options = normalizeOptions(params.options);
             const multiSelect = params.multiSelect === true;
 
-            if (!ctx.hasUI || ctx.mode !== 'tui') {
+            if (!ctx.hasUI) {
                 return {
                     content: [{ type: 'text', text: `需要询问用户：${params.question}\n${multiSelect ? '可多选：' : '选项：'}${options.join(' / ')}` }],
                     details: { question: params.question, options, answer: null, multiSelect } as AskQuestionDetails,
                 };
             }
 
-            const submission = await showQuestions([{ question: params.question, options, multiSelect }], false, ctx, interactions, _signal);
+            const submission = await askQuestions([{ question: params.question, options, multiSelect }], false, ctx, interactions, _signal);
             const result = submission && !submission.cancelled ? submission.answers[0] : null;
 
             if (!result) {

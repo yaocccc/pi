@@ -46,15 +46,85 @@ function harness() {
 	return { pi, ctx, tools, components, call, event, surface, editor, input: (key: string) => focused.handleInput(key), setUiMode: (mode: typeof uiMode) => { uiMode = mode; }, opens: () => opens, closes: () => closes };
 }
 
+function rpcHarness(responses: { select?: Array<string | undefined>; input?: Array<string | undefined> } = {}) {
+	const tools = new Map<string, any>();
+	const handlers = new Map<string, Array<(...args: any[]) => any>>();
+	const calls: Array<{ method: string; args: any[] }> = [];
+	const pi = {
+		registerTool: (tool: any) => tools.set(tool.name, tool),
+		registerCommand() {},
+		on: (name: string, handler: any) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
+	};
+	askQuestion(pi as any);
+	const ctx = {
+		cwd: process.cwd(), hasUI: true, mode: "rpc", sessionManager: { getBranch: () => [] },
+		ui: {
+			custom: () => { throw new Error("RPC must not use custom UI"); },
+			select: async (...args: any[]) => { calls.push({ method: "select", args }); return responses.select?.shift(); },
+			input: async (...args: any[]) => { calls.push({ method: "input", args }); return responses.input?.shift(); },
+			notify: (...args: any[]) => calls.push({ method: "notify", args }),
+		},
+	};
+	return {
+		ctx, calls,
+		call: (params: any, signal?: AbortSignal) => tools.get("ask_question").execute("human", params, signal, undefined, ctx),
+	};
+}
+
+test("RPC single-select supports fixed and custom answers without custom UI", async () => {
+	const fixed = rpcHarness({ select: ["B"] });
+	assert.equal((await fixed.call(single)).details.answer, "B");
+	assert.deepEqual(fixed.calls.map(({ method }) => method), ["select"]);
+
+	const custom = rpcHarness({ select: ["自己输入…"], input: [" custom "] });
+	const result = await custom.call(single);
+	assert.equal(result.details.answer, "custom");
+	assert.equal(result.details.wasCustom, true);
+	assert.deepEqual(custom.calls.map(({ method }) => method), ["select", "input"]);
+});
+
+test("RPC multi-select toggles fixed choices, appends custom input and validates empty submission", async () => {
+	const h = rpcHarness({
+		select: ["完成（已选 0 项）", "[ ] B", "[ ] A", "自己输入…", "完成（已选 3 项）"],
+		input: [" custom "],
+	});
+	const result = await h.call({ question: "Choose?", options: ["A", "B"], multiSelect: true });
+	assert.deepEqual(result.details.answer, ["A", "B", "custom"]);
+	assert.deepEqual(result.details.customAnswers, ["custom"]);
+	assert.equal(result.details.wasCustom, false);
+	assert.equal(h.calls.filter(({ method }) => method === "notify").length, 1);
+});
+
+test("RPC questionnaire asks each labeled question and cancellation discards partial answers", async () => {
+	const completed = rpcHarness({ select: ["A", "D"] });
+	const result = await completed.call({ questions: [
+		{ label: "First", question: "One?", options: ["A", "B"] },
+		{ label: "Second", question: "Two?", options: ["C", "D"] },
+	] });
+	assert.deepEqual(result.details.questions.map((question: any) => question.answer), ["A", "D"]);
+	assert.deepEqual(completed.calls.filter(({ method }) => method === "select").map(({ args }) => args[0]), ["First", "Second"]);
+
+	const cancelled = rpcHarness({ select: ["A", undefined] });
+	const cancelledResult = await cancelled.call(multi);
+	assert.equal(cancelledResult.details.cancelled, true);
+	assert.ok(cancelledResult.details.questions.every((question: any) => question.answer === null));
+});
+
+test("RPC forwards AbortSignal to dialog calls", async () => {
+	const controller = new AbortController();
+	const h = rpcHarness({ select: ["A"] });
+	await h.call(single, controller.signal);
+	assert.equal(h.calls[0].args[2].signal, controller.signal);
+});
+
 for (const [kind, input] of [["single", single], ["questionnaire", multi]] as const) {
-	test(`${kind}: signal/pre-abort, Esc, exception, unsupported custom, noUI/RPC and shutdown release UI without consent`, async () => {
-		for (const exit of ["abort", "pre-abort", "escape", "exception", "undefined", "no-ui", "rpc", "shutdown", "tree"] as const) {
+	test(`${kind}: signal/pre-abort, Esc, exception, unsupported custom, no UI and shutdown release UI without consent`, async () => {
+		for (const exit of ["abort", "pre-abort", "escape", "exception", "undefined", "no-ui", "shutdown", "tree"] as const) {
 			const h = harness(); const controller = new AbortController();
 			if (exit === "pre-abort") controller.abort(new Error("pre aborted"));
 			if (exit === "exception") h.setUiMode("throw");
 			if (exit === "undefined") h.setUiMode("undefined");
 			if (exit === "no-ui") h.ctx.hasUI = false;
-			if (exit === "rpc") h.ctx.mode = "rpc";
 			const call = h.call(input, controller.signal);
 			const fails = ["abort", "pre-abort", "exception", "shutdown", "tree"].includes(exit);
 			const assertion = fails ? assert.rejects(call) : call.then((result: any) => {
@@ -69,7 +139,7 @@ for (const [kind, input] of [["single", single], ["questionnaire", multi]] as co
 			}
 			if (exit === "shutdown" || exit === "tree") await h.event(exit === "tree" ? "session_tree" : "session_shutdown");
 			await assertion;
-			if (exit === "no-ui" || exit === "rpc" || exit === "pre-abort") assert.equal(h.opens(), 0);
+			if (exit === "no-ui" || exit === "pre-abort") assert.equal(h.opens(), 0);
 			assert.ok(h.closes() <= 1, "abort and UI completion cannot dispose custom twice");
 			assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
 			// Every exit also releases the queue for a subsequent interaction.

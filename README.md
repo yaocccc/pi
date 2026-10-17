@@ -18,7 +18,7 @@
 
 | 扩展 / 源码 | 用途 | 入口 | 配置 / 启用条件 |
 | --- | --- | --- | --- |
-| [ask-question](extensions/ask-question/index.ts) | 排队展示单选、多选、自定义输入或多题问卷 | Agent 工具 `ask_question`，非斜杠命令 | 无独立配置；交互问卷需 TUI，非 TUI 仅返回未回答的问题 |
+| [ask-question](extensions/ask-question/index.ts) | 排队展示单选、多选、自定义输入或多题问卷 | Agent 工具 `ask_question`，非斜杠命令 | 无独立配置；TUI 使用完整自定义问卷界面，RPC/Pi Web 使用标准对话框支持单选、自定义输入、顺序多题和模拟多选；无 UI 模式仅返回未回答的问题 |
 | [autoname](extensions/autoname/index.ts) | 自动生成/更新中文会话名称，保留用户手动命名 | 回合完全结束后自动运行 | `autoname.json`：`enabled`、`notify`、`cooldownSeconds`、`model`、`reasoning` |
 | [btw](extensions/btw/index.ts) | 基于当前上下文快照的临时只读问答，不提供工具、不回写主会话 | `/btw [问题]`、`Ctrl+B` | 需要 TUI；使用当前模型与认证，关闭后不保留问答，仍产生 API 用量 |
 | [codex-fast](extensions/codex-fast/index.ts) | 为符合条件的 Codex 请求设置 Fast / Ultrafast | 仅 `/codex-fast` 原生选择菜单 | `codex-fast.json`：独立布尔开关 `fast`、`ultrafast`，缺省均关闭 |
