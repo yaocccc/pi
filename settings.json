@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.2.0",
+  "lastChangelogVersion": "1.5.0",
   "editorPaddingX": 1,
   "outputPad": 1,
   "defaultProvider": "openai-codex",
@@ -40,5 +40,9 @@
   "fullscreenScrollbar": "auto",
   "fullscreenCopyOnSelect": true,
   "fullscreenExitOutput": "transcript",
-  "fullscreenWheelScrollLines": "auto"
+  "fullscreenWheelScrollLines": "auto",
+  "deviceId": "ce4f1b70-29b7-4f8f-ba53-9c6c02dd296b",
+  "extensionChangelogVersions": {
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0"
+  }
 }

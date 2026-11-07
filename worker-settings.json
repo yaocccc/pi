@@ -1,8 +1,8 @@
 {
   "version": 2,
   "fast": {
-    "model": "openai-codex/gpt-6-astra",
-    "thinking": "low"
+    "model": "openai-codex/gpt-6.1-terra",
+    "thinking": "high"
   },
   "normal": {
     "model": "openai-codex/gpt-6-astra",
@@ -13,6 +13,6 @@
     "thinking": "high"
   },
   "maxConcurrentWorkers": 5,
-  "defaultTimeoutMs": 1800000,
+  "defaultTimeoutMs": 3600000,
   "maxOutputBytes": 131072
 }
