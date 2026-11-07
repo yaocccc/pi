@@ -7,8 +7,8 @@
 ## 功能概览
 
 - 自定义 TUI：界面、深色主题和 `Ctrl+Y` 会话恢复；页脚显示上下文占用、模型、Thinking、Codex Fast 开关及订阅余量/重置倒计时。
-- `ask_question` 支持单选、多选和多题确认；并发问卷排队显示，避免互相覆盖。`/commit` 生成 Conventional Commit 信息并提交（会暂存全部改动）。
-- `/codex-fast` 分别设置 Fast / Ultrafast 请求档位；Thinking 中文翻译与自动中文会话命名默认开启，可在对应配置中关闭。
+- `ask_question` 支持单选、多选和多题确认；并发问卷排队显示，避免互相覆盖。
+- `/codex-fast` 分别设置 Fast / Ultrafast 请求档位；自动中文会话命名默认开启，可在对应配置中关闭。
 - [Worker](#worker) 在独立 Pi 子进程中协助完成指定任务；主模型显式选择 Fast、Normal、Deep 三档，Thinking 强度独立设置。路径检查不是安全沙箱，仍须核对修改。
 - [SoL-Pi](#上下文管理sol-pi) 提供大工具结果归档与在线上下文压缩；工具结果过滤只降低常见敏感信息泄露风险，不保证脱敏。
 
@@ -22,12 +22,10 @@
 | [autoname](extensions/autoname/index.ts) | 自动生成/更新中文会话名称，保留用户手动命名 | 回合完全结束后自动运行 | `autoname.json`：`enabled`、`notify`、`cooldownSeconds`、`model`、`reasoning` |
 | [btw](extensions/btw/index.ts) | 基于当前上下文快照的临时只读问答，不提供工具、不回写主会话 | `/btw [问题]`、`Ctrl+B` | 需要 TUI；使用当前模型与认证，关闭后不保留问答，仍产生 API 用量 |
 | [codex-fast](extensions/codex-fast/index.ts) | 为符合条件的 Codex 请求设置 Fast / Ultrafast | 仅 `/codex-fast` 原生选择菜单 | `codex-fast.json`：独立布尔开关 `fast`、`ultrafast`，缺省均关闭 |
-| [commit](extensions/commit/index.ts) | 暂存全部改动，用当前模型生成英文 Conventional Commit 并立即提交 | `/commit` | 无独立配置；需要 Git、可用模型及认证，无提交前确认菜单 |
 | [filter-output](extensions/filter-output/index.ts) | 在模型接收成功的工具结果前过滤常见敏感文本及部分敏感文件读取 | 自动 `tool_result` 钩子，非用户命令 | 无独立配置；不保证脱敏，不过滤错误结果；`.env.example` 读取直接放行 |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | 向 Herdr 的本地 socket 上报工作/阻塞/空闲状态与会话引用 | **内部桥接，非用户命令** | `HERDR_ENV=1` 且存在 `HERDR_SOCKET_PATH`、`HERDR_PANE_ID`；仅绑定有 UI 的主会话，由 Herdr 管理/覆盖 |
 | [sol-pi](extensions/sol-pi/index.ts) | ObservationPack 大工具结果归档、Online Context Compact 在线上下文压缩 | 自动上下文钩子；Agent 工具 `obs_recall`、`update_plan` | 自动发现入口，不要重复加载；详见 [SoL-Pi 文档](extensions/sol-pi/README.md) |
 | [telegram](extensions/telegram/index.ts) | 向目标聊天发送回合回复与部分提问通知 | 自动事件通知，非用户命令，不提供远程控制 | 环境变量 `PI_TG_TOKEN`、`PI_TG_CHAT`；缺少任一项不发送，无轮询；依赖 `node-telegram-bot-api` |
-| [thinking-translation](extensions/thinking-translation/index.ts) | 为短 Thinking 添加中文显示翻译，不改原会话内容或模型上下文 | `/thinking_translation` 切换；实时流自动触发 | `thinking-translation-settings.json`：`enabled`、`model`、`maxThinkingLength`；请求固定 minimal；本地缓存 `~/.pi/thinking-translations/` |
 | [ui](extensions/ui/index.ts) | 自定义页头、编辑器、页脚、工具卡片及主 Agent + Worker 工作进度/用量 | 自动 TUI 渲染，非用户命令 | 无独立配置；页脚读取 `codex-fast.json`；主题与显示设置在 `settings.json`，快捷键在 `keybindings.json` |
 | [worker](extensions/worker/index.ts) | 有边界的独立子进程任务、并行调度及进度卡片 | Agent 工具 `worker`；`/worker_settings` | `worker-settings.json`：必需的三档模型/Thinking、并发、超时及输出上限；此入口在子进程中仅安装写入检查，不可嵌套委派 |
 
@@ -35,7 +33,7 @@
 
 ## 安装
 
-需要 Node.js **22.19+** 与 [Pi Coding Agent](https://github.com/earendil-works/pi)，Git 用于提交和 Worker 的改动检查。
+需要 Node.js **22.19+** 与 [Pi Coding Agent](https://github.com/earendil-works/pi)，Git 用于 Worker 的改动检查。
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -63,13 +61,11 @@ pi
 | --- | --- |
 | `/login`、`/model` | 配置认证、选择模型 |
 | `/worker_settings` | 调整 Worker 模型与并发等设置 |
-| `/commit` | 暂存全部改动、生成提交信息并提交 |
 | `/btw [问题]` | 打开临时只读问答弹窗（也可用 `Ctrl+B`） |
 | `/codex-fast` | 打开 Fast / Ultrafast 设置菜单 |
-| `/thinking_translation` | 切换 Thinking 中文翻译 |
 | `/reload` | 重新加载配置 |
 
-`/login`、`/model`、`/reload` 是 Pi 内置命令，其余见上表本地扩展。`/commit` 会把完整的 staged diff 发给当前模型；使用前确认所有工作区改动都应进入同一次提交。`ask_question`、`worker`、`obs_recall` 与 `update_plan` 是 Agent 工具，不是斜杠命令；其中可选工具受启用条件限制。
+`/login`、`/model`、`/reload` 是 Pi 内置命令，其余见上表本地扩展。`ask_question`、`worker`、`obs_recall` 与 `update_plan` 是 Agent 工具，不是斜杠命令；其中可选工具受启用条件限制。
 
 ### Codex Fast
 
@@ -90,7 +86,6 @@ pi
 这里描述源码缺省值，不复制本地模型或用户设置；本地配置可覆盖缺省值。
 
 - **Autoname** 默认开启并通知，使用当前模型、minimal reasoning，冷却 600 秒；自动命名仅在有 UI 的会话完全结束后处理，保留用户手动名称。
-- **Thinking 翻译** 默认开启，长度上限默认 200 个字符，只改显示；配置文件缺失或配置模型不可用时使用当前会话模型。历史恢复只读取已有缓存，不为缺失缓存补发翻译请求；修改模型/长度配置后重新加载。
 - **Telegram** 未配置两个环境变量时不发送；只通知，不接收聊天指令。当前提问观察器只识别 `ask_question` 的顶层 `question`，多题 `questions` 问卷不会生成对应提问通知。失败被静默忽略，不保证送达。
 
 ## Worker
@@ -131,12 +126,12 @@ pi
 
 ## 配置与安全
 
-- `settings.json` 声明 Pi 扩展包和主题/界面等设置；`worker-settings.json`、`codex-fast.json`、`autoname.json` 与 `thinking-translation-settings.json` 控制对应功能。`keybindings.json` 配置 `Ctrl+Y` 会话恢复；主题源码在 [themes/pi.json](themes/pi.json)。
+- `settings.json` 声明 Pi 扩展包和主题/界面等设置；`worker-settings.json`、`codex-fast.json` 与 `autoname.json` 控制对应功能。`keybindings.json` 配置 `Ctrl+Y` 会话恢复；主题源码在 [themes/pi.json](themes/pi.json)。
 - 登录凭据与模型密钥（如 `auth.json`、`models.json`、`models-store.json`）、会话（如 `sessions/`）应保留在被忽略的本地文件中，不要提交或复制到公开仓库。
 - 自定义模型配置应在本地创建，并优先通过环境变量引用密钥；参见 [模型配置](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)。
 - `.gitignore` 不会保护已跟踪的文件；发布前检查 `git status --short --ignored` 和 `git diff --cached`。若凭据已泄露，应移除公开内容并轮换密钥。
 - Telegram 通知默认不使用；如需启用，先审查扩展源码并安全配置聊天目标与 Bot Token，**不要将凭据写入仓库**。通知可能把任务输入、回复和提问发往目标聊天，且不保证送达。
-- Thinking 翻译和自动会话命名可能向各自使用的模型发送 Thinking 或会话内容，产生额外请求与费用；使用前确认接收方。本地翻译缓存和 Herdr 会话引用同样应按敏感数据处理。
+- 自动会话命名可能向使用的模型发送会话内容，产生额外请求与费用；使用前确认接收方。Herdr 会话引用同样应按敏感数据处理。
 - 工具结果过滤仅为启发式处理，可能遗漏秘密或误遮盖普通内容；它不能代替凭据管理、提交前审查或限制扩展的本机权限。
 
 ## 上下文管理：SoL-Pi

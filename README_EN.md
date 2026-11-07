@@ -7,8 +7,8 @@ This is my personal [Pi Coding Agent](https://pi.dev) configuration: custom exte
 ## Features
 
 - Custom TUI: interface, dark theme, and `Ctrl+Y` session resume; the footer shows context usage, model, Thinking, Codex Fast switches, and remaining subscription quota/reset countdown.
-- `ask_question` supports single-choice, multiple-choice, and multi-question confirmations; concurrent questionnaires are queued to avoid replacing each other. `/commit` generates a Conventional Commit message and commits (staging all changes).
-- `/codex-fast` separately configures Fast / Ultrafast request tiers; Chinese thinking translation and automatic Chinese session naming are enabled by default and can be disabled in their configuration.
+- `ask_question` supports single-choice, multiple-choice, and multi-question confirmations; concurrent questionnaires are queued to avoid replacing each other.
+- `/codex-fast` separately configures Fast / Ultrafast request tiers; Automatic Chinese session naming is enabled by default and can be disabled in its configuration.
 - [Worker](#worker) assists with scoped tasks in separate Pi subprocesses. The main model explicitly selects one of three tiers: Fast, Normal, and Deep; Thinking strength is configured independently. Path checks are not a security sandbox; inspect the resulting changes.
 - [SoL-Pi](#context-management-sol-pi) archives large tool results and provides online context compaction. Tool-result filtering reduces exposure to common secrets but does not guarantee redaction.
 
@@ -22,12 +22,10 @@ Each row corresponds to current source under `extensions/`, excluding `node_modu
 | [autoname](extensions/autoname/index.ts) | Generate/update Chinese session names while preserving manual names | Automatic after the run fully settles | `autoname.json`: `enabled`, `notify`, `cooldownSeconds`, `model`, `reasoning` |
 | [btw](extensions/btw/index.ts) | Temporary read-only Q&A from a snapshot of the current context, without tools or writes to the main session | `/btw [question]`, `Ctrl+B` | Requires TUI; uses the current model and authentication; closing discards Q&A but API usage is still billed |
 | [codex-fast](extensions/codex-fast/index.ts) | Set Fast / Ultrafast for eligible Codex requests | Only the `/codex-fast` native selection menu | `codex-fast.json`: independent boolean switches `fast`, `ultrafast`, both off by default |
-| [commit](extensions/commit/index.ts) | Stage all changes, generate an English Conventional Commit with the current model, and commit immediately | `/commit` | No separate configuration; requires Git, an available model and authentication; no pre-commit confirmation menu |
 | [filter-output](extensions/filter-output/index.ts) | Filter common sensitive text and certain sensitive-file reads before successful tool results reach the model | Automatic `tool_result` hook, not a user command | No separate configuration; redaction is not guaranteed; errors are not filtered and `.env.example` reads bypass filtering |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | Report working/blocked/idle state and session references to Herdr's local socket | **Internal bridge, not a user command** | `HERDR_ENV=1` with `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`; binds only to the main session with UI; managed/overwritten by Herdr |
 | [sol-pi](extensions/sol-pi/index.ts) | ObservationPack archives large tool results; Online Context Compact compacts context online | Automatic context hooks; agent tools `obs_recall`, `update_plan` | Auto-discovered entry; do not load twice. See [SoL-Pi docs](extensions/sol-pi/README.md) |
 | [telegram](extensions/telegram/index.ts) | Send run replies and some question notifications to a target chat | Automatic event notifications, not a user command; no remote control | Environment variables `PI_TG_TOKEN`, `PI_TG_CHAT`; sends nothing if either is missing; no polling; depends on `node-telegram-bot-api` |
-| [thinking-translation](extensions/thinking-translation/index.ts) | Add Chinese display translations to short Thinking without changing source sessions or model context | `/thinking_translation` toggle; automatically triggered by live streaming | `thinking-translation-settings.json`: `enabled`, `model`, `maxThinkingLength`; requests always use minimal reasoning; local cache at `~/.pi/thinking-translations/` |
 | [ui](extensions/ui/index.ts) | Custom header, editor, footer, tool cards, and main-agent + Worker progress/usage | Automatic TUI rendering, not a user command | No separate configuration; footer reads `codex-fast.json`; theme/display settings in `settings.json`, shortcuts in `keybindings.json` |
 | [worker](extensions/worker/index.ts) | Bounded subprocess tasks, parallel scheduling, and progress cards | Agent tool `worker`; `/worker_settings` | `worker-settings.json`: required three-tier models/Thinking, concurrency, timeout, and output limit; in subprocesses, this entry installs only the write guard, not nested delegation |
 
@@ -35,7 +33,7 @@ The old local `context`, `usage`, and `fast` extensions have been removed; their
 
 ## Installation
 
-Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi), with Git for commits and Worker change checks.
+Requires Node.js **22.19+** and [Pi Coding Agent](https://github.com/earendil-works/pi), with Git for Worker change checks.
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -63,13 +61,11 @@ Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies 
 | --- | --- |
 | `/login`, `/model` | Configure authentication, choose a model |
 | `/worker_settings` | Adjust Worker models, concurrency, and other settings |
-| `/commit` | Stage all changes, generate a commit message, and commit |
 | `/btw [question]` | Open temporary read-only Q&A (also available via `Ctrl+B`) |
 | `/codex-fast` | Open the Fast / Ultrafast settings menu |
-| `/thinking_translation` | Toggle Chinese thinking translation |
 | `/reload` | Reload configuration |
 
-`/login`, `/model`, and `/reload` are Pi built-in commands; the others come from the local extensions above. `/commit` sends the complete staged diff to the current model; ensure all working-tree changes belong in the same commit. `ask_question`, `worker`, `obs_recall`, and `update_plan` are agent tools, not slash commands; optional tools depend on their activation conditions.
+`/login`, `/model`, and `/reload` are Pi built-in commands; the others come from the local extensions above. `ask_question`, `worker`, `obs_recall`, and `update_plan` are agent tools, not slash commands; optional tools depend on their activation conditions.
 
 ### Codex Fast
 
@@ -90,7 +86,6 @@ Shown only when the current model uses `openai-codex`, the official `https://cha
 These are source-code defaults, not copied local model or user settings; local configuration can override them.
 
 - **Autoname** is enabled with notifications by default, using the current model, minimal reasoning, and a 600-second cooldown. Automatic naming runs only after a session with UI fully settles and preserves manual names.
-- **Thinking translation** is enabled by default with a default 200-character limit and changes display only. A missing configuration file or unavailable configured model falls back to the current session model. History restoration reads existing cache only, never requesting missing historical translations; reload after changing model/length configuration.
 - **Telegram** sends nothing without both environment variables; it only notifies and does not receive chat commands. The current question watcher recognizes only the top-level `question` in `ask_question`; multi-question `questions` forms do not produce matching question notifications. Failures are silently ignored; delivery is not guaranteed.
 
 ## Worker
@@ -131,12 +126,12 @@ Failure diagnostics retain termination sources and necessary process identifiers
 
 ## Configuration and security
 
-- `settings.json` declares Pi extension packages and theme/display preferences. `worker-settings.json`, `codex-fast.json`, `autoname.json`, and `thinking-translation-settings.json` control their respective features. `keybindings.json` configures `Ctrl+Y` session resume; theme source is [themes/pi.json](themes/pi.json).
+- `settings.json` declares Pi extension packages and theme/display preferences. `worker-settings.json`, `codex-fast.json`, and `autoname.json` control their respective features. `keybindings.json` configures `Ctrl+Y` session resume; theme source is [themes/pi.json](themes/pi.json).
 - Keep login credentials and model secrets (such as `auth.json`, `models.json`, and `models-store.json`), sessions (such as `sessions/`) in ignored local files; do not commit or copy them into a public repository.
 - Create custom model configuration locally and prefer environment-variable references for secrets; see [model configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
 - `.gitignore` does not protect tracked files; check `git status --short --ignored` and `git diff --cached` before publishing. If credentials were exposed, remove the public content and rotate them.
 - Telegram notifications are not used by default. To enable them, first review the extension source and securely configure the chat target and Bot Token; **never put credentials in the repository**. Notifications may send task input, replies, and questions to the target chat, and delivery is not guaranteed.
-- Thinking translation and automatic session naming may send Thinking or conversation content to their respective models, with extra requests and costs; check recipients before use. Treat local translation caches and Herdr session references as sensitive data too.
+- Automatic session naming may send conversation content to its model, with extra requests and costs; check recipients before use. Treat Herdr session references as sensitive data too.
 - Tool-result filtering is heuristic and may miss secrets or mask ordinary content. It cannot replace credential management, pre-commit review, or restrictions on extensions' local permissions.
 
 ## Context management: SoL-Pi
