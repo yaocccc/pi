@@ -2,6 +2,7 @@ import { estimateTokens, type ExtensionAPI, type ExtensionContext } from '@earen
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { patchToolContext } from './tool-context.ts';
+import { patchSessionHistory } from './history.ts';
 import { WORKER_USAGE_EVENT } from '../worker/events.ts';
 import { TextAreaEditor } from './editor.ts';
 import { NoCostFooter } from './footer.ts';
@@ -22,6 +23,7 @@ export { formatElapsed, formatTokenCount, padToWidth, replaceVisibleContent } fr
 export { applyWorkingMessage, setWorkingMessageActive, workingMessage, WORKING_FRAME_INTERVAL_MS } from './working-message.ts';
 
 export default function ui(pi: ExtensionAPI) {
+    patchSessionHistory();
     patchFinalResponseSeparator();
     patchToolDisplay();
     patchMergeConsecutiveTools();
