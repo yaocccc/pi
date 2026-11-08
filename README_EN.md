@@ -20,7 +20,6 @@ Each row corresponds to current source under `extensions/`, excluding `node_modu
 | --- | --- | --- | --- |
 | [ask-question](extensions/ask-question/index.ts) | Queued single-choice, multiple-choice, custom-input, or multi-question forms | Agent tool `ask_question`, not a slash command | No separate configuration; TUI uses the full custom form, while RPC/Pi Web uses standard dialogs for single choice, custom input, sequential questionnaires, and emulated multiple choice; modes without UI return unanswered questions only |
 | [autoname](extensions/autoname/index.ts) | Generate/update Chinese session names while preserving manual names | Automatic after the run fully settles | `autoname.json`: `enabled`, `notify`, `cooldownSeconds`, `model`, `reasoning` |
-| [btw](extensions/btw/index.ts) | Temporary read-only Q&A from a snapshot of the current context, without tools or writes to the main session | `/btw [question]`, `Ctrl+B` | Requires TUI; uses the current model and authentication; closing discards Q&A but API usage is still billed |
 | [codex-fast](extensions/codex-fast/index.ts) | Set Fast / Ultrafast for eligible Codex requests | Only the `/codex-fast` native selection menu | `codex-fast.json`: independent boolean switches `fast`, `ultrafast`, both off by default |
 | [filter-output](extensions/filter-output/index.ts) | Filter common sensitive text and certain sensitive-file reads before successful tool results reach the model | Automatic `tool_result` hook, not a user command | No separate configuration; redaction is not guaranteed; errors are not filtered and `.env.example` reads bypass filtering |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | Report working/blocked/idle state and session references to Herdr's local socket | **Internal bridge, not a user command** | `HERDR_ENV=1` with `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`; binds only to the main session with UI; managed/overwritten by Herdr |
@@ -29,7 +28,7 @@ Each row corresponds to current source under `extensions/`, excluding `node_modu
 | [ui](extensions/ui/index.ts) | Custom header, editor, footer, tool cards, and main-agent + Worker progress/usage | Automatic TUI rendering, not a user command | No separate configuration; footer reads `codex-fast.json`; theme/display settings in `settings.json`, shortcuts in `keybindings.json` |
 | [worker](extensions/worker/index.ts) | Bounded subprocess tasks, parallel scheduling, and progress cards | Agent tool `worker`; `/worker_settings` | `worker-settings.json`: required three-tier models/Thinking, concurrency, timeout, and output limit; in subprocesses, this entry installs only the write guard, not nested delegation |
 
-The old local `context`, `usage`, and `fast` extensions have been removed; their `/context`, `/usage`, and `/fast` commands are no longer provided by these extensions. Context usage appears in the footer; Fast settings use `/codex-fast`. `rolling-compact` and its configuration have been removed, and `/roll-compact` is no longer provided; context management uses SoL-Pi again. External packages are not part of this local inventory.
+The `btw` extension has been removed; temporary Q&A via `/btw` or `Ctrl+B` is no longer provided. The old local `context`, `usage`, and `fast` extensions have been removed; their `/context`, `/usage`, and `/fast` commands are no longer provided by these extensions. Context usage appears in the footer; Fast settings use `/codex-fast`. `rolling-compact` and its configuration have been removed, and `/roll-compact` is no longer provided; context management uses SoL-Pi again. External packages are not part of this local inventory.
 
 ## Installation
 
@@ -53,7 +52,7 @@ Start Pi:
 pi
 ```
 
-Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies from the lockfile in `extensions/` (runtime dependencies `typebox` and `node-telegram-bot-api`, plus Pi SDK / TypeScript development dependencies); it does not upgrade global Pi. Once Pi starts, it separately manages the `pi-web-access` extension package declared in `settings.json`. Run `/login` on first use; run `/reload` after changing extensions, Skills, the theme, or keybindings. Local SDK development dependencies in the lockfile do not replace the validated global host version. SoL-Pi's audit and test runner currently target Pi **1.0.2**; the global Pi inspected here is **1.0.4**, so its version gate stops the tests before execution. Compatibility with that version remains unverified.
+Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies from the lockfile in `extensions/` (runtime dependencies `typebox` and `node-telegram-bot-api`, plus Pi SDK / TypeScript development dependencies); it does not upgrade global Pi. Once Pi starts, it separately manages the `pi-web-access` extension package declared in `settings.json`. Run `/login` on first use; run `/reload` after changing extensions, Skills, the theme, or keybindings. Local SDK development dependencies in the lockfile do not replace the validated global host version. SoL-Pi has been validated on global Pi **1.0.4**, and its isolated test runner requires that version. See [SoL-Pi validation instructions](extensions/sol-pi/README.md#offline-validation).
 
 ## Common commands
 
@@ -61,11 +60,16 @@ Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies 
 | --- | --- |
 | `/login`, `/model` | Configure authentication, choose a model |
 | `/worker_settings` | Adjust Worker models, concurrency, and other settings |
-| `/btw [question]` | Open temporary read-only Q&A (also available via `Ctrl+B`) |
 | `/codex-fast` | Open the Fast / Ultrafast settings menu |
 | `/reload` | Reload configuration |
 
 `/login`, `/model`, and `/reload` are Pi built-in commands; the others come from the local extensions above. `ask_question`, `worker`, `obs_recall`, and `update_plan` are agent tools, not slash commands; optional tools depend on their activation conditions.
+
+### Interface and questionnaire interaction
+
+- User messages are right-aligned; each assistant round shares one left-aligned rounded frame for commentary, tools, and conclusions. Its title uses the actual model for that round; completed commentary and steps remain visible.
+- Click a tool group or call row to open its preview. Compact previews show at most 12 terminal lines; `Ctrl+O` toggles full tool output. Thinking is hidden while original records remain intact. See [UI documentation](extensions/ui/README.md).
+- `ask_question` accepts mouse interaction only inside its form. The wheel scrolls the corresponding options, question navigation, or custom-input area; clicking custom input positions the cursor. Wheel-only and hover events do not reset the idle timer. Concurrent questionnaires remain queued.
 
 ### Codex Fast
 

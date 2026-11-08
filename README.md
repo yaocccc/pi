@@ -20,7 +20,6 @@
 | --- | --- | --- | --- |
 | [ask-question](extensions/ask-question/index.ts) | 排队展示单选、多选、自定义输入或多题问卷 | Agent 工具 `ask_question`，非斜杠命令 | 无独立配置；TUI 使用完整自定义问卷界面，RPC/Pi Web 使用标准对话框支持单选、自定义输入、顺序多题和模拟多选；无 UI 模式仅返回未回答的问题 |
 | [autoname](extensions/autoname/index.ts) | 自动生成/更新中文会话名称，保留用户手动命名 | 回合完全结束后自动运行 | `autoname.json`：`enabled`、`notify`、`cooldownSeconds`、`model`、`reasoning` |
-| [btw](extensions/btw/index.ts) | 基于当前上下文快照的临时只读问答，不提供工具、不回写主会话 | `/btw [问题]`、`Ctrl+B` | 需要 TUI；使用当前模型与认证，关闭后不保留问答，仍产生 API 用量 |
 | [codex-fast](extensions/codex-fast/index.ts) | 为符合条件的 Codex 请求设置 Fast / Ultrafast | 仅 `/codex-fast` 原生选择菜单 | `codex-fast.json`：独立布尔开关 `fast`、`ultrafast`，缺省均关闭 |
 | [filter-output](extensions/filter-output/index.ts) | 在模型接收成功的工具结果前过滤常见敏感文本及部分敏感文件读取 | 自动 `tool_result` 钩子，非用户命令 | 无独立配置；不保证脱敏，不过滤错误结果；`.env.example` 读取直接放行 |
 | [herdr-agent-state](extensions/herdr-agent-state.ts) | 向 Herdr 的本地 socket 上报工作/阻塞/空闲状态与会话引用 | **内部桥接，非用户命令** | `HERDR_ENV=1` 且存在 `HERDR_SOCKET_PATH`、`HERDR_PANE_ID`；仅绑定有 UI 的主会话，由 Herdr 管理/覆盖 |
@@ -29,7 +28,7 @@
 | [ui](extensions/ui/index.ts) | 自定义页头、编辑器、页脚、工具卡片及主 Agent + Worker 工作进度/用量 | 自动 TUI 渲染，非用户命令 | 无独立配置；页脚读取 `codex-fast.json`；主题与显示设置在 `settings.json`，快捷键在 `keybindings.json` |
 | [worker](extensions/worker/index.ts) | 有边界的独立子进程任务、并行调度及进度卡片 | Agent 工具 `worker`；`/worker_settings` | `worker-settings.json`：必需的三档模型/Thinking、并发、超时及输出上限；此入口在子进程中仅安装写入检查，不可嵌套委派 |
 
-旧的 `context`、`usage`、`fast` 本地扩展已删除；不再提供这些扩展的 `/context`、`/usage`、`/fast` 命令。上下文占用已在页脚展示，Fast 设置入口为 `/codex-fast`。`rolling-compact` 及其配置已移除，`/roll-compact` 不再提供；上下文管理恢复使用 SoL-Pi。外部包不在此本地扩展表中。
+`btw` 扩展已删除，不再提供 `/btw` 或 `Ctrl+B` 临时问答。旧的 `context`、`usage`、`fast` 本地扩展已删除；不再提供这些扩展的 `/context`、`/usage`、`/fast` 命令。上下文占用已在页脚展示，Fast 设置入口为 `/codex-fast`。`rolling-compact` 及其配置已移除，`/roll-compact` 不再提供；上下文管理恢复使用 SoL-Pi。外部包不在此本地扩展表中。
 
 ## 安装
 
@@ -53,7 +52,7 @@ npm ci --prefix ~/.pi/agent/extensions
 pi
 ```
 
-如果没有现有 `~/.pi/agent`，跳过 `mv`。`npm ci` 安装 `extensions/` 锁文件中的本地依赖（运行时依赖为 `typebox`、`node-telegram-bot-api`，另含 Pi SDK / TypeScript 开发依赖），并不会升级全局 Pi；启动 Pi 后，`settings.json` 声明的 `pi-web-access` 扩展包由 Pi 另行管理。首次使用执行 `/login`；更改扩展、Skill、主题或快捷键后执行 `/reload`。锁文件中的本地 SDK 开发依赖不能替代已验证的全局宿主版本。SoL-Pi 的审计与测试入口目前限定 Pi **1.0.2**；本次检查的全局 Pi 为 **1.0.4**，测试因版本门禁退出，尚未验证该版本兼容性。
+如果没有现有 `~/.pi/agent`，跳过 `mv`。`npm ci` 安装 `extensions/` 锁文件中的本地依赖（运行时依赖为 `typebox`、`node-telegram-bot-api`，另含 Pi SDK / TypeScript 开发依赖），并不会升级全局 Pi；启动 Pi 后，`settings.json` 声明的 `pi-web-access` 扩展包由 Pi 另行管理。首次使用执行 `/login`；更改扩展、Skill、主题或快捷键后执行 `/reload`。锁文件中的本地 SDK 开发依赖不能替代已验证的全局宿主版本。SoL-Pi 已在全局 Pi **1.0.4** 上验证，隔离测试入口也限定该版本；详见 [SoL-Pi 验证说明](extensions/sol-pi/README.md#offline-validation)。
 
 ## 常用命令
 
@@ -61,11 +60,16 @@ pi
 | --- | --- |
 | `/login`、`/model` | 配置认证、选择模型 |
 | `/worker_settings` | 调整 Worker 模型与并发等设置 |
-| `/btw [问题]` | 打开临时只读问答弹窗（也可用 `Ctrl+B`） |
 | `/codex-fast` | 打开 Fast / Ultrafast 设置菜单 |
 | `/reload` | 重新加载配置 |
 
 `/login`、`/model`、`/reload` 是 Pi 内置命令，其余见上表本地扩展。`ask_question`、`worker`、`obs_recall` 与 `update_plan` 是 Agent 工具，不是斜杠命令；其中可选工具受启用条件限制。
+
+### 界面与问卷交互
+
+- 用户消息右对齐，同一轮助手说明、工具和结论共用左对齐圆角框；助手标题使用该轮实际模型，完成后不折叠说明与步骤。
+- 点击工具组或调用行展开预览；缩略预览最多 12 个终端行，`Ctrl+O` 切换完整工具输出。Thinking 内容不展示，但原始记录保留。详见 [UI 文档](extensions/ui/README.md)。
+- `ask_question` 仅接受问卷区域内的鼠标操作；滚轮在对应的选项、题目导航或自定义输入区域滚动，点击自定义输入可定位光标。纯滚轮和悬停不重置闲置计时；并发问卷仍按队列依次展示。
 
 ### Codex Fast
 
