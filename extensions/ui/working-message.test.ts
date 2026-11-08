@@ -4,7 +4,7 @@ import { workingMessage } from "./working-message.ts";
 
 test("working message renders combined input and output usage", () => {
     assert.equal(
-        workingMessage(undefined, { input: 42_400, output: 8_000 }, 3, 15.2, 840),
+        workingMessage(undefined, { input: 42_400, output: 8_000 }, 3, 15.2),
         "Turn 3 · ↑42k ↓8k · 15.2 TPS · 0s",
     );
 });

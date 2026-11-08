@@ -6,12 +6,14 @@ import type { NoCostFooter } from './footer.ts';
 import { USAGE_TICK_MS } from './codex-usage.ts';
 import { WORKER_USAGE_EVENT } from '../worker/events.ts';
 import { getWorkingMessageLine, setWorkingMessageActive, WORKING_FRAME_INTERVAL_MS } from './working-message.ts';
+import { ROUND_SUMMARY_ENTRY } from './rounds.ts';
 
 function setup(t: TestContext) {
     const handlers = new Map<string, (event: any, ctx: ExtensionContext) => void>();
     const bus = new Map<string, (data: unknown) => void>();
     const intervals = new Map<NodeJS.Timeout, () => void>();
     const calls: string[] = [];
+    const entries: any[] = [];
     let now = 10_000;
     let nextId = 0;
     t.mock.method(Date, 'now', () => now);
@@ -29,6 +31,7 @@ function setup(t: TestContext) {
     });
     setWorkingMessageActive(false);
     const ctx = {
+        sessionManager: { getBranch: () => entries },
         ui: {
             theme: { fg: (_color: string, text: string) => text },
             setWorkingVisible: (visible: boolean) => {
@@ -43,6 +46,7 @@ function setup(t: TestContext) {
     ui({
         on: (name: string, handler: (event: any, ctx: ExtensionContext) => void) => handlers.set(name, handler),
         events: { on: (name: string, handler: (data: unknown) => void) => bus.set(name, handler) },
+        appendEntry: (customType: string, data: unknown) => entries.push({ type: 'custom', id: `saved-${entries.length}`, customType, data }),
     } as unknown as ExtensionAPI);
     const emit = (name: string, event: object = {}) => {
         assert.ok(handlers.has(name), `missing handler: ${name}`);
@@ -54,7 +58,7 @@ function setup(t: TestContext) {
         setWorkingMessageActive(false);
     });
     return {
-        emit, calls, intervals,
+        emit, calls, intervals, entries,
         advance: (ms: number) => { now += ms; },
         worker: (data: unknown) => bus.get(WORKER_USAGE_EVENT)!(data),
         tick: () => { for (const callback of intervals.values()) callback(); },
@@ -85,6 +89,7 @@ test('installed footer integrates Codex model changes, session replacement, redr
     const ctx = {
         cwd: '/project', model: { provider: 'openai-codex', id: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex' },
         thinkingLevel: 'high',
+        sessionManager: { getBranch: () => [] },
         modelRegistry: {
             getProvider: () => ({ baseUrl: 'https://chatgpt.com' }),
             getProviderAuth: async () => undefined,
@@ -95,7 +100,7 @@ test('installed footer integrates Codex model changes, session replacement, redr
             setFooter(factory: any) {
                 footer?.dispose();
                 footer = factory({ requestRender: () => redraws++ }, theme, {
-                    getGitBranch: () => null, getExtensionStatuses: () => new Map(), getAvailableProviderCount: () => 1,
+                    getGitBranch: () => null, getExtensionStatuses: () => new Map(),
                 });
             },
         },
@@ -186,6 +191,61 @@ test('agent end refreshes final usage after clearing once and repeated terminati
     fixture.emit('session_shutdown');
     assert.deepEqual(fixture.calls, []);
     assert.equal(fixture.intervals.size, 0);
+});
+
+test('settlement persists the exact frozen working line once, including Worker usage, then clears the editor copy', (t) => {
+    const fixture = setup(t);
+    fixture.emit('session_start');
+    fixture.emit('agent_start');
+    fixture.emit('turn_start', { turnIndex: 41 });
+    const message = { role: 'assistant', content: [{ type: 'text', text: 'final conclusion' }],
+        stopReason: 'stop', timestamp: 10000, usage: { input: 1000000, output: 60000 } };
+    fixture.emit('message_end', { message });
+    fixture.entries.push({ type: 'message', id: 'final', message });
+    fixture.worker({ taskId: 'worker', input: 400000, output: 1000 });
+    fixture.advance(845000);
+    fixture.emit('agent_end');
+    const frozen = getWorkingMessageLine()!.replace(/^✓ /, '');
+    assert.match(frozen, /^Turn 42 · ↑1\.4M ↓61k · .* TPS · 14m5s$/);
+    assert.equal(fixture.entries.length, 1, 'agent_end alone does not complete a possibly continuing conversation');
+    fixture.advance(10000);
+    fixture.emit('agent_settled');
+    assert.equal(fixture.entries.length, 2);
+    assert.equal(fixture.entries[1].customType, ROUND_SUMMARY_ENTRY);
+    assert.deepEqual(fixture.entries[1].data, { version: 1, messageId: 'final', label: frozen });
+    assert.equal(getWorkingMessageLine(), undefined, 'completed working text clears after recording the round boundary');
+    fixture.emit('agent_settled');
+    fixture.emit('session_start');
+    fixture.emit('agent_settled');
+    assert.equal(fixture.entries.length, 2, 'reload and repeated settlement cannot append duplicate summaries');
+});
+
+test('a new run or session invalidates a pending completion instead of saving a stale boundary', (t) => {
+    const fixture = setup(t);
+    fixture.emit('agent_start');
+    const message = { role: 'assistant', content: [{ type: 'text', text: 'old conclusion' }],
+        stopReason: 'stop', timestamp: 10000, usage: { input: 1, output: 1 } };
+    fixture.emit('message_end', { message });
+    fixture.entries.push({ type: 'message', id: 'old', message });
+    fixture.emit('agent_end');
+    fixture.emit('agent_start');
+    fixture.emit('agent_settled');
+    assert.equal(fixture.entries.length, 1);
+    fixture.emit('session_start');
+    assert.equal(getWorkingMessageLine(), undefined);
+    assert.equal(fixture.intervals.size, 0);
+});
+
+test('aborted settlement does not finalize a conclusion produced before the cancellation', (t) => {
+    const fixture = setup(t);
+    fixture.emit('agent_start');
+    const message = { role: 'assistant', content: [{ type: 'text', text: 'conclusion before cancellation' }],
+        stopReason: 'stop', timestamp: 10000, usage: { input: 1, output: 1 } };
+    fixture.emit('message_end', { message });
+    fixture.entries.push({ type: 'message', id: 'before-abort', message });
+    fixture.emit('agent_end');
+    fixture.emit('agent_settled', { aborted: true });
+    assert.equal(fixture.entries.length, 1);
 });
 
 test('shutdown clears an active timer without refreshing and permits a clean restart', (t) => {

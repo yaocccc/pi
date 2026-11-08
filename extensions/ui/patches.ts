@@ -1,46 +1,38 @@
 import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent } from '@earendil-works/pi-coding-agent';
-import { Box, Spacer, Text } from '@earendil-works/pi-tui';
-import { foregroundFromRenderedBox, halfBlockLine, padToWidth, replaceVisibleContent } from './utils.ts';
+import { Box, stripTerminalSequences, visibleWidth, type Component, type Text, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
+import { patchToolFolding, ToolActivityGroup } from './folding.ts';
+import { estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
+import { RoundFrame, layoutRounds } from './rounds.ts';
+import { frameBorder as border, padToWidth, replaceVisibleContent, toolFrameTop } from './utils.ts';
 
-let paddedBackgroundHalfBlockPatched = false;
-let userMessageHalfBlockPatched = false;
+const USER_MESSAGE_FRAME_PATCH = Symbol.for('pi.extensions.ui.user-message-frame.v4');
+const USER_MESSAGE_RENDER = Symbol.for('pi.extensions.ui.user-message-native-render');
+const USER_MESSAGE_MOUSE = Symbol.for('pi.extensions.ui.user-message-native-mouse');
 
-const COLLAPSED_THINKING_PATCH = Symbol.for('pi.extensions.ui.single-thinking-preview.v7');
-const THINKING_SPACING_PATCH = Symbol.for('pi.extensions.ui.thinking-spacing.v3');
 const LEGACY_FINAL_RESPONSE_SEPARATOR_PATCH = Symbol.for('pi.extensions.ui.final-response-separator.v1');
 const FINAL_RESPONSE_SEPARATOR_PATCH = Symbol.for('pi.extensions.ui.final-response-separator.v2');
 const FINAL_RESPONSE_SEPARATOR_ACTIVITY_PATCH = Symbol.for('pi.extensions.ui.final-response-separator-activity.v3');
 const COMPACT_TOOL_ACTIVITY_KEY = Symbol.for('pi.extensions.ui.compact-tool-activity.v10');
-const PADDED_BACKGROUND_PATCH = Symbol.for('pi.extensions.ui.padded-background.v2');
-const CORE_BACKGROUND_PATCH = Symbol.for('pi.extensions.ui.core-background.v1');
 const FULLSCREEN_SCROLLBAR_PATCH = Symbol.for('pi.extensions.ui.fullscreen-scrollbar.v1');
-const COMPACT_TOOL_DISPLAY_PATCH = Symbol.for('pi.extensions.ui.compact-tool-display.v10');
-const MERGE_CONSECUTIVE_TOOLS_PATCH = Symbol.for('pi.extensions.ui.merge-consecutive-tools.v5');
+const TOOL_DISPLAY_PATCH = Symbol.for('pi.extensions.ui.tool-display.v3');
+const TOOL_SHELL_FRAME = Symbol.for('pi.extensions.ui.tool-shell-frame.v2');
+const MERGE_CONSECUTIVE_TOOLS_PATCH = Symbol.for('pi.extensions.ui.merge-consecutive-tools.v35');
 const RUNTIME_THEME_KEY = Symbol.for('@earendil-works/pi-coding-agent:theme');
-const COLLAPSED_THINKING_LINE_WIDTH = 120;
 
 let renderedActivitySinceUserMessage = false;
 // Survives module reload: an already-installed v2 final separator closes over the
-// previous module's activity flag, while the new compact renderer does not.
+// previous module's activity flag, while the current tool renderer does not.
 const compactToolActivity = ((globalThis as any)[COMPACT_TOOL_ACTIVITY_KEY] ??= { rendered: false }) as { rendered: boolean };
 
 type AssistantMessage = Parameters<AssistantMessageComponent['updateContent']>[0];
 type AssistantMessagePrototype = {
-    hideThinkingBlock: boolean;
     lastMessage?: AssistantMessage;
-    updateContent(message: AssistantMessage): void;
-    [key: symbol]: unknown;
-};
-
-type RenderablePrototype = {
-    render(width: number): string[];
     [key: symbol]: unknown;
 };
 
 type RuntimeTheme = {
     fg(color: string, text: string): string;
     bg(color: string, text: string): string;
-    bold(text: string): string;
 };
 
 type RuntimeThemePrototype = RuntimeTheme & {
@@ -63,67 +55,23 @@ export const patchFullscreenScrollbar = (): void => {
     prototype[FULLSCREEN_SCROLLBAR_PATCH] = true;
 };
 
-type CompactToolExecution = {
+type ToolDisplayState = {
     toolName?: unknown;
     args?: unknown;
+    result?: Parameters<typeof estimateToolTokens>[1];
     isPartial?: boolean;
-    result?: { isError?: boolean };
+    outputPad?: number;
     getRenderShell?(): string;
-    selfRenderContainer?: { render(width: number): string[]; invalidate(): void };
+    selfRenderContainer?: Component;
+    callRendererComponent?: Box;
     contentBox?: Box;
     contentText?: Text;
 };
 
 type ToolExecutionPrototype = {
     render(width: number): string[];
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     [key: symbol]: unknown;
-};
-
-const toolBackgroundColor = (tool: CompactToolExecution): string => tool.result?.isError === true
-    ? 'toolErrorBg'
-    : tool.isPartial ? 'toolPendingBg' : 'toolSuccessBg';
-
-const toolBackgroundBlankLine = (tool: CompactToolExecution, width: number): string => {
-    const blank = ' '.repeat(Math.max(1, width));
-    const runtimeTheme = (globalThis as any)[RUNTIME_THEME_KEY] as RuntimeTheme | undefined;
-    return runtimeTheme ? runtimeTheme.bg(toolBackgroundColor(tool), blank) : blank;
-};
-
-const usesCompactToolDisplay = (toolName: string): boolean => toolName.startsWith('ctx_')
-    || toolName.startsWith('ff')
-    || toolName === 'read'
-    || toolName === 'find'
-    || toolName === 'grep';
-
-const SENSITIVE_TOOL_ARG = /(?:api.?key|authorization|cookie|password|private.?key|secret|token)/i;
-const MAX_COMPACT_TOOL_ARGS = 4;
-const MAX_COMPACT_ARG_LENGTH = 40;
-
-const compactToolArgValue = (key: string, value: unknown): string => {
-    if (SENSITIVE_TOOL_ARG.test(key)) return '[已隐藏]';
-    if (typeof value === 'string') {
-        const compact = value.replace(/\s+/g, ' ').trim();
-        const truncated = compact.length > MAX_COMPACT_ARG_LENGTH ? `${compact.slice(0, MAX_COMPACT_ARG_LENGTH - 1)}…` : compact;
-        return /\s/.test(truncated) ? JSON.stringify(truncated) : truncated;
-    }
-    if (typeof value === 'number' || typeof value === 'boolean' || value === null) return String(value);
-    if (Array.isArray(value)) {
-        if (value.every((item) => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')) {
-            const preview = value.slice(0, 2).map((item) => compactToolArgValue(key, item));
-            return `[${preview.join(', ')}${value.length > preview.length ? ', …' : ''}]`;
-        }
-        return `[${value.length}项]`;
-    }
-    if (value && typeof value === 'object') return `{${Object.keys(value).length}项}`;
-    return String(value);
-};
-
-const compactToolArgs = (args: unknown): string => {
-    if (!args || typeof args !== 'object' || Array.isArray(args)) return '';
-    return Object.entries(args)
-        .slice(0, MAX_COMPACT_TOOL_ARGS)
-        .map(([key, value]) => `${key}=${compactToolArgValue(key, value)}`)
-        .join(' · ');
 };
 
 const isVisuallyBlankLine = (line: string): boolean => line
@@ -135,83 +83,147 @@ const removeLeadingBlankLine = (lines: string[]): string[] => lines.length > 0 &
     ? lines.slice(1)
     : lines;
 
-export const patchCompactToolDisplay = (): void => {
+// Style only tool-owned shells, leaving global Box/Text renderers and native children intact.
+const frameToolShell = (component: Box | Text, name: string, titleWidth: () => number): void => {
+    const shell = component as unknown as { paddingX: number; paddingY: number; bgFn?: (line: string) => string; customBgFn?: (line: string) => string; [TOOL_SHELL_FRAME]?: boolean };
+    if (shell[TOOL_SHELL_FRAME]) return;
+    const background = 'setBgFn' in component ? 'bgFn' : 'customBgFn';
+    const render = component.render;
+    const mouse = (component as Component).handleMouse;
+    let hiddenTitleRows = 0;
+    let frameWidth = 0;
+    component.invalidate();
+    const withLayout = <T>(width: number, action: () => T): T => {
+        const { paddingX, paddingY } = shell;
+        const bg = shell[background];
+        const borderWidth = width >= 3 ? 1 : 0;
+        shell.paddingX = Math.min(paddingX + borderWidth, Math.max(0, Math.floor((width - 1) / 2)));
+        shell.paddingY = borderWidth;
+        shell[background] = undefined;
+        try { return action(); }
+        finally {
+            shell.paddingX = paddingX;
+            shell.paddingY = paddingY;
+            shell[background] = bg;
+        }
+    };
+    component.render = (width) => {
+        hiddenTitleRows = 0;
+        if (width <= 0) return [];
+        return withLayout(width, () => {
+            let lines = render.call(component, width);
+            if (width < 3) return lines.map(line => padToWidth(line, width));
+            // Move only a standalone duplicate heading. Inline arguments/status and semantic markers remain native.
+            if (width > 6 && lines.length >= 3 && stripTerminalSequences(lines[1]!).trim() === name && !/\x1b\]133;/.test(lines[1]!)) {
+                hiddenTitleRows = 1;
+                lines = [lines[0]!, ...lines.slice(2)];
+            }
+            // Keep the native wrapping/layout width, shrinking only unused right space.
+            const contentWidth = lines.slice(1, -1).reduce((max, line) => Math.max(max, visibleWidth(stripTerminalSequences(line).trimEnd())), 0);
+            frameWidth = lines.some(line => /\x1b(?:_G|\]1337;File=|P[^\x1b]*q)/.test(line)) ? width
+                : Math.min(width, Math.max(titleWidth() + 6, contentWidth + shell.paddingX));
+            return lines.map((line, index) => {
+                if (index === 0) return toolFrameTop(name, frameWidth);
+                if (index === lines.length - 1) return border('╰', 'bottomLeft', 'tool') + border('─'.repeat(frameWidth - 2), 'bottom', 'tool') + border('╯', 'bottomRight', 'tool');
+                const content = line.slice(1); // Replace only the border cell; retain outputPad inside it.
+                const markers = replaceVisibleContent(content, '');
+                return markers + border('│', 'left', 'tool') + padToWidth(content.slice(markers.length), frameWidth - 2) + border('│', 'right', 'tool');
+            });
+        });
+    };
+    (component as Component).handleMouse = (event) => withLayout(event.width, () => {
+        // Consume shell clicks before the native MouseRegion can toggle the tool.
+        if (shell.paddingY && (event.x < 1 || event.x >= frameWidth - 1 || event.y < 1 || event.y >= event.height - 1)) {
+            return event.type === 'click' && event.button === 'left' ? { handled: true, target: component } : undefined;
+        }
+        return mouse?.call(component, { ...event, y: event.y + hiddenTitleRows, height: event.height + hiddenTitleRows });
+    });
+    shell[TOOL_SHELL_FRAME] = true;
+};
+
+// The built-in edit renderer owns a Box inside its self shell. Flatten only
+// that instance while the outer tool frame supplies padding/background policy.
+const flattenedEditShells = new WeakSet<Box>();
+const flattenEditShell = (component: Box): void => {
+    if (flattenedEditShells.has(component)) return;
+    const shell = component as unknown as { paddingX: number; paddingY: number; bgFn?: (line: string) => string };
+    const render = component.render;
+    const mouse = component.handleMouse;
+    const withLayout = <T>(action: () => T): T => {
+        const { paddingX, paddingY, bgFn } = shell;
+        shell.paddingX = shell.paddingY = 0;
+        shell.bgFn = undefined;
+        try { return action(); }
+        finally { Object.assign(shell, { paddingX, paddingY, bgFn }); }
+    };
+    component.invalidate();
+    component.render = (width) => withLayout(() => render.call(component, width));
+    component.handleMouse = (event) => withLayout(() => mouse.call(component, event));
+    flattenedEditShells.add(component);
+};
+
+export const patchToolDisplay = (): void => {
     const prototype = ToolExecutionComponent.prototype as unknown as ToolExecutionPrototype;
-    if (prototype[COMPACT_TOOL_DISPLAY_PATCH]) return;
+    if (prototype[TOOL_DISPLAY_PATCH]) return;
 
     const originalRender = prototype.render;
-    prototype.render = function patchedCompactToolRender(this: CompactToolExecution, width: number): string[] {
-        // The Worker keeps its self shell so continuation calls can really render zero
-        // lines. Frame only visible content with Pi's Box and the same theme
-        // tokens already used for compact tools (pending/success/error).
-        const runtimeTheme = (globalThis as any)[RUNTIME_THEME_KEY] as RuntimeTheme | undefined;
-        if (this.toolName === 'worker' && this.getRenderShell?.() === 'self' && this.selfRenderContainer) {
-            // Do not call the old v9 renderer for a hidden control row: it marks
-            // activity even when it renders zero lines.
-            const paddingX = width > 2 ? 1 : 0;
-            const contentLines = this.selfRenderContainer.render(runtimeTheme ? Math.max(1, width - paddingX * 2) : width);
-            if (contentLines.length === 0) return [];
-            if (runtimeTheme) {
-                const CoreBox = this.contentBox?.constructor as typeof Box | undefined;
-                const shell = new (CoreBox ?? Box)(paddingX, 1, (text) => runtimeTheme.bg(toolBackgroundColor(this), text));
-                shell.addChild({ render: () => contentLines, invalidate() {} });
-                const lines = shell.render(width);
-                if (lines.length) compactToolActivity.rendered = true;
-                return lines;
-            }
-        }
-        if (typeof this.toolName !== 'string' || !usesCompactToolDisplay(this.toolName)) {
-            const lines = removeLeadingBlankLine(originalRender.call(this, width));
-            if (lines.length) {
-                renderedActivitySinceUserMessage = true;
-                compactToolActivity.rendered = true;
-            }
+    const originalMouse = prototype.handleMouse;
+    const offsets = new WeakMap<object, number>();
+    const workerShells = new WeakMap<object, Box>();
+    prototype.render = function patchedToolRender(this: ToolDisplayState, width: number): string[] {
+        offsets.delete(this);
+        workerShells.delete(this);
+        if (width <= 0) return [];
+        const name = typeof this.toolName === 'string' ? this.toolName : '工具';
+        const titleWidth = () => visibleWidth(name) + (this.result && !this.isPartial
+            ? 1 + visibleWidth(formatToolTokens(estimateToolTokens(this.args, this.result))) : 0);
+        if (this.contentBox) frameToolShell(this.contentBox, name, titleWidth);
+        if (this.contentText) frameToolShell(this.contentText, name, titleWidth);
+        // Edit's native call Box must not paint a second shell inside our frame.
+        const editShell = this.toolName === 'edit' && this.callRendererComponent;
+        const CoreBoxType = this.contentBox?.constructor as typeof Box | undefined;
+        const isNativeEditBox = this.getRenderShell?.() === 'self' && editShell && CoreBoxType && editShell instanceof CoreBoxType;
+        if (isNativeEditBox) flattenEditShell(editShell);
+        // Self-rendered Worker controls stay hidden. Only visible cards get a frame.
+        if ((this.toolName === 'worker' || isNativeEditBox) && this.getRenderShell?.() === 'self' && this.selfRenderContainer) {
+            const CoreBox = this.contentBox?.constructor as typeof Box | undefined;
+            const shell = new (CoreBox ?? Box)(this.outputPad ?? 1, 0);
+            frameToolShell(shell, name, titleWidth);
+            shell.addChild(this.selfRenderContainer);
+            const lines = shell.render(width);
+            if (!lines.length) return [];
+            workerShells.set(this, shell);
+            compactToolActivity.rendered = true;
             return lines;
         }
-        renderedActivitySinceUserMessage = true;
-        compactToolActivity.rendered = true;
-
-        const isError = this.result?.isError === true;
-        const args = compactToolArgs(this.args);
-        const errorPrefix = isError ? `${runtimeTheme ? runtimeTheme.fg('error', '✗') : '✗'} ` : '';
-        const line = runtimeTheme
-            ? `${errorPrefix}${runtimeTheme.fg('toolTitle', runtimeTheme.bold(this.toolName))}${args ? `  ${runtimeTheme.fg('dim', args)}` : ''}`
-            : `${errorPrefix}${this.toolName}${args ? `  ${args}` : ''}`;
-        const safeWidth = Math.max(1, width);
-        if (!runtimeTheme) return [padToWidth(line, safeWidth)];
-
-        const content = runtimeTheme.bg(toolBackgroundColor(this), padToWidth(` ${line}`, safeWidth));
-        const foreground = foregroundFromRenderedBox([content]);
-        return [
-            halfBlockLine(safeWidth, 'top', foreground),
-            content,
-            halfBlockLine(safeWidth, 'bottom', foreground),
-        ];
+        const nativeLines = originalRender.call(this, width);
+        const lines = removeLeadingBlankLine(nativeLines);
+        offsets.set(this, nativeLines.length - lines.length);
+        if (lines.length) {
+            renderedActivitySinceUserMessage = true;
+            compactToolActivity.rendered = true;
+        }
+        return lines;
     };
-    prototype[COMPACT_TOOL_DISPLAY_PATCH] = true;
+    prototype.handleMouse = function (event) {
+        const shell = workerShells.get(this);
+        if (shell) return shell.handleMouse(event);
+        const offset = offsets.get(this);
+        if (offset === undefined) return;
+        return originalMouse.call(this, { ...event, y: event.y + offset, height: event.height + offset });
+    };
+    prototype[TOOL_DISPLAY_PATCH] = true;
 };
 
 type ToolContainer = {
-    children: Array<{ render(width: number): string[] }>;
+    children: Component[];
+    mouseLayout?: { width: number; children: Array<{ component: Component; height: number }> };
     render(width: number): string[];
     [key: symbol]: unknown;
 };
 
-const isHalfBlockBoundary = (line: string, glyph: '▄' | '▀'): boolean => {
-    const visible = line
-        .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|.)/g, '')
-        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
-        .trim();
-    return visible.length > 0 && [...visible].every((character) => character === glyph);
-};
-
-const visibleToolContentLineCount = (lines: string[]): number => {
-    const start = lines.length > 0 && isHalfBlockBoundary(lines[0]!, '▄') ? 1 : 0;
-    const end = lines.length > start && isHalfBlockBoundary(lines[lines.length - 1]!, '▀') ? lines.length - 1 : lines.length;
-    return lines.slice(start, end).filter((line) => !isVisuallyBlankLine(line)).length;
-};
-
 export const patchMergeConsecutiveTools = (): void => {
+    patchToolFolding();
     // 从 ToolExecutionComponent 的继承链取得 Pi 实际使用的 Container，避免重复依赖实例导致补丁失效。
     const prototype = Object.getPrototypeOf(ToolExecutionComponent.prototype) as ToolContainer;
     if (prototype[MERGE_CONSECUTIVE_TOOLS_PATCH]) return;
@@ -220,10 +232,18 @@ export const patchMergeConsecutiveTools = (): void => {
     prototype.render = function patchedConsecutiveTools(this: ToolContainer, width: number): string[] {
         const hasTool = this.children.some((child) => child instanceof ToolExecutionComponent);
         const hasUserMessage = this.children.some((child) => child instanceof UserMessageComponent);
-        if (!hasTool && !hasUserMessage) return originalRender.call(this, width);
+        const hasAssistant = this.children.some((child) => child instanceof AssistantMessageComponent);
+        if (!hasTool && !hasUserMessage && !hasAssistant) return originalRender.call(this, width);
 
-        const rendered = this.children.map((child) => ({ child, lines: child.render(width) }));
-        // 历史用户输入不保留组件外的上下空行，但保留消息自身的半高边框。
+        const rendered = layoutRounds(this.children).map((child) => {
+            const lines = child.render(width);
+            if ((child instanceof ToolActivityGroup || child instanceof RoundFrame) && lines.length) {
+                renderedActivitySinceUserMessage = true;
+                compactToolActivity.rendered = true;
+            }
+            return { child, lines, offset: 0 };
+        });
+        // 历史用户输入不保留组件外的上下空行，但保留消息自身的边框。
         for (let index = 0; index < rendered.length; index++) {
             if (!(rendered[index]!.child instanceof UserMessageComponent)) continue;
 
@@ -244,171 +264,29 @@ export const patchMergeConsecutiveTools = (): void => {
                 if (isVisuallyBlankLine(nextLines[0]!)) {
                     if (nextLines.length > 1) nextLines[1] = replaceVisibleContent(nextLines[0]!, nextLines[1]!);
                     nextLines.shift();
+                    rendered[next]!.offset++;
                 }
                 break;
             }
         }
 
-        // 仅按实际可见行判断连续性；tool 之间常夹着不渲染任何行的 AssistantMessageComponent。
-        const visibleIndexes = rendered
-            .map((entry, index) => entry.lines.length > 0 ? index : -1)
-            .filter((index) => index >= 0);
-        const removeTopAt = new Set<number>();
-        const removeBottomAt = new Set<number>();
-        const addBlankAfter = new Map<number, CompactToolExecution>();
-        for (let position = 0; position < visibleIndexes.length - 1; position++) {
-            const currentIndex = visibleIndexes[position]!;
-            const nextIndex = visibleIndexes[position + 1]!;
-            const current = rendered[currentIndex]!;
-            const next = rendered[nextIndex]!;
-            if (current.child instanceof ToolExecutionComponent
-                && next.child instanceof ToolExecutionComponent
-                && isHalfBlockBoundary(current.lines[current.lines.length - 1]!, '▀')
-                && isHalfBlockBoundary(next.lines[0]!, '▄')) {
-                removeBottomAt.add(currentIndex);
-                removeTopAt.add(nextIndex);
-
-                const currentIsMultiline = visibleToolContentLineCount(current.lines) > 1;
-                const nextIsMultiline = visibleToolContentLineCount(next.lines) > 1;
-                const currentEdgeIndex = current.lines.length - 2;
-                const currentEdge = current.lines[currentEdgeIndex];
-                const nextEdge = next.lines[1];
-                if (currentIsMultiline || nextIsMultiline) {
-                    const spacingTool = (currentIsMultiline ? current.child : next.child) as unknown as CompactToolExecution;
-                    const styledBlank = toolBackgroundBlankLine(spacingTool, width);
-                    if (currentEdge !== undefined && isVisuallyBlankLine(currentEdge)) current.lines[currentEdgeIndex] = styledBlank;
-                    else if (nextEdge !== undefined && isVisuallyBlankLine(nextEdge)) next.lines[1] = styledBlank;
-                    else addBlankAfter.set(currentIndex, spacingTool);
-                }
-            }
-        }
-
         const lines: string[] = [];
-        for (let index = 0; index < rendered.length; index++) {
-            const childLines = rendered[index]!.lines;
-            const start = removeTopAt.has(index) ? 1 : 0;
-            const end = removeBottomAt.has(index) ? childLines.length - 1 : childLines.length;
-            lines.push(...childLines.slice(start, end));
-            const spacingTool = addBlankAfter.get(index);
-            if (spacingTool) lines.push(toolBackgroundBlankLine(spacingTool, width));
+        const mouseChildren: Array<{ component: Component; height: number }> = [];
+        for (const { child, lines: childLines, offset } of rendered) {
+            lines.push(...childLines);
+            const component: Component = offset === 0 ? child : {
+                render: () => childLines.slice(),
+                invalidate: () => child.invalidate(),
+                handleMouse: (event) => child.handleMouse?.({ ...event, y: event.y + offset, height: childLines.length + offset }),
+            };
+            mouseChildren.push({ component, height: childLines.length });
         }
+        // Projected rounds and spacing change row counts; native hit testing must
+        // use the actual drawn components, not the original transcript children.
+        this.mouseLayout = { width, children: mouseChildren };
         return lines;
     };
     prototype[MERGE_CONSECUTIVE_TOOLS_PATCH] = true;
-};
-
-const thinkingPreview = (message: AssistantMessage): string[] => {
-    const lines: string[] = [];
-
-    for (const part of message.content) {
-        if (part.type !== 'thinking') continue;
-        for (const rawLine of part.thinking.split(/\r?\n/)) {
-            const line = rawLine
-                .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|.)/g, '')
-                .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, ' ')
-                .replace(/\*\*/g, '')
-                .replace(/\s+/g, ' ')
-                .trim();
-            if (!line) continue;
-
-            lines.push(line.length > COLLAPSED_THINKING_LINE_WIDTH
-                ? `…${line.slice(-(COLLAPSED_THINKING_LINE_WIDTH - 1))}`
-                : line);
-        }
-    }
-
-    return lines;
-};
-
-const escapeMarkdown = (value: string): string => value.replace(/([\\`*_{}\[\]()<>#+\-.!|])/g, '\\$1');
-
-const compactThinkingMessage = (message: AssistantMessage, preview: string[]): AssistantMessage => {
-    const content: AssistantMessage['content'] = [];
-    let inserted = false;
-
-    for (const part of message.content) {
-        if (part.type !== 'thinking') {
-            content.push(part);
-            continue;
-        }
-        if (inserted) continue;
-        inserted = true;
-        const previewLines = preview.map(escapeMarkdown).join('  \n');
-        content.push({ ...part, thinking: previewLines });
-    }
-
-    return { ...message, content };
-};
-
-export const patchCollapsedThinkingPreview = (): void => {
-    const prototype = AssistantMessageComponent.prototype as unknown as AssistantMessagePrototype;
-    if (prototype[COLLAPSED_THINKING_PATCH]) return;
-
-    const originalUpdateContent = prototype.updateContent;
-
-    prototype.updateContent = function patchedAssistantMessageContent(this: AssistantMessagePrototype, message: AssistantMessage): void {
-        if (!this.hideThinkingBlock) {
-            originalUpdateContent.call(this, message);
-            return;
-        }
-
-        const preview = thinkingPreview(message);
-        if (preview.length === 0) {
-            originalUpdateContent.call(this, message);
-            return;
-        }
-
-        const hideThinkingBlock = this.hideThinkingBlock;
-        this.hideThinkingBlock = false;
-        try {
-            originalUpdateContent.call(this, compactThinkingMessage(message, preview));
-        } finally {
-            this.hideThinkingBlock = hideThinkingBlock;
-            this.lastMessage = message;
-        }
-    };
-
-    prototype[COLLAPSED_THINKING_PATCH] = true;
-};
-
-type ThinkingSpacingComponent = AssistantMessagePrototype & {
-    contentContainer: {
-        children: unknown[];
-        removeChild(child: unknown): void;
-    };
-};
-
-const hasVisibleContentAfterThinking = (message: AssistantMessage): boolean => {
-    let lastThinkingIndex = -1;
-    for (let index = message.content.length - 1; index >= 0; index--) {
-        const part = message.content[index]!;
-        if (part.type === 'thinking' && part.thinking.trim()) {
-            lastThinkingIndex = index;
-            break;
-        }
-    }
-    return lastThinkingIndex >= 0 && message.content.slice(lastThinkingIndex + 1)
-        .some((part) => (part.type === 'text' && part.text.trim()) || (part.type === 'thinking' && part.thinking.trim()));
-};
-
-export const patchThinkingSpacing = (): void => {
-    const prototype = AssistantMessageComponent.prototype as unknown as ThinkingSpacingComponent;
-    if (prototype[THINKING_SPACING_PATCH]) return;
-
-    const originalUpdateContent = prototype.updateContent;
-    prototype.updateContent = function patchedThinkingSpacing(this: ThinkingSpacingComponent, message: AssistantMessage): void {
-        originalUpdateContent.call(this, message);
-        if (!this.hideThinkingBlock || !message.content.some((part) => part.type === 'thinking' && part.thinking.trim())) return;
-
-        const first = this.contentContainer.children[0];
-        if (first instanceof Spacer) this.contentContainer.removeChild(first);
-
-        if (hasVisibleContentAfterThinking(message)) {
-            const spacerAfterThinking = this.contentContainer.children.find((child) => child instanceof Spacer);
-            if (spacerAfterThinking) this.contentContainer.removeChild(spacerAfterThinking);
-        }
-    };
-    prototype[THINKING_SPACING_PATCH] = true;
 };
 
 class FinalResponseGap {
@@ -419,37 +297,7 @@ class FinalResponseGap {
     invalidate() {}
 }
 
-const finalTextBlockIndex = (message: AssistantMessage): number | undefined => {
-    if (message.content.some((part) => part.type === 'toolCall')) return undefined;
-
-    let renderedBlocks = 0;
-    let hasPriorThinking = false;
-    for (let index = 0; index < message.content.length; index++) {
-        const part = message.content[index]!;
-        if (part.type === 'text' && part.text.trim()) {
-            if (hasPriorThinking) return renderedBlocks;
-            renderedBlocks++;
-            continue;
-        }
-        if (part.type !== 'thinking') continue;
-
-        let hasVisibleThinking = false;
-        for (; index < message.content.length; index++) {
-            const thinking = message.content[index]!;
-            if (thinking.type !== 'thinking') break;
-            if (thinking.thinking.trim()) hasVisibleThinking = true;
-        }
-        index--;
-        if (hasVisibleThinking) {
-            renderedBlocks++;
-            hasPriorThinking = true;
-        }
-    }
-    return undefined;
-};
-
-type FinalResponseComponent = ThinkingSpacingComponent & {
-    outputPad: number;
+type FinalResponseComponent = AssistantMessagePrototype & {
     render(width: number): string[];
 };
 
@@ -477,21 +325,6 @@ export const patchFinalResponseSeparator = (): void => {
     const prototype = AssistantMessageComponent.prototype as unknown as FinalResponseComponent;
     if (!prototype[FINAL_RESPONSE_SEPARATOR_PATCH]) {
     const hasLegacySeparatorPatch = Boolean(prototype[LEGACY_FINAL_RESPONSE_SEPARATOR_PATCH]);
-    const originalUpdateContent = prototype.updateContent;
-    prototype.updateContent = function patchedFinalResponseContent(this: FinalResponseComponent, message: AssistantMessage): void {
-        originalUpdateContent.call(this, message);
-        for (const child of [...this.contentContainer.children]) {
-            if ((child as { constructor?: { name?: string } }).constructor?.name === 'FinalResponseSeparator') {
-                this.contentContainer.removeChild(child);
-            }
-        }
-
-        const blockIndex = finalTextBlockIndex(message);
-        if (blockIndex === undefined) return;
-        const leadingSpacer = this.contentContainer.children[0] instanceof Spacer ? 1 : 0;
-        this.contentContainer.children.splice(leadingSpacer + blockIndex, 0, new FinalResponseGap());
-    };
-
     const originalRender = prototype.render;
     prototype.render = function patchedFinalResponseRender(this: FinalResponseComponent, width: number): string[] {
         let lines = originalRender.call(this, width);
@@ -503,7 +336,7 @@ export const patchFinalResponseSeparator = (): void => {
         const hasThinking = message.content.some((part) => part.type === 'thinking' && part.thinking.trim());
         const hasToolCalls = message.content.some((part) => part.type === 'toolCall');
         if (!hasText || hasToolCalls) {
-            if (hasThinking || hasToolCalls) renderedActivitySinceUserMessage = true;
+            if (hasToolCalls) renderedActivitySinceUserMessage = true;
             return lines;
         }
 
@@ -542,65 +375,55 @@ export const patchFinalResponseSeparator = (): void => {
     prototype[FINAL_RESPONSE_SEPARATOR_ACTIVITY_PATCH] = true;
 };
 
-const patchPaddedBackgroundComponent = (prototype: RenderablePrototype): void => {
-    if (prototype[PADDED_BACKGROUND_PATCH]) return;
-    prototype[PADDED_BACKGROUND_PATCH] = true;
-    const originalRender = prototype.render;
+export const patchUserMessageFrame = (): void => {
+    const prototype = UserMessageComponent.prototype as UserMessageComponent & { [key: symbol]: unknown };
+    if (prototype[USER_MESSAGE_FRAME_PATCH]) return;
+    const originalRender = (prototype[USER_MESSAGE_RENDER] ??= prototype.render) as UserMessageComponent['render'];
+    const originalMouse = (prototype[USER_MESSAGE_MOUSE] ??= prototype.handleMouse) as UserMessageComponent['handleMouse'];
+    const layouts = new WeakMap<UserMessageComponent, { left: number; inset: number; width: number; height: number }>();
 
-    prototype.render = function patchedPaddedBackgroundRender(this: { paddingY?: number; bgFn?: unknown; customBgFn?: unknown }, width: number): string[] {
-        const lines = originalRender.call(this, width);
-        const hasComponentBg = typeof this.bgFn === 'function' || typeof this.customBgFn === 'function';
-        if (!hasComponentBg || lines.length < 2 || (typeof this.paddingY === 'number' && this.paddingY <= 0)) return lines;
-
-        const fg = foregroundFromRenderedBox(lines);
-        if (!fg) return lines;
-
-        const patched = [...lines];
-        patched[0] = replaceVisibleContent(patched[0]!, halfBlockLine(width, 'top', fg));
-        patched[patched.length - 1] = replaceVisibleContent(patched[patched.length - 1]!, halfBlockLine(width, 'bottom', fg));
-        return patched;
-    };
-};
-
-export const patchPaddedBackgroundHalfBlocks = (): void => {
-    if (paddedBackgroundHalfBlockPatched) return;
-    paddedBackgroundHalfBlockPatched = true;
-
-    // Box 覆盖工具调用、custom message、compact/branch/skill 等带背景色块的组件。
-    patchPaddedBackgroundComponent(Box.prototype as unknown as RenderablePrototype);
-    // Text 覆盖少量直接用 Text + customBgFn 渲染背景的组件兜底。
-    patchPaddedBackgroundComponent(Text.prototype as unknown as RenderablePrototype);
-    // The installed coding-agent may resolve a nested pi-tui copy, distinct from
-    // the extension's direct pi-tui. Patch the actual Box/Text instances Pi uses.
-    const prototype = ToolExecutionComponent.prototype as unknown as { updateDisplay(this: CompactToolExecution): void; [key: symbol]: unknown };
-    if (prototype[CORE_BACKGROUND_PATCH]) return;
-    const originalUpdateDisplay = prototype.updateDisplay;
-    prototype.updateDisplay = function patchedCoreBackgrounds(this: CompactToolExecution) {
-        if (this.contentBox) patchPaddedBackgroundComponent(Object.getPrototypeOf(this.contentBox) as RenderablePrototype);
-        if (this.contentText) patchPaddedBackgroundComponent(Object.getPrototypeOf(this.contentText) as RenderablePrototype);
-        return originalUpdateDisplay.call(this);
-    };
-    prototype[CORE_BACKGROUND_PATCH] = true;
-};
-
-export const patchUserMessageHalfBlocks = (): void => {
-    if (userMessageHalfBlockPatched) return;
-    userMessageHalfBlockPatched = true;
-
-    const prototype = UserMessageComponent.prototype as UserMessageComponent & { render(width: number): string[] };
-    const originalRender = prototype.render;
-
-    prototype.render = function patchedUserMessageRender(this: UserMessageComponent, width: number): string[] {
+    prototype.render = function (width: number): string[] {
         renderedActivitySinceUserMessage = false;
         compactToolActivity.rendered = false;
-        const lines = originalRender.call(this, width);
-        if (lines.length === 0) return lines;
-
-        const fg = foregroundFromRenderedBox(lines);
-        const patched = [...lines];
-
-        patched[0] = replaceVisibleContent(patched[0]!, halfBlockLine(width, 'top', fg));
-        patched[patched.length - 1] = replaceVisibleContent(patched[patched.length - 1]!, halfBlockLine(width, 'bottom', fg));
-        return patched;
+        if (width <= 0) { layouts.delete(this); return []; }
+        // Change only the native Markdown's display style, never the stored message.
+        for (const child of this.children) {
+            const markdown = child as Component & { defaultTextStyle?: { bgColor?: unknown; [key: string]: unknown } };
+            if (markdown.defaultTextStyle?.bgColor) {
+                markdown.defaultTextStyle = { ...markdown.defaultTextStyle, bgColor: undefined };
+                markdown.invalidate();
+            }
+        }
+        const inset = width >= 8 ? 1 : 0;
+        const maximum = inset ? Math.max(8, Math.floor(width * 0.8)) : width;
+        const nativeWidth = Math.max(3, maximum - inset * 2);
+        const lines = originalRender.call(this, nativeWidth);
+        const bodyWidth = lines.slice(1, -1).reduce((max, line) => Math.max(max, visibleWidth(stripTerminalSequences(line).trimEnd())), 0);
+        const padding = (this as unknown as { outputPad: number }).outputPad;
+        const frameWidth = inset ? Math.min(maximum, Math.max(8, bodyWidth + padding + 2)) : width;
+        const left = width - frameWidth;
+        layouts.set(this, { left, inset, width: nativeWidth, height: lines.length });
+        if (!inset) return lines.map(line => padToWidth(line, width));
+        const indent = ' '.repeat(left);
+        const innerWidth = frameWidth - 2;
+        const header = border('╭', 'topLeft', 'user') + border('─ ', 'top', 'user') + '你'
+            + border(` ${'─'.repeat(frameWidth - 7)}`, 'top', 'user') + border('╮', 'topRight', 'user');
+        const footer = border('╰', 'bottomLeft', 'user') + border('─'.repeat(innerWidth), 'bottom', 'user') + border('╯', 'bottomRight', 'user');
+        const leftSide = border('│', 'left', 'user');
+        const rightSide = border('│', 'right', 'user');
+        return lines.map((line, index) => {
+            if (index === 0) return replaceVisibleContent(line, indent + header);
+            if (index === lines.length - 1) return replaceVisibleContent(line, indent + footer);
+            const markers = replaceVisibleContent(line, '');
+            return markers + indent + leftSide + padToWidth(line.slice(markers.length), innerWidth) + rightSide;
+        });
     };
+    prototype.handleMouse = function (event) {
+        const layout = layouts.get(this);
+        if (!layout) return;
+        if (event.x < layout.left + layout.inset || event.x >= event.width - layout.inset) return;
+        if (layout.inset && (event.y <= 0 || event.y >= layout.height - 1)) return;
+        return originalMouse.call(this, { ...event, x: event.x - layout.left - layout.inset, width: layout.width });
+    };
+    prototype[USER_MESSAGE_FRAME_PATCH] = true;
 };

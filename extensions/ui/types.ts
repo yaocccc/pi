@@ -6,5 +6,4 @@ export type TokenUsage = {
 export type FooterData = {
     getGitBranch(): string | null;
     getExtensionStatuses(): ReadonlyMap<string, string>;
-    getAvailableProviderCount(): number;
 };

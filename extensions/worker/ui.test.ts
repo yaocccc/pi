@@ -119,14 +119,18 @@ test("worker details retain status icons and render session icons in the preset 
 				kind: "worker-ui", startedAt: 1, limit: 1, total: 1, completed: 0,
 				tasks: [{
 					index: 0, mode: "scout", objective: "inspect", status, sessionMode,
-					requestedPreset: "fast", attempt: 0, phase: "fixture", activities: [], toolCalls: 0,
+					requestedPreset: "fast", attempt: 0, phase: "fixture", toolCalls: 0,
+					activities: [{ id: "thinking:1", type: "thinking", status: "completed", label: "思考", detail: "hidden Worker thinking", at: 1 }],
 					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, turns: 0 },
 				}],
 			};
 			for (const expanded of [false, true]) {
 				for (const snapshot of [false, true]) {
 					colors.length = 0;
-					const header = renderWorkerDetails(details, theme, { expanded, snapshot }).render(120)[0];
+					const lines = renderWorkerDetails(details, theme, { expanded, snapshot }).render(120);
+					const header = lines[0];
+					assert.doesNotMatch(lines.join("\n"), /hidden Worker thinking|思考/);
+					assert.equal(details.tasks[0].activities[0].detail, "hidden Worker thinking", "hide presentation, not recorded activity");
 					const icon = sessionMode === "fork" ? "" : "󰐖";
 					const statusIcon = { queued: "○", running: "◌", completed: "✓", blocked: "!", failed: "✗" }[status];
 					assert.ok(header.startsWith(`${statusIcon} scout ${icon} · fast`), `${sessionMode}/${status}/${expanded}/${snapshot}: ${header}`);

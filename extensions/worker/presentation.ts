@@ -71,6 +71,11 @@ interface Row {
 	invalidate: () => void;
 }
 
+/** Read-only snapshot used by compact task rows; never look up another session. */
+export function getWorkerRenderSnapshot(state?: Record<string, unknown>): WorkerUiDetails | undefined {
+	return (state?.[ROW_STATE] as Row | undefined)?.snapshot;
+}
+
 /**
  * Pi's ToolRenderContext.invalidate() rebuilds the tool row AND requests a TUI
  * render, including after execute has returned. There is no tool-row disposal

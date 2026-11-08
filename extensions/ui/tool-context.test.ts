@@ -12,7 +12,11 @@ test('historical estimate includes full args and result, with compact units', ()
 
 test('badge appears only after completion, preserves hidden rows and width, and does not stack', () => {
     const proto = ToolExecutionComponent.prototype;
-    proto.render = function (width: number) { return (this as any).hidden ? [] : ['▄'.repeat(width), 'Read result'.padEnd(width), '▀'.repeat(width)]; };
+    proto.render = function (width: number) {
+        if ((this as any).hidden) return [];
+        if ((this as any).framed) return ['╭' + '─'.repeat(width - 2) + '╮', '│' + 'Read result'.padEnd(width - 2) + '│', '╰' + '─'.repeat(width - 2) + '╯'];
+        return [' '.repeat(width), 'Read result'.padEnd(width), ' '.repeat(width)];
+    };
     patchToolContext();
     const patched = proto.render;
     patchToolContext();
@@ -27,6 +31,8 @@ test('badge appears only after completion, preserves hidden rows and width, and 
     assert.match(stripTerminalSequences(tool.render(40)[1]), /≈3 tok $/);
     for (const width of [1, 2, 10, 40]) {
         assert.equal(tool.render(width).length, 3);
+        assert.equal(tool.render(width)[0], ' '.repeat(width), 'top padding is unchanged');
+        assert.equal(tool.render(width)[2], ' '.repeat(width), 'bottom padding is unchanged');
         // The mock itself overflows for tiny widths; decoration must not introduce overflow.
         if (width >= 10) assert.ok(tool.render(width).every((line: string) => visibleWidth(line) <= width));
     }
@@ -45,7 +51,18 @@ test('badge appears only after completion, preserves hidden rows and width, and 
         for (const isError of [false, true]) {
             tool.result = { content: [{ type: 'text', text: 'abcdefgh' }], isError };
             const row = tool.render(40)[1];
-            assert.ok(row.includes(`\x1b[48;5;${isError ? 1 : 2}m\x1b[2m ≈3 tok`), 'badge explicitly restores success/error background after the prefix');
+            assert.match(row, /\x1b\[2m ≈3 tok/);
+            assert.doesNotMatch(row, /\x1b\[48;/, 'badge never restores a background block');
+            tool.framed = true;
+            tool.toolName = 'read';
+            const framed = tool.render(40);
+            assert.match(stripTerminalSequences(framed[0]), /^╭─ read ≈3 tok ─+╮$/);
+            assert.equal(framed[2], '╰' + '─'.repeat(38) + '╯');
+            assert.equal(framed[1], '│' + 'Read result'.padEnd(38) + '│', 'title tokens never overwrite native content or padding');
+            assert.doesNotMatch(framed.slice(1).join('\n'), /tok/);
+            assert.ok(framed.every((line: string) => visibleWidth(line) === 40));
+            assert.doesNotMatch(framed.join('\n'), /\x1b\[48;/);
+            tool.framed = false;
         }
     } finally {
         (globalThis as any)[themeKey] = previousTheme;

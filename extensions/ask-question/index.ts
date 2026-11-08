@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { CURSOR_MARKER, Editor, type EditorTheme, Key, matchesKey, sliceByColumn, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { QuestionInteractions } from './interaction.ts';
+import { frameBorder } from '../ui/utils.ts';
 
 interface AskQuestionDetails {
     question: string;
@@ -36,12 +37,6 @@ type DisplayOption = {
     label: string;
     isCustom?: boolean;
 };
-
-const TEXTAREA_RGB = '16;24;39';
-const TEXTAREA_BG = `\x1b[48;2;${TEXTAREA_RGB}m`;
-const TEXTAREA_FG = `\x1b[38;2;${TEXTAREA_RGB}m`;
-const RESET_BG = '\x1b[49m';
-const RESET_FG = '\x1b[39m';
 
 const AskQuestionItemParams = Type.Object({
     question: Type.String(),
@@ -89,17 +84,9 @@ const padToWidth = (text: string, width: number): string => {
     return truncated + ' '.repeat(Math.max(0, safeWidth - visibleWidth(truncated)));
 };
 
-// Editor 光标内部可能用 \x1b[0m 重置样式；重置后重新补上背景色，保证整行都有 #101827 背景。
-const textAreaBg = (text: string): string => TEXTAREA_BG + text.replace(/\x1b\[0m/g, `\x1b[0m${TEXTAREA_BG}`) + RESET_BG;
-
 const addQuestionHeading = (lines: string[], width: number, heading: string): void => {
-    for (const line of wrapTextWithAnsi(heading, width)) lines.push(textAreaBg(padToWidth(line, width)));
+    for (const line of wrapTextWithAnsi(heading, width)) lines.push(padToWidth(line, width));
 };
-
-const halfBlockLine = (width: number, position: 'top' | 'bottom'): string => TEXTAREA_FG + (position === 'top' ? '▄' : '▀').repeat(Math.max(0, width)) + RESET_FG;
-
-// 让内嵌输入框的边框和 #101827 背景同色，视觉上与主输入框保持一致。
-const invisibleBorder = (text: string): string => TEXTAREA_FG + text + RESET_FG;
 
 const questionnaireDetails = (questions: AskQuestionInput[], answers: Array<QuestionnaireAnswer | undefined>): QuestionnaireDetails => ({
     questions: questions.map((question, index) => {
@@ -133,7 +120,7 @@ const showQuestions = (questions: AskQuestionInput[], review: boolean, ctx: Exte
         const answers: Array<QuestionnaireAnswer | undefined> = questions.map(() => undefined);
 
         const editorTheme: EditorTheme = {
-            borderColor: invisibleBorder,
+            borderColor: (text: string) => text,
             selectList: {
                 selectedPrefix: (s) => theme.fg('accent', s),
                 selectedText: (s) => theme.fg('accent', s),
@@ -289,14 +276,16 @@ const showQuestions = (questions: AskQuestionInput[], review: boolean, ctx: Exte
             }
         };
 
-        const addLine = (lines: string[], width: number, text = '') => lines.push(textAreaBg(padToWidth(text, width)));
-        const render = (width: number): string[] => {
-            if (cachedLines && cachedWidth === width) return cachedLines;
+        const addLine = (lines: string[], width: number, text = '') => lines.push(padToWidth(text, width));
+        const render = (outerWidth: number): string[] => {
+            if (cachedLines && cachedWidth === outerWidth) return cachedLines;
+            if (outerWidth < 1) return [];
+            const framed = outerWidth >= 3;
+            const width = framed ? outerWidth - 2 : outerWidth;
             const lines: string[] = [];
-            lines.push(halfBlockLine(width, 'top'));
 
             if (review) {
-                // Header 与面板同背景，当前项仅用强调色和粗体区分。
+                // 当前项仅用强调色和粗体区分。
                 const tabs = questions.map((_question, index) => {
                     const status = answers[index]?.completed ? '■' : '□';
                     const text = ` ${status} ${labelFor(index)} `;
@@ -342,7 +331,15 @@ const showQuestions = (questions: AskQuestionInput[], review: boolean, ctx: Exte
                 if (inputMode) {
                     addLine(lines, width);
                     addLine(lines, width, theme.fg('muted', ' 请输入你的答案：'));
-                    for (const line of editor.render(Math.max(1, width - 2))) addLine(lines, width, ` ${line}`);
+                    // Reserve a safe native width for wide graphemes, then clip tiny terminals.
+                    // Only the outer panel supplies borders; the native content keeps its cursor.
+                    for (const line of editor.render(Math.max(4, width - 1)).slice(1, -1)) {
+                        let content = width > 1 ? ` ${line}` : line;
+                        const marker = content.indexOf(CURSOR_MARKER);
+                        const cursorColumn = marker < 0 ? -1 : visibleWidth(content.slice(0, marker));
+                        if (cursorColumn >= width) content = sliceByColumn(content, cursorColumn - width + 1, width, true) + '\x1b[0m';
+                        addLine(lines, width, content);
+                    }
                 }
                 if (warning) {
                     if (!review) addLine(lines, width);
@@ -360,15 +357,19 @@ const showQuestions = (questions: AskQuestionInput[], review: boolean, ctx: Exte
                 }
             }
             addLine(lines, width, theme.fg('dim', help));
-            lines.push(halfBlockLine(width, 'bottom'));
-            cachedWidth = width;
-            cachedLines = lines;
-            return lines;
+            const border = (text: string, edge: Parameters<typeof frameBorder>[1]) => frameBorder(text, edge, 'input');
+            cachedWidth = outerWidth;
+            cachedLines = framed ? [
+                border('╭', 'topLeft') + border('─'.repeat(width), 'top') + border('╮', 'topRight'),
+                ...lines.map(line => border('│', 'left') + line + border('│', 'right')),
+                border('╰', 'bottomLeft') + border('─'.repeat(width), 'bottom') + border('╯', 'bottomRight'),
+            ] : lines;
+            return cachedLines;
         };
 
         return {
             get focused() { return editor.focused; },
-            set focused(value: boolean) { editor.focused = value; },
+            set focused(value: boolean) { editor.focused = value; cachedLines = undefined; },
             render,
             invalidate: () => { cachedLines = undefined; cachedWidth = undefined; editor.invalidate(); },
             handleInput,

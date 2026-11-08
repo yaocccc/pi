@@ -1,12 +1,12 @@
 import { ToolExecutionComponent } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { padToWidth } from './utils.ts';
+import { padToWidth, replaceVisibleContent, toolFrameTop } from './utils.ts';
 
 import { colorToolTokens, estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
 export { estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
 type ToolResult = Parameters<typeof estimateToolTokens>[1];
-type ToolState = { args?: unknown; result?: ToolResult; isPartial?: boolean };
-const PATCH = Symbol.for('pi.extensions.ui.tool-context.v7');
+type ToolState = { toolName?: string; args?: unknown; result?: ToolResult; isPartial?: boolean };
+const PATCH = Symbol.for('pi.extensions.ui.tool-context.v10');
 const THEME = Symbol.for('@earendil-works/pi-coding-agent:theme');
 
 export const patchToolContext = (): void => {
@@ -24,21 +24,25 @@ export const patchToolContext = (): void => {
             entry = { args: tool.args, result: tool.result, tokens, label: formatToolTokens(tokens) };
             cache.set(this, entry);
         }
-        // Keep hidden control rows hidden; never add a new line or decorate borders.
-        const index = lines.findIndex(line => {
-            const text = stripTerminalSequences(line).trim();
-            return text.length > 0 && !/^[▄▀]+$/.test(text);
-        });
-        const suffix = ` ${entry.label} `;
-        if (index < 0 || width < visibleWidth(suffix) + 2) return lines;
         const theme = (globalThis as any)[THEME];
-        const background = tool.result.isError ? 'toolErrorBg' : 'toolSuccessBg';
-        // The original row/truncation can end with an ANSI background reset.
-        // Start the badge's background explicitly rather than relying on an outer wrap.
-        const label = theme ? theme.bg(background, colorToolTokens(entry.tokens, suffix, theme)) : suffix;
-        const prefix = padToWidth(truncateToWidth(lines[index]!, width - visibleWidth(suffix), ''), width - visibleWidth(suffix));
+        const framed = /^╭─.*╮$/.test(stripTerminalSequences(lines[0]!));
+        if (framed) {
+            const tokens = theme ? colorToolTokens(entry.tokens, entry.label, theme) : entry.label;
+            const output = [...lines];
+            output[0] = replaceVisibleContent(lines[0]!, toolFrameTop(`${tool.toolName ?? '工具'} ${tokens}`, visibleWidth(lines[0]!)));
+            return output;
+        }
+        // Unframed custom shells retain the native inline badge; hidden/blank rows stay untouched.
+        const index = lines.findIndex(line => stripTerminalSequences(line).trim().length > 0);
+        if (index < 0) return lines;
+        const row = lines[index]!;
+        const available = width;
+        const suffix = ` ${entry.label} `;
+        if (available < visibleWidth(suffix) + 2) return lines;
+        const label = theme ? colorToolTokens(entry.tokens, suffix, theme) : suffix;
+        const prefix = padToWidth(truncateToWidth(row, available - visibleWidth(suffix), ''), available - visibleWidth(suffix));
         const output = [...lines];
-        output[index] = theme ? theme.bg(background, prefix) + label : prefix + label;
+        output[index] = prefix + label;
         return output;
     };
     prototype[PATCH] = true;

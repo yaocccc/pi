@@ -10,7 +10,7 @@ import { start, task, until } from "./fixtures/helpers.ts";
 import { DEFAULT_OPTIONS } from "./config.ts";
 import type { executeTask } from "./process.ts";
 import { renderWorkerDetails } from "./ui.ts";
-import { patchCollapsedThinkingPreview, patchCompactToolDisplay, patchFinalResponseSeparator, patchFullscreenScrollbar, patchMergeConsecutiveTools, patchPaddedBackgroundHalfBlocks, patchThinkingSpacing, patchUserMessageHalfBlocks } from "../ui/index.ts";
+import { patchToolDisplay, patchFinalResponseSeparator, patchFullscreenScrollbar, patchMergeConsecutiveTools, patchUserMessageFrame } from "../ui/index.ts";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text } as Theme;
 const secret = (name: string) => `${name}=${name}-fixture-hidden`;
@@ -153,9 +153,9 @@ test("static historical cards freeze elapsed time and rebuild with the current t
 test("installed Pi and complete UI patch stack frame only visible Worker rows like ordinary tools", async () => {
 	const Component = await piToolComponent();
 	// Same installation order as extensions/ui/index.ts; no mocked render/updateDisplay.
-	patchCollapsedThinkingPreview(); patchThinkingSpacing(); patchFinalResponseSeparator();
-	patchCompactToolDisplay(); patchMergeConsecutiveTools(); patchFullscreenScrollbar();
-	patchPaddedBackgroundHalfBlocks(); patchUserMessageHalfBlocks();
+	patchFinalResponseSeparator();
+	patchToolDisplay(); patchMergeConsecutiveTools(); patchFullscreenScrollbar();
+	patchUserMessageFrame();
 	const root = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 	const { initTheme, theme: liveTheme } = await import(pathToFileURL(join(root, "modes/interactive/theme/theme.js")).href);
 	const h = harness(async () => complete);
@@ -169,20 +169,27 @@ test("installed Pi and complete UI patch stack frame only visible Worker rows li
 			renderCall: () => new Text(liveTheme.fg("toolTitle", liveTheme.bold("Ordinary")), 0, 0),
 			renderResult: () => new Text(liveTheme.fg("toolOutput", "宽度中文ABC"), 0, 0),
 		});
-		const bg = (line: string) => line.match(/\x1b\[48;(?:2;\d+;\d+;\d+|5;\d+)m/)?.[0];
-		const boundaries = (lines: string[]) => lines.map(stripTerminalSequences).filter((line) => /^[▄▀]+$/.test(line));
+		const edgeColor = (line: string) => line.match(/\x1b\[38;2;\d+;\d+;\d+m/)?.[0];
+		const toolFrame = (lines: string[]) => {
+			assert.doesNotMatch(lines.join("\n"), /[▄▀]|\x1b\[48;/);
+			assert.match(stripTerminalSequences(lines[0]!), /^╭─.*╮$/);
+			assert.match(stripTerminalSequences(lines.at(-1)!), /^╰─*╯$/);
+			assert.ok(edgeColor(lines[0]!));
+			assert.notEqual(edgeColor(lines[0]!), edgeColor(lines.at(-1)!));
+			assert.ok(lines.every(line => visibleWidth(line) === 40));
+		};
 		owner.markExecutionStarted(); ordinary.markExecutionStarted();
 		const pending = owner.render(40);
-		assert.equal(bg(pending[1]!), bg(ordinary.render(40)[1]!));
-		assert.deepEqual(boundaries(pending).map((line) => line[0]), ["▄", "▀"]);
+		assert.equal(edgeColor(pending[1]!), edgeColor(ordinary.render(40)[1]!));
+		toolFrame(pending);
 		const initial = await workerTool.execute("framed-owner", args, undefined, (result: any) => owner.updateResult(result, true), h.ctx);
 		owner.updateResult(initial, false);
 		ordinary.updateResult({ content: [{ type: "text", text: "done" }] }, false);
 		const drawn = owner.render(40);
 		assert.match(stripTerminalSequences(drawn.join("\n")), /宽度中文ABC/);
-		assert.equal(bg(drawn[1]!), bg(ordinary.render(40)[1]!), "same active Pi tool background token");
-		assert.equal(boundaries(drawn).length, 2);
-		assert.equal(boundaries(ordinary.render(40)).length, 2);
+		assert.equal(edgeColor(drawn[1]!), edgeColor(ordinary.render(40)[1]!), "same tool border color");
+		toolFrame(drawn);
+		toolFrame(ordinary.render(40));
 		for (const width of [1, 2, 3, 8, 20, 40]) for (const expanded of [false, true]) {
 			owner.setExpanded(expanded);
 			assert.ok(owner.render(width).every((line: string) => visibleWidth(line) <= width), `owner width ${width}`);
@@ -199,19 +206,23 @@ test("installed Pi and complete UI patch stack frame only visible Worker rows li
 		const CoreContainer = Object.getPrototypeOf(Component.prototype).constructor;
 		const adjacent = new CoreContainer(); adjacent.addChild(owner); adjacent.addChild(hidden); adjacent.addChild(ordinary);
 		const joined = adjacent.render(40);
-		assert.equal(boundaries(joined).length, 2, "adjacent framed tools share one top and bottom edge");
+		assert.equal(joined.length, 1, "completed Worker and ordinary tools start in one folded summary");
+		assert.doesNotMatch(joined.join("\n"), /[▄▀]/, "no half-block card edges");
+		owner.setExpanded(true);
+		assert.ok(adjacent.render(40).some((line: string) => edgeColor(line) === edgeColor(drawn[1]!)), "explicit expansion restores the Worker frame");
+		assert.doesNotMatch(adjacent.render(40).join("\n"), /[▄▀]/);
 		assert.match(stripTerminalSequences(adjacent.render(40).join("\n")), /宽度中文ABC/);
 		const unknown = makeRow("worker", "unknown", { batchId: "unrecognized" }, workerTool);
 		unknown.updateResult({ content: [{ type: "text", text: "unknown failure" }], isError: true }, false);
 		assert.match(stripTerminalSequences(unknown.render(40).join("\n")), /unknown failure/);
 		const ordinaryError = makeRow("ordinary", "err", {}, ordinary.toolDefinition);
 		ordinaryError.updateResult({ content: [{ type: "text", text: "err" }], isError: true }, false);
-		assert.equal(bg(unknown.render(40)[1]!), bg(ordinaryError.render(40)[1]!));
+		assert.equal(edgeColor(unknown.render(40)[1]!), edgeColor(ordinaryError.render(40)[1]!));
 		const otherSelf = makeRow("other-self", "other", {}, { renderShell: "self", renderCall: () => new Text("other shell", 0, 0) });
-		assert.equal(boundaries(otherSelf.render(40)).length, 0, "unrelated custom self shells are unchanged");
+		assert.doesNotMatch(otherSelf.render(40).join("\n"), /[▄▀]/, "unrelated custom self shells are unchanged");
 		initTheme("light", false);
 		owner.invalidate(); ordinary.invalidate();
-		assert.equal(bg(owner.render(40)[1]!), bg(ordinary.render(40)[1]!), "theme switching uses Pi's active palette");
+		assert.equal(edgeColor(owner.render(40)[1]!), edgeColor(ordinary.render(40)[1]!), "theme switching preserves the shared frame palette");
 	} finally {
 		initTheme("dark", false);
 		await h.handlers.get("session_shutdown")({});

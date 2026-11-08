@@ -44,5 +44,8 @@
   "deviceId": "ce4f1b70-29b7-4f8f-ba53-9c6c02dd296b",
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0"
+  },
+  "terminal": {
+    "showTerminalProgress": false
   }
 }

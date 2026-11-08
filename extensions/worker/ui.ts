@@ -292,7 +292,7 @@ export function uiActivityLine(activity: WorkerUiActivity, theme: Theme): string
 	return `${prefix}${detail ? theme.fg("dim", ` · ${detail}`) : ""}`;
 }
 
-export function uiDuration(task: WorkerUiTask, now = Date.now()): string | undefined {
+export function uiDuration(task: Pick<WorkerUiTask, 'startedAt' | 'finishedAt'>, now = Date.now()): string | undefined {
 	if (!task.startedAt) return undefined;
 	const elapsed = Math.max(0, (task.finishedAt ?? now) - task.startedAt);
 	if (elapsed < 1000) return `${elapsed}ms`;
@@ -322,6 +322,7 @@ export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme, opti
 		text += `\n  ${theme.fg("toolOutput", objective)}`;
 		const conclusions = workerConclusions(task);
 		for (const activity of task.activities.slice(-UI_RECENT_ACTIVITY_LIMIT)) {
+			if (activity.type === "thinking") continue;
 			if (activity.type === "phase" && activity.status !== "failed" && /等待执行槽位/.test(activity.label) && !/超时|取消|失败/.test(activity.label)) continue;
 			text += `\n  ${uiActivityLine(activity, theme)}`;
 			if (conclusions.length && activity.id === "phase:finished" && activity.status === "completed") {

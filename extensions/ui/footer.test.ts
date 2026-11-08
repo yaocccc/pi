@@ -26,7 +26,6 @@ async function setup(t: TestContext) {
     const data: FooterData = {
         getGitBranch: () => 'main',
         getExtensionStatuses: () => new Map([['fixture', '状态\nready\tgo']]),
-        getAvailableProviderCount: () => 1,
     };
     const footer = (model: object | null = { provider: 'other-provider', id: 'unsupported-model', name: '模型中文' }, codexUsage?: CodexUsageBadge) =>
         new NoCostFooter({
