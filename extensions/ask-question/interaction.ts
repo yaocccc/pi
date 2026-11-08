@@ -10,6 +10,11 @@ export class QuestionInteractions {
 	// Pi's non-overlay custom UI replaces the editor, so only one may own it.
 	private tail: Promise<void> = Promise.resolve();
 	private stopping = false;
+	constructor(private readonly pendingChanged: (count: number) => void = () => {}) {}
+	private reportPending() {
+		// Observers must never prevent a question from opening or finishing.
+		try { this.pendingChanged(this.active.size); } catch {}
+	}
 	async shutdown() {
 		this.stopping = true;
 		try {
@@ -24,6 +29,7 @@ export class QuestionInteractions {
 		const controller = new AbortController();
 		let completed!: () => void;
 		this.active.set(controller, new Promise<void>((resolve) => { completed = resolve; }));
+		this.reportPending();
 		const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
 		const previous = this.tail;
 		let release!: () => void;
@@ -52,7 +58,7 @@ export class QuestionInteractions {
 			return value ?? null; // Unsupported custom UI must never fabricate a choice.
 		} finally {
 			detach(); combined.removeEventListener("abort", abort);
-			this.active.delete(controller); release(); completed();
+			this.active.delete(controller); this.reportPending(); release(); completed();
 		}
 	}
 }

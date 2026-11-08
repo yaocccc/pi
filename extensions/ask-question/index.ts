@@ -460,7 +460,9 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
 };
 
 const askQuestion = (pi: ExtensionAPI) => {
-    const interactions = new QuestionInteractions();
+    const interactions = new QuestionInteractions((pending) => {
+        pi.events?.emit("ask-question:pending", { pending });
+    });
     pi.on('session_shutdown', () => interactions.shutdown());
     pi.on('session_tree', () => interactions.shutdown());
     pi.on('session_start', () => interactions.shutdown());

@@ -46,6 +46,38 @@ function harness() {
 	return { pi, ctx, tools, components, call, event, surface, editor, input: (key: string) => focused.handleInput(key), setUiMode: (mode: typeof uiMode) => { uiMode = mode; }, opens: () => opens, closes: () => closes };
 }
 
+test("explicit waiting snapshots include queued questions and clear after answer/cancellation", async () => {
+	const h = harness();
+	const states: unknown[] = [];
+	h.pi.events.on("ask-question:pending", (data) => states.push(data));
+	const first = h.call(single);
+	const controller = new AbortController();
+	const second = h.call(single, controller.signal);
+	const rejected = assert.rejects(second);
+	await flush();
+	assert.deepEqual(states, [{ pending: 1 }, { pending: 2 }]);
+	controller.abort(new Error("cancel queued"));
+	await rejected;
+	assert.deepEqual(states.at(-1), { pending: 1 });
+	h.input("\r");
+	await first;
+	assert.deepEqual(states.at(-1), { pending: 0 });
+});
+
+test("a failing pending observer cannot break ordinary Pi question input or cleanup", async () => {
+	const h = harness();
+	h.pi.events.on("ask-question:pending", () => { throw new Error("observer failure"); });
+	const first = h.call(single);
+	await flush();
+	h.input("\r");
+	assert.equal((await first).details.answer, "A");
+	const next = h.call(single);
+	await flush();
+	h.input("\x1b");
+	assert.equal((await next).details.answer, null);
+	assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+});
+
 function rpcHarness(responses: { select?: Array<string | undefined>; input?: Array<string | undefined> } = {}) {
 	const tools = new Map<string, any>();
 	const handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -121,6 +153,8 @@ for (const [kind, input] of [["single", single], ["questionnaire", multi]] as co
 	test(`${kind}: signal/pre-abort, Esc, exception, unsupported custom, no UI and shutdown release UI without consent`, async () => {
 		for (const exit of ["abort", "pre-abort", "escape", "exception", "undefined", "no-ui", "shutdown", "tree"] as const) {
 			const h = harness(); const controller = new AbortController();
+			const pending: number[] = [];
+			h.pi.events.on("ask-question:pending", (data) => pending.push(data.pending));
 			if (exit === "pre-abort") controller.abort(new Error("pre aborted"));
 			if (exit === "exception") h.setUiMode("throw");
 			if (exit === "undefined") h.setUiMode("undefined");
@@ -139,6 +173,7 @@ for (const [kind, input] of [["single", single], ["questionnaire", multi]] as co
 			}
 			if (exit === "shutdown" || exit === "tree") await h.event(exit === "tree" ? "session_tree" : "session_shutdown");
 			await assertion;
+			assert.equal(pending.at(-1) ?? 0, 0, "all completion paths clear the explicit waiting state");
 			if (exit === "no-ui" || exit === "pre-abort") assert.equal(h.opens(), 0);
 			assert.ok(h.closes() <= 1, "abort and UI completion cannot dispose custom twice");
 			assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
