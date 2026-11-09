@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { createReadToolDefinition, ToolExecutionComponent } from '@earendil-works/pi-coding-agent';
-import { stripTerminalSequences } from '@earendil-works/pi-tui';
+import { createEditToolDefinition, createReadToolDefinition, ToolExecutionComponent } from '@earendil-works/pi-coding-agent';
+import { Container, stripTerminalSequences, Text } from '@earendil-works/pi-tui';
 import { patchToolDisplay } from './patches.ts';
 import { patchToolFolding } from './folding.ts';
 import { patchToolContext } from './tool-context.ts';
@@ -60,6 +60,44 @@ test('same-object result/args updates and partial output invalidate completed sn
     tool.render(80);
     tool.render(80);
     assert.equal(calls(), 5, 'running/partial tools remain live');
+});
+
+test('streaming Worker self shells refresh before early returns and batch argument deltas per frame', () => {
+    let calls = 0;
+    const tool = new ToolExecutionComponent('worker', 'streaming-worker', {}, {}, {
+        renderShell: 'self',
+        renderCall(args: { tasks?: unknown[] }) {
+            calls++;
+            return Array.isArray(args.tasks) ? new Text(`Workers ×${args.tasks.length}`, 0, 0) : new Container();
+        },
+    } as any, tui, process.cwd());
+    assert.deepEqual(tool.render(80), []);
+    assert.equal(calls, 1);
+    tool.updateArgs({ tasks: [{}] });
+    tool.updateArgs({ tasks: [{}, {}] });
+    assert.equal(calls, 1, 'argument deltas do not eagerly rebuild the renderer');
+    const visible = tool.render(80);
+    assert.match(plain(visible), /Workers ×2/);
+    assert.match(plain(visible), /╭─ worker/);
+    assert.equal(calls, 2, 'the next frame consumes only the latest arguments');
+    assert.deepEqual(tool.render(80), visible);
+    assert.equal(calls, 2, 'unchanged frames do not rebuild the renderer');
+    tool.updateArgs({ batchId: 'continuation' });
+    assert.deepEqual(tool.render(80), [], 'continuations remain hidden after the next frame');
+    assert.equal(calls, 3);
+});
+
+test('expanded native edit self shells refresh while arguments are still streaming', () => {
+    const tool = new ToolExecutionComponent('edit', 'streaming-edit', {}, {},
+        createEditToolDefinition(process.cwd()), tui, process.cwd());
+    tool.setExpanded(true);
+    assert.match(plain(tool.render(80)), /edit \.\.\./);
+    tool.updateArgs({ path: 'first-streamed-file.ts' });
+    assert.match(plain(tool.render(80)), /first-streamed-file\.ts/);
+    tool.updateArgs({ path: 'latest-streamed-file.ts', oldText: 'before', newText: 'after' });
+    const visible = plain(tool.render(80));
+    assert.match(visible, /latest-streamed-file\.ts/);
+    assert.doesNotMatch(visible, /first-streamed-file\.ts|edit \.\.\./);
 });
 
 test('known native read renderers reuse output; custom renderers remain live without updates', () => {

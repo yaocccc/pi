@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent, type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { Container, stripTerminalSequences, truncateToWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
-import { groupToolComponents } from './folding.ts';
+import { groupToolComponents, ToolActivityGroup } from './folding.ts';
 import { estimateLineBytes, RenderCache } from './render-cache.ts';
 import { frameBorder as border, measureWidth as visibleWidth, padToWidth, replaceVisibleContent } from './utils.ts';
 
@@ -83,8 +83,22 @@ class AssistantView implements Component {
     private display?: AssistantMessageComponent;
     private signature: unknown[] = [];
     private configuration: unknown[] = [];
+    private textOnly = false;
 
     constructor(private source: AssistantMessageComponent) {}
+
+    // The native children array changes even for an in-place message update.
+    // Only reuse a display that has already rendered this exact settled state.
+    getStableRenderKey(): unknown {
+        const source = state(this.source);
+        if (!this.display || !this.textOnly || source.isStreaming || source.markdownTransformers?.length
+            || this.signature[0] !== source.lastMessage || this.signature[1] !== source.contentContainer.children
+            || this.signature[2] !== source.isStreaming) return undefined;
+        const configuration = [source.hideThinkingBlock, source.markdownTheme, source.hiddenThinkingLabel,
+            source.outputPad, source.markdownTransformers,
+            (globalThis as any)[Symbol.for('@earendil-works/pi-coding-agent:theme')]];
+        return configuration.every((value, index) => value === this.configuration[index]) ? this.signature : undefined;
+    }
 
     render(width: number): string[] {
         const source = state(this.source);
@@ -108,7 +122,9 @@ class AssistantView implements Component {
             this.display.updateContent(message, source.isStreaming);
             this.signature = signature;
         }
-        return trimTrailingTextSpace(this.display.render(width));
+        const lines = trimTrailingTextSpace(this.display.render(width));
+        this.textOnly = !lines.some(line => IMAGE_SEQUENCE.test(line));
+        return lines;
     }
 
     invalidate(): void { this.display = undefined; }
@@ -139,7 +155,20 @@ export class RoundFrame implements Component {
     private inset = 0;
     private frameWidth = 0;
     private nativeWidth = 0;
-    private cache = new RenderCache<{ width: number; label: string; content: string[]; lines: string[] }>();
+    private cache = new RenderCache<{
+        width: number; label: string; content: string[]; lines: string[];
+        theme: unknown; children: Component[]; keys?: unknown[];
+    }>();
+
+    private stableKeys(): unknown[] | undefined {
+        const keys: unknown[] = [];
+        for (const child of this.body.children) {
+            const key = child instanceof AssistantView || child instanceof ToolActivityGroup ? child.getStableRenderKey() : undefined;
+            if (key === undefined) return undefined;
+            keys.push(key);
+        }
+        return keys;
+    }
 
     update(label: string, children: Component[]): void {
         this.label = stripTerminalSequences(label).replace(/\s+/g, ' ');
@@ -152,21 +181,39 @@ export class RoundFrame implements Component {
             this.contentHeight = this.contentOffset = this.frameWidth = 0;
             return [];
         }
-        // Always render children: streaming/tool state and native mouse layouts may
-        // change even when the projected children or their visible text do not.
+        const cached = this.cache.get();
+        const theme = (globalThis as any)[Symbol.for('@earendil-works/pi-coding-agent:theme')];
+        if (cached?.keys && cached.width === width && cached.label === this.label && cached.theme === theme
+            && cached.children.length === this.body.children.length
+            && this.body.children.every((child, index) => child === cached.children[index])) {
+            const keys = this.stableKeys();
+            // Reuse the matching native mouse layout as well as the formatted rows.
+            if (keys?.every((key, index) => key === cached.keys![index])) return cached.lines.slice();
+        }
         this.inset = width >= 8 ? 1 : 0;
         this.nativeWidth = Math.max(3, width - this.inset * 2);
         const content = this.body.render(this.nativeWidth);
-        const cached = this.cache.get();
-        // The frame depends only on width, label and exact rendered strings (including
-        // theme ANSI, semantic markers and image protocols), not child identities.
-        if (cached && cached.width === width && cached.label === this.label
+        const unchanged = cached && cached.width === width && cached.label === this.label
             && cached.content.length === content.length
-            && content.every((line, index) => line === cached.content[index])) return cached.lines.slice();
+            && content.every((line, index) => line === cached.content[index]);
+        // Refresh identities/keys even when text is identical: this render may have
+        // installed a new mouse target. Never pair old keys with the new layout.
+        const children = this.body.children.slice();
+        const keys = this.stableKeys();
+        if (unchanged) {
+            const resized = cached.children.length !== children.length;
+            cached.theme = theme;
+            cached.children = children;
+            cached.keys = keys;
+            // Retain the original raw/framed string sharing. Replacing just the
+            // raw rows can retain a second copy of a large, identical transcript.
+            if (resized) this.cache.set(cached,
+                estimateLineBytes(cached.content) + estimateLineBytes(cached.lines) + children.length * 16);
+            return cached.lines.slice();
+        }
         const lines = this.renderFrame(width, content);
-        // Keep only the latest snapshot; streaming updates must not accumulate versions.
-        this.cache.set({ width, label: this.label, content: content.slice(), lines },
-            estimateLineBytes(content) + estimateLineBytes(lines));
+        this.cache.set({ width, label: this.label, content: content.slice(), lines, theme, children, keys },
+            estimateLineBytes(content) + estimateLineBytes(lines) + children.length * 16);
         // Parent layout code may splice/replace rows; never expose the cached array.
         return lines.slice();
     }

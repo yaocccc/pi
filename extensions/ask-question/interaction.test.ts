@@ -26,8 +26,12 @@ function harness() {
 	let opens = 0; let closes = 0;
 	let focused: any;
 	const editor = { getText: () => "draft", setText() {}, render: () => [], invalidate() {} };
-	const surface = { editor, editorContainer: new Container(), keybindings: {}, disposeActiveSelector() {},
-		ui: { requestRender() {}, setFocus: (component: any) => { focused = component; }, terminal: { rows: 40, columns: 100 } } };
+	// Pi 1.5's custom lifecycle delegates editor replacement to dialog-stack helpers.
+	const surface = Object.assign(Object.create(InteractiveMode.prototype), {
+		editor, editorContainer: new Container(), keybindings: {}, disposeActiveSelector() {},
+		extensionDialogs: [], programStatus: { setBlocked() {} },
+		ui: { requestRender() {}, setFocus: (component: any) => { focused = component; }, terminal: { rows: 40, columns: 100 } },
+	});
 	surface.editorContainer.addChild(editor);
 	const ctx = { cwd: process.cwd(), hasUI: true, mode: "tui", sessionManager: { getBranch: () => [] }, ui: {
 		custom: (factory: any) => {

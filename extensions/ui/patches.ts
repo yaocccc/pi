@@ -62,6 +62,8 @@ export const patchFullscreenScrollbar = (): void => {
 type ToolDisplayState = {
     toolName?: unknown;
     args?: unknown;
+    argsPending?: boolean;
+    updateDisplay(): void;
     result?: Parameters<typeof estimateToolTokens>[1];
     isPartial?: boolean;
     expanded?: boolean;
@@ -282,6 +284,9 @@ export const patchToolDisplay = (): void => {
     };
     const renderFramed = prototype.render;
     prototype.render = function (this: ToolDisplayState, width: number): string[] {
+        // Pi 1.5 batches argument deltas until render. Flush before either our
+        // snapshot cache or self-shell path can bypass the native render method.
+        if (this.argsPending) this.updateDisplay();
         let cache = snapshots.get(this);
         if (!cache) {
             cache = new RenderCache<Snapshot>();

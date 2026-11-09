@@ -16,6 +16,7 @@ type ToolState = {
     args?: Record<string, unknown>;
     expanded: boolean;
     isPartial: boolean;
+    argsPending?: boolean;
     hideComponent?: boolean;
     result?: ToolResult;
     imageComponents?: unknown[];
@@ -37,6 +38,7 @@ const groups = new WeakMap<Component, ToolActivityGroup>();
 const membership = new WeakMap<Tool, ToolActivityGroup>();
 const previews = new WeakSet<Tool>();
 const tokenCache = new WeakMap<Tool, { args: unknown; result: ToolResult; tokens: number }>();
+const revisions = new WeakMap<Tool, number>();
 let localToggle = false;
 let cyclePreview = false;
 const theme = (): Pick<Theme, 'fg'> | undefined => (globalThis as any)[THEME_KEY];
@@ -141,6 +143,41 @@ export class ToolActivityGroup implements Component {
     private summaryBadge: BadgeCache = {};
     private previewBadges = new WeakMap<Tool, BadgeCache>();
     private previewLayouts = new WeakMap<Tool, { width: number; lines: string[]; clipped: boolean }>();
+    private closedKey?: unknown[];
+    private summaryStyle?: { breakdown: string; failed: number; compact: boolean; badge: string; tokens: number };
+
+    // Closed boxed tools never render their body. Only their summary state needs
+    // checking; unknown self renderers and Worker clocks still require live probes.
+    getStableRenderKey(): unknown {
+        if (this.open || !this.header || !this.summaryStyle) {
+            this.closedKey = undefined;
+            return undefined;
+        }
+        const { breakdown, failed, compact, badge, tokens } = this.summaryStyle;
+        const currentTheme = theme();
+        const paint = fg('muted', ' · ') + fg('dim', breakdown)
+            + (failed ? fg('error', compact ? `✗${failed}` : `✗ ${failed} failed`) : '')
+            + (badge && currentTheme ? colorToolTokens(tokens, badge, currentTheme) : badge);
+        const values: unknown[] = [this.notices, paint];
+        for (const child of this.children) {
+            // Closed groups with a header do not render non-tool children at all
+            // (including the empty assistant carriers between tool calls).
+            if (!(child instanceof ToolExecutionComponent)) { values.push(child); continue; }
+            const value = state(child);
+            const shell = value.getRenderShell?.();
+            if (running(child) || value.argsPending || value.toolName === 'worker' || value.imageComponents?.length
+                || value.result?.content.some(part => part.type !== 'text')
+                || (shell === 'self' && !hasNativeEditRenderer(child))) {
+                this.closedKey = undefined;
+                return undefined;
+            }
+            values.push(child, revisions.get(child), value.toolName, value.args, value.result,
+                value.result?.isError, value.expanded, value.hideComponent, shell);
+        }
+        if (!this.closedKey || values.length !== this.closedKey.length
+            || values.some((value, index) => value !== this.closedKey![index])) this.closedKey = values;
+        return this.closedKey;
+    }
 
     update(children: Component[], notices: number): void {
         this.children = children;
@@ -160,12 +197,16 @@ export class ToolActivityGroup implements Component {
     }
 
     invalidate(): void {
+        this.closedKey = undefined;
+        this.summaryStyle = undefined;
         this.summaryBadge.current = undefined;
         this.previewBadges = new WeakMap();
         for (const child of this.children) child.invalidate();
     }
 
     render(width: number): string[] {
+        this.closedKey = undefined;
+        this.summaryStyle = undefined;
         this.hits = [];
         this.previewLayouts = new WeakMap();
         const lines: string[] = [];
@@ -196,6 +237,10 @@ export class ToolActivityGroup implements Component {
             const suffix = statuses.length ? '  ' + statuses.join('  ') : '';
             const summaryInset = width > 0 ? ' ' : '';
             lines.push(summaryInset + withBadge(this.summaryBadge, content, totalTokens, width - summaryInset.length, 24, suffix, true));
+            // Recheck actual ANSI painting, including badge-only changes on a
+            // mutable theme, without repeating counting, measuring or formatting.
+            // Store scalars, not a closure sharing append()'s large rows context.
+            if (!this.open) this.summaryStyle = { breakdown, failed, compact, badge: this.summaryBadge.current!.badge, tokens: totalTokens };
         }
         const callInset = width > 5 ? '   ' : '';
         const append = (component: Component, body: string[], toggle?: Tool, indent = 0) => {
@@ -337,6 +382,8 @@ export function patchToolFolding(): void {
         }
     };
     prototype.updateDisplay = function (): void {
+        revisions.set(this, (revisions.get(this) ?? 0) + 1);
+        tokenCache.delete(this);
         const value = state(this);
         const expanded = value.expanded;
         // First click uses the native compact renderer; second click (or Ctrl+O) requests full output.
