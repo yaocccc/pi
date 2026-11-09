@@ -1,6 +1,7 @@
 import { createEditToolDefinition, ToolExecutionComponent, type Theme } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
 import { padToWidth } from './utils.ts';
+import { releaseToolCache } from './render-cache.ts';
 import { colorToolTokens, estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
 import { getWorkerRenderSnapshot } from '../worker/presentation.ts';
 import type { WorkerUiDetails, WorkerUiStatus, WorkerUsage } from '../worker/types.ts';
@@ -196,9 +197,10 @@ export class ToolActivityGroup implements Component {
             const summaryInset = width > 0 ? ' ' : '';
             lines.push(summaryInset + withBadge(this.summaryBadge, content, totalTokens, width - summaryInset.length, 24, suffix, true));
         }
+        const callInset = width > 5 ? '   ' : '';
         const append = (component: Component, body: string[], toggle?: Tool, indent = 0) => {
             this.hits.push({ start: lines.length, height: body.length, component, toggle, indent, width: width - indent });
-            const gutter = fg('borderMuted', '│ ');
+            const gutter = ' '.repeat(indent);
             lines.push(...(indent ? body.map((line) => gutter + line) : body));
         };
         // A running Worker exposes every task even while its group is folded.
@@ -206,34 +208,31 @@ export class ToolActivityGroup implements Component {
         const shown = this.open ? visible : visible.filter((tool) => state(tool).toolName === 'worker'
             && (running(tool) || state(tool).expanded));
         const shownSet = new Set(shown);
-        const last = shown.at(-1);
         for (const child of this.children) {
             if (!(child instanceof ToolExecutionComponent)) {
                 if (this.open || !this.header) append(child, child.render(width));
                 continue;
             }
-            if (!shownSet.has(child)) continue;
+            if (!shownSet.has(child)) { releaseToolCache(child); continue; }
             const value = state(child);
             const arrow = value.expanded ? '⌄' : '›';
             const preview = value.toolName === 'worker' ? workerTasks(child) : undefined;
             if (preview?.tasks.length) {
-                for (const [index, task] of preview.tasks.entries()) {
-                    const branch = fg('borderMuted', child === last && index === preview.tasks.length - 1 ? '╰' : '├');
+                for (const task of preview.tasks) {
                     const mode = clean(task.mode ?? `task ${task.index + 1}`);
                     const sessionIcon = task.sessionMode === 'fork' ? '' : task.sessionMode === 'new' ? '󰐖' : '';
                     const usage = task.usage ? workerUsageText(task.usage, task.status === 'running') : '';
                     const runtime = [task.resolvedPreset ?? task.requestedPreset, usage, uiDuration(task, preview.now)]
                         .filter(Boolean).map((part) => clean(part!)).join(' · ');
                     const objective = clean(sanitizeUiText(task.objective)).slice(0, 240);
-                    const row = `${branch} ${arrow} ${taskStatus(task.status)} ${mode}${sessionIcon ? fg('muted', ` ${sessionIcon}`) : ''}`
+                    const row = `${callInset}${arrow} ${taskStatus(task.status)} ${mode}${sessionIcon ? fg('muted', ` ${sessionIcon}`) : ''}`
                         + (runtime ? fg('muted', ` · ${runtime}`) : '') + (objective ? fg('dim', ` · ${objective}`) : '');
                     append(child, [fit(row, width)], child);
                 }
             } else {
                 const status = value.result?.isError ? fg('error', '✗') : running(child) ? fg('warning', '⋯') : fg('success', '✓');
-                const branch = fg('borderMuted', child === last ? '╰' : '├');
                 const preview = resultPreview(child);
-                const row = `${branch} ${arrow} ${status} ${callLabel(child)}${preview ? fg(value.result?.isError ? 'error' : 'dim', ` · ${preview}`) : ''}`;
+                const row = `${callInset}${arrow} ${status} ${callLabel(child)}${preview ? fg(value.result?.isError ? 'error' : 'dim', ` · ${preview}`) : ''}`;
                 let cache = this.previewBadges.get(child);
                 if (!cache) {
                     cache = {};
@@ -241,19 +240,20 @@ export class ToolActivityGroup implements Component {
                 }
                 append(child, [withBadge(cache, row, tokens(child), width, 80)], child);
             }
-            if (!value.expanded) continue;
-            // Worker frames align with the summary arrow, like ordinary output.
+            if (!value.expanded) { releaseToolCache(child); continue; }
+            // Framed output shares the call-row baseline; no extra tree rail.
             // Other self-renderers and graphics retain their native width.
-            const indent = width > 4 && (value.toolName === 'worker' || value.getRenderShell?.() !== 'self') && !value.imageComponents?.length ? 2 : 0;
+            const framed = value.toolName === 'worker' || hasNativeEditRenderer(child) || value.getRenderShell?.() !== 'self';
+            const indent = framed && !value.imageComponents?.length ? callInset.length : 0;
             const body = child.render(width - indent);
             const clipped = previews.has(child) && !value.imageComponents?.length && body.length > 12;
-            if (previews.has(child)) this.previewLayouts.set(child, { width: width - indent, lines: body.slice(), clipped });
+            if (previews.has(child)) this.previewLayouts.set(child, { width: width - indent, lines: clipped ? [] : body.slice(), clipped });
             const footer = clipped && /^╭─.*╮$/.test(stripTerminalSequences(body[0]!))
                 && /^╰─*╯$/.test(stripTerminalSequences(body.at(-1)!)) ? body.at(-1) : undefined;
             append(child, clipped ? body.slice(0, footer ? 11 : 12) : body, undefined, indent);
             // A retained bottom edge is display-only, not a hit target for a hidden output row.
-            if (footer) lines.push((indent ? fg('borderMuted', '│ ') : '') + footer);
-            if (clipped) lines.push((indent ? fg('borderMuted', '│ ') : '')
+            if (footer) lines.push(' '.repeat(indent) + footer);
+            if (clipped) lines.push(' '.repeat(indent)
                 + fit(fg('dim', '… 再次点击或 Ctrl+O 查看完整输出'), width - indent));
         }
         return lines;
@@ -330,6 +330,7 @@ export function patchToolFolding(): void {
         if (localToggle && expanded) previews.add(this);
         else previews.delete(this);
         original.call(this, expanded);
+        if (!expanded) releaseToolCache(this);
         if (!localToggle) {
             const group = membership.get(this);
             if (group) group.open = expanded;

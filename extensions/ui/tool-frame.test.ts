@@ -152,9 +152,9 @@ test('clipped preview retains its bottom edge without forwarding hidden-row clic
     const rows = plain(container), footer = rows.findIndex(line => /╰─+╯$/.test(line));
     assert.equal(footer, 13, 'summary + call row + twelve preview rows including both borders');
     assert.match(rows[footer + 1]!, /Ctrl\+O/);
-    click(container, 4, footer); click(container, 4, footer + 1);
+    click(container, 5, footer); click(container, 5, footer + 1);
     assert.equal(clicks, 0);
-    click(container, 4, 3);
+    click(container, 5, 3);
     assert.equal(clicks, 1);
     tool.setExpanded(true);
     assert.match(plain(container).join('\n'), /detail 29/);
@@ -192,8 +192,10 @@ test('built-in edit self shell frames native diff, error and narrow layouts with
     const container = new Container(); container.addChild(tool);
     click(container, 1, 0); click(container, 1, 1);
     const preview = plain(container);
-    assert.match(preview[13]!, /╰─+╯$/);
-    assert.match(preview[14]!, /Ctrl\+O/);
+    assert.match(preview[1]!, /^ {3}⌄/);
+    assert.match(preview[2]!, /^ {3}╭/);
+    assert.match(preview[13]!, /^ {3}╰─+╯$/);
+    assert.match(preview[14]!, /^ {3}….*Ctrl\+O/);
     tool.setExpanded(true);
     assert.match(plain(container, 80).join('\n'), /30 new 中文/);
 });
@@ -241,7 +243,7 @@ test('tool frames use subdued blue gray without changing assistant or user borde
     assert.ok(frameBorder('│', 'left', 'user').startsWith('\x1b[38;2;98;204;170m'));
 });
 
-test('expanded Worker frame aligns with its summary arrow and preserves inner padding and mouse layout', () => {
+test('expanded Worker frame aligns with call rows without tree rails, preserving padding and mouse layout', () => {
     for (const outputPad of [0, 1, 3]) {
         const events: TuiMouseEvent[] = [];
         const tool = make({ renderShell: 'self', renderCall: () => ({
@@ -252,18 +254,20 @@ test('expanded Worker frame aligns with its summary arrow and preserves inner pa
         tool.setExpanded(true);
         const width = 60;
         const rows = plain(container, width);
-        const summary = rows.find(line => /[├╰] ⌄/.test(line))!;
+        const summary = rows.find(line => /^ {3}⌄/.test(line))!;
         const frame = rows.find(line => line.includes('╭'))!;
-        assert.equal(frame.indexOf('╭'), summary.indexOf('⌄'));
+        assert.equal(summary.indexOf('⌄'), 3);
+        assert.equal(frame.indexOf('╭'), 3);
         const bodyRow = rows.findIndex(line => line.includes('hit target'));
         const contentX = rows[bodyRow]!.indexOf('hit target');
         assert.equal(contentX - frame.indexOf('╭'), outputPad + 1);
         click(container, contentX + 1, bodyRow, width);
         assert.equal(events[0]!.x, 1);
         assert.equal(events[0]!.y, 0);
-        assert.equal(events[0]!.width, width - 2 - 2 * (outputPad + 1));
+        assert.equal(events[0]!.width, width - 3 - 2 * (outputPad + 1));
         click(container, 0, bodyRow, width);
-        click(container, 2, bodyRow, width);
+        click(container, 1, bodyRow, width);
+        click(container, 3, bodyRow, width);
         assert.equal(events.length, 1, 'outer gutter and frame edge do not reach content');
         for (let narrow = 0; narrow <= 16; narrow++) {
             assert.ok(container.render(narrow).every(line => visibleWidth(line) <= narrow));

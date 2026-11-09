@@ -403,7 +403,7 @@ test('streaming retains only the latest frame snapshot, not every historical ver
     for (let i = 0; i < 100; i++) {
         content[0] = `chunk ${i}`;
         const result = frame.render(100);
-        const cached = (frame as any).cached;
+        const cached = (frame as any).cache.get();
         assert.deepEqual(cached.content, content);
         assert.equal(cached.content.length, 1);
         assert.deepEqual(cached.lines, result);
@@ -411,7 +411,7 @@ test('streaming retains only the latest frame snapshot, not every historical ver
         assert.notEqual(cached.lines, result);
     }
     frame.invalidate();
-    assert.equal((frame as any).cached, undefined);
+    assert.equal((frame as any).cache.get(), undefined);
 });
 
 test('aborted, incomplete or unidentifiable conclusions never create persisted round boundaries', () => {

@@ -1,6 +1,6 @@
 import { ToolExecutionComponent } from '@earendil-works/pi-coding-agent';
-import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { padToWidth, replaceVisibleContent, toolFrameTop } from './utils.ts';
+import { stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui';
+import { measureWidth as visibleWidth, padToWidth, replaceVisibleContent, toolFrameTop } from './utils.ts';
 
 import { colorToolTokens, estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
 export { estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
@@ -13,7 +13,13 @@ export const patchToolContext = (): void => {
     const prototype = ToolExecutionComponent.prototype as typeof ToolExecutionComponent.prototype & { [PATCH]?: boolean };
     if (prototype[PATCH]) return;
     const original = prototype.render;
-    const cache = new WeakMap<object, { args: unknown; result: ToolResult; tokens: number; label: string }>();
+    const cache = new WeakMap<object, { args: unknown; result: ToolResult; tokens: number; label: string;
+        header?: { input: string; theme: unknown; output: string } }>();
+    const updateDisplay = (prototype as any).updateDisplay;
+    (prototype as any).updateDisplay = function () {
+        cache.delete(this);
+        updateDisplay.call(this);
+    };
     prototype.render = function (width: number): string[] {
         const lines = original.call(this, width);
         const tool = this as unknown as ToolState;
@@ -27,9 +33,13 @@ export const patchToolContext = (): void => {
         const theme = (globalThis as any)[THEME];
         const framed = /^╭─.*╮$/.test(stripTerminalSequences(lines[0]!));
         if (framed) {
-            const tokens = theme ? colorToolTokens(entry.tokens, entry.label, theme) : entry.label;
+            if (entry.header?.input !== lines[0] || entry.header?.theme !== theme) {
+                const tokens = theme ? colorToolTokens(entry.tokens, entry.label, theme) : entry.label;
+                entry.header = { input: lines[0]!, theme, output: replaceVisibleContent(lines[0]!,
+                    toolFrameTop(`${tool.toolName ?? '工具'} ${tokens}`, visibleWidth(lines[0]!))) };
+            }
             const output = [...lines];
-            output[0] = replaceVisibleContent(lines[0]!, toolFrameTop(`${tool.toolName ?? '工具'} ${tokens}`, visibleWidth(lines[0]!)));
+            output[0] = entry.header.output;
             return output;
         }
         // Unframed custom shells retain the native inline badge; hidden/blank rows stay untouched.

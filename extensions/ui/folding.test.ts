@@ -335,15 +335,15 @@ test('tool borders consume only left clicks without cycling; call rows cycle and
     let lines = plain(container);
     const header = lines.findIndex(line => line.includes('╭─ read'));
     assert.ok(header > 1);
-    const wheel = click(container, header, 80, { x: 2, type: 'scroll', button: 'wheel-down' } as any);
+    const wheel = click(container, header, 80, { x: 3, type: 'scroll', button: 'wheel-down' } as any);
     assert.equal(wheel, undefined);
     assert.match(plain(container).join('\n'), /read preview/);
-    assert.equal(click(container, header, 80, { x: 2 })?.handled, true);
+    assert.equal(click(container, header, 80, { x: 3 })?.handled, true);
     assert.match(plain(container).join('\n'), /read preview/);
     click(container, 1);
     assert.match(plain(container).join('\n'), /read FULL OUTPUT/);
     lines = plain(container);
-    assert.equal(click(container, lines.findIndex(line => line.includes('╭─ read')), 80, { x: 2 })?.handled, true);
+    assert.equal(click(container, lines.findIndex(line => line.includes('╭─ read')), 80, { x: 3 })?.handled, true);
     assert.match(plain(container).join('\n'), /read FULL OUTPUT/);
     click(container, 1);
     assert.equal(plain(container).length, 2);
@@ -478,8 +478,8 @@ test('new tools enter the summary from their first frame without flashing a nati
     click(container, 0);
     let lines = plain(container);
     assert.equal(lines.length, 6, 'five compact call rows, not five native cards');
-    assert.match(lines[1]!, /^├ › ✓ read/);
-    assert.match(lines[5]!, /^╰ › ✓ worker/);
+    assert.match(lines[1]!, /^ {3}› ✓ read/);
+    assert.match(lines[5]!, /^ {3}› ✓ worker/);
     const row = lines.findIndex((line) => line.includes('› ✓ read'));
     click(container, row);
     assert.match(plain(container).join('\n'), /read preview/);
@@ -506,7 +506,7 @@ test('folded groups show compact active Worker rows, then hide them on completio
     let lines = plain(container);
     assert.equal(lines.length, 2);
     assert.match(lines[0]!, /^ › 3 calls .*worker×2/);
-    assert.match(lines[1]!, /^╰ › ○ task 1 · inspect the current UI/);
+    assert.match(lines[1]!, /^ {3}› ○ task 1 · inspect the current UI/);
     assert.doesNotMatch(lines.join('\n'), /[▄▀]|FULL OUTPUT|read.ts/);
     live.updateResult({ content: [{ type: 'text', text: 'working' }], isError: false }, true);
     click(container, 1);
@@ -522,10 +522,10 @@ test('folded groups show compact active Worker rows, then hide them on completio
     done.updateResult({ content: [{ type: 'text', text: 'working' }], isError: false }, true);
     lines = plain(container);
     assert.equal(lines.length, 3);
-    assert.match(lines[1]!, /^├ › ○ task 1/);
-    assert.match(lines[2]!, /^╰ › ○ task 1/);
+    assert.match(lines[1]!, /^ {3}› ○ task 1/);
+    assert.match(lines[2]!, /^ {3}› ○ task 1/);
     click(container, 0);
-    assert.equal(plain(container).filter((line) => /[├╰] › ○ task 1/.test(line)).length, 2, 'no duplicate task rows when expanded');
+    assert.equal(plain(container).filter((line) => /^ {3}› ○ task 1/.test(line)).length, 2, 'no duplicate task rows when expanded');
     click(container, 0);
     for (const width of [1, 2, 3, 12, 80]) {
         assert.ok(container.render(width).every((line) => visibleWidth(line) <= width));
@@ -564,11 +564,11 @@ test('every Worker task shows its own live metadata before its objective', (t) =
     refresh.resolve(details, { state: (component as any).rendererState, invalidate() {} });
     lines = plain(container, 160);
     assert.equal(lines.length, 6);
-    assert.match(lines[1]!, /^├ › ⋯ scout 󰐖 · fast · Turn 3 · ↑9k ↓284 · 8\.6s · objective 1/);
-    assert.match(lines[2]!, /^├ › ○ review  · fast · objective 2/);
-    assert.match(lines[3]!, /^├ › ✓ scout 󰐖 · fast · Turn 3 · ↑9k ↓284 · 2\.0s · objective 3/);
-    assert.match(lines[4]!, /^├ › ✗ scout/);
-    assert.match(lines[5]!, /^╰ › ! scout/);
+    assert.match(lines[1]!, /^ {3}› ⋯ scout 󰐖 · fast · Turn 3 · ↑9k ↓284 · 8\.6s · objective 1/);
+    assert.match(lines[2]!, /^ {3}› ○ review  · fast · objective 2/);
+    assert.match(lines[3]!, /^ {3}› ✓ scout 󰐖 · fast · Turn 3 · ↑9k ↓284 · 2\.0s · objective 3/);
+    assert.match(lines[4]!, /^ {3}› ✗ scout/);
+    assert.match(lines[5]!, /^ {3}› ! scout/);
     assert.doesNotMatch(lines.join('\n'), /FULL OUTPUT|[▄▀]/);
     latest = { ...details, snapshotAt: 10600, tasks: details.tasks.map((task) => task.index === 0
         ? { ...task, usage: { ...task.usage, input: 10000, output: 500, turns: 4 } } : task) };
@@ -621,7 +621,7 @@ test('summary tokens follow the call breakdown without shifting right on wider t
     for (const width of [40, 80, 120]) assert.equal(plain(container, width)[0]!.trimEnd(), summary);
 });
 
-test('tree detail indentation preserves mouse coordinates and summary badges fit the terminal', (t) => {
+test('aligned details have no tree rail, preserve mouse coordinates and fit the terminal', (t) => {
     const component = tool();
     component.setExpanded(true);
     const container = new Container();
@@ -633,13 +633,14 @@ test('tree detail indentation preserves mouse coordinates and summary badges fit
     });
     const lines = plain(container);
     assert.match(lines[0]!, /read×1 ≈\d+ tok +$/);
-    assert.match(lines[1]!, /^╰ ⌄ ✓ read/);
-    assert.ok(lines[2]!.startsWith('│ '));
-    assert.equal(click(container, 2, 80, { x: 4, screenX: 4 })?.handled, true);
+    assert.match(lines[1]!, /^ {3}⌄ ✓ read/);
+    assert.match(lines[2]!, /^ {3}╭/);
+    assert.doesNotMatch(lines.join('\n'), /├|^ {1,2}│/m);
+    assert.equal(click(container, 2, 80, { x: 5, screenX: 5 })?.handled, true);
     assert.equal(seen[0]!.x, 2);
     assert.equal(seen[0]!.y, 0);
-    assert.equal(seen[0]!.width, 78);
-    assert.equal(click(container, 2, 80, { x: 0 }), undefined, 'the rail itself is not native tool content');
+    assert.equal(seen[0]!.width, 77);
+    assert.equal(click(container, 2, 80, { x: 0 }), undefined, 'the indentation is not native tool content');
     for (const width of [5, 12, 64, 80]) {
         assert.ok(container.render(width).every((line) => visibleWidth(line) <= width));
     }

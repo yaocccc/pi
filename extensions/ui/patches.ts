@@ -1,9 +1,13 @@
-import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent } from '@earendil-works/pi-coding-agent';
-import { Box, stripTerminalSequences, visibleWidth, type Component, type Text, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
+import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent,
+    createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition,
+    createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition } from '@earendil-works/pi-coding-agent';
+import { Box, stripTerminalSequences, type Component, type Text, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
 import { hasNativeEditRenderer, patchToolFolding, ToolActivityGroup } from './folding.ts';
 import { estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
 import { RoundFrame, layoutRounds } from './rounds.ts';
-import { frameBorder as border, padToWidth, replaceVisibleContent, toolFrameTop } from './utils.ts';
+import { frameBorder as border, measureWidth as visibleWidth, padToWidth, replaceVisibleContent, toolFrameTop } from './utils.ts';
+
+import { estimateLineBytes, onToolCacheRelease, RenderCache, withRenderCachePass } from './render-cache.ts';
 
 const USER_MESSAGE_FRAME_PATCH = Symbol.for('pi.extensions.ui.user-message-frame.v4');
 const USER_MESSAGE_RENDER = Symbol.for('pi.extensions.ui.user-message-native-render');
@@ -60,6 +64,10 @@ type ToolDisplayState = {
     args?: unknown;
     result?: Parameters<typeof estimateToolTokens>[1];
     isPartial?: boolean;
+    expanded?: boolean;
+    showImages?: boolean;
+    imageComponents?: unknown[];
+    toolDefinition?: { renderCall?: unknown; renderResult?: unknown };
     outputPad?: number;
     getRenderShell?(): string;
     selfRenderContainer?: Component;
@@ -71,6 +79,7 @@ type ToolDisplayState = {
 type ToolExecutionPrototype = {
     render(width: number): string[];
     updateDisplay(): void;
+    invalidate(): void;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     [key: symbol]: unknown;
 };
@@ -84,6 +93,15 @@ const removeLeadingBlankLine = (lines: string[]): string[] => lines.length > 0 &
     ? lines.slice(1)
     : lines;
 
+const nativeDefinitions = [createBashToolDefinition, createEditToolDefinition, createFindToolDefinition,
+    createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition]
+    .map(create => create(process.cwd()));
+const stableNativeTool = (tool: ToolDisplayState): boolean => Boolean(tool.result && !tool.isPartial
+    && !tool.imageComponents?.length && tool.result.content.every(part => part.type === 'text')
+    && (!tool.toolDefinition || nativeDefinitions.some(native => native.renderCall === tool.toolDefinition!.renderCall
+        && native.renderResult === tool.toolDefinition!.renderResult)));
+const shellCaches = new WeakMap<Component, RenderCache<unknown>>();
+
 // Style only tool-owned shells, leaving global Box/Text renderers and native children intact.
 const frameToolShell = (component: Box | Text, name: string, titleWidth: () => number): void => {
     const shell = component as unknown as { paddingX: number; paddingY: number; bgFn?: (line: string) => string; customBgFn?: (line: string) => string; [TOOL_SHELL_FRAME]?: boolean };
@@ -93,9 +111,10 @@ const frameToolShell = (component: Box | Text, name: string, titleWidth: () => n
     const mouse = (component as Component).handleMouse;
     let hiddenTitleRows = 0;
     let frameWidth = 0;
-    let cached: { width: number; titleWidth: number; theme: unknown; input: string[]; output: string[] } | undefined;
+    const cache = new RenderCache<{ width: number; titleWidth: number; theme: unknown; input: string[]; output: string[] }>();
+    shellCaches.set(component, cache);
     const invalidate = component.invalidate;
-    component.invalidate = () => { cached = undefined; invalidate.call(component); };
+    component.invalidate = () => { cache.clear(); invalidate.call(component); };
     component.invalidate();
     const withLayout = <T>(width: number, action: () => T): T => {
         const { paddingX, paddingY } = shell;
@@ -112,13 +131,14 @@ const frameToolShell = (component: Box | Text, name: string, titleWidth: () => n
         }
     };
     component.render = (width) => {
-        if (width <= 0) { cached = undefined; hiddenTitleRows = frameWidth = 0; return []; }
+        if (width <= 0) { cache.clear(); hiddenTitleRows = frameWidth = 0; return []; }
         return withLayout(width, () => {
             // Always render native children to refresh streaming content and hit layouts.
             // Only the expensive measuring/framing pass is cached, one snapshot per shell.
             const input = render.call(component, width);
             const labelWidth = titleWidth();
             const theme = (globalThis as any)[RUNTIME_THEME_KEY];
+            const cached = cache.get();
             if (cached && cached.width === width && cached.titleWidth === labelWidth && cached.theme === theme
                 && cached.input.length === input.length && input.every((line, index) => line === cached!.input[index])) {
                 return cached.output.slice();
@@ -126,7 +146,8 @@ const frameToolShell = (component: Box | Text, name: string, titleWidth: () => n
             hiddenTitleRows = 0;
             let lines = input;
             const remember = (output: string[]) => {
-                cached = { width, titleWidth: labelWidth, theme, input: input.slice(), output };
+                cache.set({ width, titleWidth: labelWidth, theme, input: input.slice(), output },
+                    estimateLineBytes(input) + estimateLineBytes(output));
                 return output.slice(); // callers may splice/replace rows
             };
             if (width < 3) return remember(lines.map(line => padToWidth(line, width)));
@@ -189,10 +210,25 @@ export const patchToolDisplay = (): void => {
     const workerShells = new WeakMap<object, Box>();
     const selfShells = new WeakMap<object, { content: Component; padding: number; box: Box }>();
     const tokenCache = new WeakMap<object, { args: unknown; result: ToolDisplayState['result']; width: number }>();
+    type Snapshot = { width: number; theme: unknown; args: unknown; result: ToolDisplayState['result'];
+        expanded: boolean | undefined; showImages: boolean | undefined; lines: string[] };
+    const snapshots = new WeakMap<object, RenderCache<Snapshot>>();
+    const clearShells = (tool: ToolDisplayState) => {
+        for (const shell of [tool.contentBox, tool.contentText, selfShells.get(tool)?.box]) {
+            if (shell) shellCaches.get(shell)?.clear();
+        }
+    };
+    const clearSnapshot = (tool: ToolDisplayState) => { snapshots.get(tool)?.clear(); clearShells(tool); };
     const updateDisplay = prototype.updateDisplay;
     prototype.updateDisplay = function () {
+        clearSnapshot(this as ToolDisplayState);
         tokenCache.delete(this); // also cover updates that reuse the args/result object
         updateDisplay.call(this);
+    };
+    const invalidate = prototype.invalidate;
+    prototype.invalidate = function () {
+        clearSnapshot(this as ToolDisplayState);
+        invalidate.call(this);
     };
     prototype.render = function patchedToolRender(this: ToolDisplayState, width: number): string[] {
         offsets.delete(this);
@@ -244,6 +280,42 @@ export const patchToolDisplay = (): void => {
         }
         return lines;
     };
+    const renderFramed = prototype.render;
+    prototype.render = function (this: ToolDisplayState, width: number): string[] {
+        let cache = snapshots.get(this);
+        if (!cache) {
+            cache = new RenderCache<Snapshot>();
+            snapshots.set(this, cache);
+        }
+        onToolCacheRelease(this, () => {
+            clearSnapshot(this);
+            this.contentBox?.invalidate();
+            this.contentText?.invalidate();
+            this.selfRenderContainer?.invalidate();
+            selfShells.delete(this);
+            workerShells.delete(this);
+            offsets.delete(this);
+        });
+        const stable = width > 0 && stableNativeTool(this);
+        const theme = (globalThis as any)[RUNTIME_THEME_KEY];
+        const cached = stable ? cache.get() : undefined;
+        // Only completed, text-only native renderers are immutable between their
+        // updateDisplay/invalidate calls. Unknown renderers and images stay live.
+        if (cached && cached.width === width && cached.theme === theme && cached.args === this.args
+            && cached.result === this.result && cached.expanded === this.expanded && cached.showImages === this.showImages) {
+            if (cached.lines.length) renderedActivitySinceUserMessage = compactToolActivity.rendered = true;
+            return cached.lines.slice();
+        }
+        cache.clear();
+        const lines = renderFramed.call(this, width);
+        if (stable) {
+            // The full-tool snapshot replaces (rather than duplicates) shell snapshots.
+            clearShells(this);
+            cache.set({ width, theme, args: this.args, result: this.result, expanded: this.expanded,
+                showImages: this.showImages, lines: lines.slice() }, estimateLineBytes(lines));
+        }
+        return lines;
+    };
     prototype.handleMouse = function (event) {
         const shell = workerShells.get(this);
         if (shell) return shell.handleMouse(event);
@@ -274,6 +346,7 @@ export const patchMergeConsecutiveTools = (): void => {
         const hasAssistant = this.children.some((child) => child instanceof AssistantMessageComponent);
         if (!hasTool && !hasUserMessage && !hasAssistant) return originalRender.call(this, width);
 
+        return withRenderCachePass(() => {
         const rendered = layoutRounds(this.children).map((child) => {
             const lines = child.render(width);
             if ((child instanceof ToolActivityGroup || child instanceof RoundFrame) && lines.length) {
@@ -324,6 +397,7 @@ export const patchMergeConsecutiveTools = (): void => {
         // use the actual drawn components, not the original transcript children.
         this.mouseLayout = { width, children: mouseChildren };
         return lines;
+        });
     };
     prototype[MERGE_CONSECUTIVE_TOOLS_PATCH] = true;
 };

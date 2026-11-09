@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent, type SessionEntry } from '@earendil-works/pi-coding-agent';
-import { Container, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
+import { Container, stripTerminalSequences, truncateToWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
 import { groupToolComponents } from './folding.ts';
-import { frameBorder as border, padToWidth, replaceVisibleContent } from './utils.ts';
+import { estimateLineBytes, RenderCache } from './render-cache.ts';
+import { frameBorder as border, measureWidth as visibleWidth, padToWidth, replaceVisibleContent } from './utils.ts';
 
 type Message = Parameters<AssistantMessageComponent['updateContent']>[0];
 type AssistantOptions = ConstructorParameters<typeof AssistantMessageComponent>;
@@ -138,7 +139,7 @@ export class RoundFrame implements Component {
     private inset = 0;
     private frameWidth = 0;
     private nativeWidth = 0;
-    private cached?: { width: number; label: string; content: string[]; lines: string[] };
+    private cache = new RenderCache<{ width: number; label: string; content: string[]; lines: string[] }>();
 
     update(label: string, children: Component[]): void {
         this.label = stripTerminalSequences(label).replace(/\s+/g, ' ');
@@ -147,7 +148,7 @@ export class RoundFrame implements Component {
 
     render(width: number): string[] {
         if (width <= 0) {
-            this.cached = undefined;
+            this.cache.clear();
             this.contentHeight = this.contentOffset = this.frameWidth = 0;
             return [];
         }
@@ -156,7 +157,7 @@ export class RoundFrame implements Component {
         this.inset = width >= 8 ? 1 : 0;
         this.nativeWidth = Math.max(3, width - this.inset * 2);
         const content = this.body.render(this.nativeWidth);
-        const cached = this.cached;
+        const cached = this.cache.get();
         // The frame depends only on width, label and exact rendered strings (including
         // theme ANSI, semantic markers and image protocols), not child identities.
         if (cached && cached.width === width && cached.label === this.label
@@ -164,7 +165,8 @@ export class RoundFrame implements Component {
             && content.every((line, index) => line === cached.content[index])) return cached.lines.slice();
         const lines = this.renderFrame(width, content);
         // Keep only the latest snapshot; streaming updates must not accumulate versions.
-        this.cached = { width, label: this.label, content: content.slice(), lines };
+        this.cache.set({ width, label: this.label, content: content.slice(), lines },
+            estimateLineBytes(content) + estimateLineBytes(lines));
         // Parent layout code may splice/replace rows; never expose the cached array.
         return lines.slice();
     }
@@ -202,7 +204,7 @@ export class RoundFrame implements Component {
     }
 
     invalidate(): void {
-        this.cached = undefined;
+        this.cache.clear();
         this.body.invalidate();
     }
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {

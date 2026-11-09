@@ -13,6 +13,7 @@ import type { TokenUsage } from './types.ts';
 import { calculateTps, combineTokenUsage, WorkerUsageTracker } from './worker-usage.ts';
 import { applyWorkingMessage, clearWorkingMessage, getWorkingMessageLine, setWorkingMessageActive, WORKING_FRAME_INTERVAL_MS } from './working-message.ts';
 import { recordRoundSummary, restoreRoundSummaries, ROUND_SUMMARY_ENTRY } from './rounds.ts';
+import { renderCacheBudget } from './render-cache.ts';
 
 export { TextAreaEditor } from './editor.ts';
 export { NoCostFooter } from './footer.ts';
@@ -61,6 +62,7 @@ export default function ui(pi: ExtensionAPI) {
     pi.events.on(WORKER_USAGE_EVENT, (data) => workerUsage.update(data));
 
     const restoreHistory = (ctx: ExtensionContext) => {
+        renderCacheBudget.clear();
         completedLabel = undefined;
         lastAssistant = undefined;
         clearWorkingMessage();
@@ -154,6 +156,7 @@ export default function ui(pi: ExtensionAPI) {
     });
 
     pi.on('session_shutdown', () => {
+        renderCacheBudget.clear();
         completedLabel = undefined;
         lastAssistant = undefined;
         clearWorkingMessage();
