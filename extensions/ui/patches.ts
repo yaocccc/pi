@@ -1,6 +1,6 @@
 import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent } from '@earendil-works/pi-coding-agent';
 import { Box, stripTerminalSequences, visibleWidth, type Component, type Text, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
-import { patchToolFolding, ToolActivityGroup } from './folding.ts';
+import { hasNativeEditRenderer, patchToolFolding, ToolActivityGroup } from './folding.ts';
 import { estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
 import { RoundFrame, layoutRounds } from './rounds.ts';
 import { frameBorder as border, padToWidth, replaceVisibleContent, toolFrameTop } from './utils.ts';
@@ -70,6 +70,7 @@ type ToolDisplayState = {
 
 type ToolExecutionPrototype = {
     render(width: number): string[];
+    updateDisplay(): void;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     [key: symbol]: unknown;
 };
@@ -92,6 +93,9 @@ const frameToolShell = (component: Box | Text, name: string, titleWidth: () => n
     const mouse = (component as Component).handleMouse;
     let hiddenTitleRows = 0;
     let frameWidth = 0;
+    let cached: { width: number; titleWidth: number; theme: unknown; input: string[]; output: string[] } | undefined;
+    const invalidate = component.invalidate;
+    component.invalidate = () => { cached = undefined; invalidate.call(component); };
     component.invalidate();
     const withLayout = <T>(width: number, action: () => T): T => {
         const { paddingX, paddingY } = shell;
@@ -108,11 +112,24 @@ const frameToolShell = (component: Box | Text, name: string, titleWidth: () => n
         }
     };
     component.render = (width) => {
-        hiddenTitleRows = 0;
-        if (width <= 0) return [];
+        if (width <= 0) { cached = undefined; hiddenTitleRows = frameWidth = 0; return []; }
         return withLayout(width, () => {
-            let lines = render.call(component, width);
-            if (width < 3) return lines.map(line => padToWidth(line, width));
+            // Always render native children to refresh streaming content and hit layouts.
+            // Only the expensive measuring/framing pass is cached, one snapshot per shell.
+            const input = render.call(component, width);
+            const labelWidth = titleWidth();
+            const theme = (globalThis as any)[RUNTIME_THEME_KEY];
+            if (cached && cached.width === width && cached.titleWidth === labelWidth && cached.theme === theme
+                && cached.input.length === input.length && input.every((line, index) => line === cached!.input[index])) {
+                return cached.output.slice();
+            }
+            hiddenTitleRows = 0;
+            let lines = input;
+            const remember = (output: string[]) => {
+                cached = { width, titleWidth: labelWidth, theme, input: input.slice(), output };
+                return output.slice(); // callers may splice/replace rows
+            };
+            if (width < 3) return remember(lines.map(line => padToWidth(line, width)));
             // Move only a standalone duplicate heading. Inline arguments/status and semantic markers remain native.
             if (width > 6 && lines.length >= 3 && stripTerminalSequences(lines[1]!).trim() === name && !/\x1b\]133;/.test(lines[1]!)) {
                 hiddenTitleRows = 1;
@@ -121,14 +138,14 @@ const frameToolShell = (component: Box | Text, name: string, titleWidth: () => n
             // Keep the native wrapping/layout width, shrinking only unused right space.
             const contentWidth = lines.slice(1, -1).reduce((max, line) => Math.max(max, visibleWidth(stripTerminalSequences(line).trimEnd())), 0);
             frameWidth = lines.some(line => /\x1b(?:_G|\]1337;File=|P[^\x1b]*q)/.test(line)) ? width
-                : Math.min(width, Math.max(titleWidth() + 6, contentWidth + shell.paddingX));
-            return lines.map((line, index) => {
+                : Math.min(width, Math.max(labelWidth + 6, contentWidth + shell.paddingX));
+            return remember(lines.map((line, index) => {
                 if (index === 0) return toolFrameTop(name, frameWidth);
                 if (index === lines.length - 1) return border('╰', 'bottomLeft', 'tool') + border('─'.repeat(frameWidth - 2), 'bottom', 'tool') + border('╯', 'bottomRight', 'tool');
                 const content = line.slice(1); // Replace only the border cell; retain outputPad inside it.
                 const markers = replaceVisibleContent(content, '');
                 return markers + border('│', 'left', 'tool') + padToWidth(content.slice(markers.length), frameWidth - 2) + border('│', 'right', 'tool');
-            });
+            }));
         });
     };
     (component as Component).handleMouse = (event) => withLayout(event.width, () => {
@@ -170,26 +187,48 @@ export const patchToolDisplay = (): void => {
     const originalMouse = prototype.handleMouse;
     const offsets = new WeakMap<object, number>();
     const workerShells = new WeakMap<object, Box>();
+    const selfShells = new WeakMap<object, { content: Component; padding: number; box: Box }>();
+    const tokenCache = new WeakMap<object, { args: unknown; result: ToolDisplayState['result']; width: number }>();
+    const updateDisplay = prototype.updateDisplay;
+    prototype.updateDisplay = function () {
+        tokenCache.delete(this); // also cover updates that reuse the args/result object
+        updateDisplay.call(this);
+    };
     prototype.render = function patchedToolRender(this: ToolDisplayState, width: number): string[] {
         offsets.delete(this);
         workerShells.delete(this);
         if (width <= 0) return [];
         const name = typeof this.toolName === 'string' ? this.toolName : '工具';
-        const titleWidth = () => visibleWidth(name) + (this.result && !this.isPartial
-            ? 1 + visibleWidth(formatToolTokens(estimateToolTokens(this.args, this.result))) : 0);
+        const titleWidth = () => {
+            if (!this.result || this.isPartial) return visibleWidth(name);
+            let cached = tokenCache.get(this);
+            if (!cached || cached.args !== this.args || cached.result !== this.result) {
+                cached = { args: this.args, result: this.result,
+                    width: 1 + visibleWidth(formatToolTokens(estimateToolTokens(this.args, this.result))) };
+                tokenCache.set(this, cached);
+            }
+            return visibleWidth(name) + cached.width;
+        };
         if (this.contentBox) frameToolShell(this.contentBox, name, titleWidth);
         if (this.contentText) frameToolShell(this.contentText, name, titleWidth);
         // Edit's native call Box must not paint a second shell inside our frame.
-        const editShell = this.toolName === 'edit' && this.callRendererComponent;
+        const editShell = hasNativeEditRenderer(this as unknown as ToolExecutionComponent) && this.callRendererComponent;
         const CoreBoxType = this.contentBox?.constructor as typeof Box | undefined;
         const isNativeEditBox = this.getRenderShell?.() === 'self' && editShell && CoreBoxType && editShell instanceof CoreBoxType;
         if (isNativeEditBox) flattenEditShell(editShell);
         // Self-rendered Worker controls stay hidden. Only visible cards get a frame.
         if ((this.toolName === 'worker' || isNativeEditBox) && this.getRenderShell?.() === 'self' && this.selfRenderContainer) {
             const CoreBox = this.contentBox?.constructor as typeof Box | undefined;
-            const shell = new (CoreBox ?? Box)(this.outputPad ?? 1, 0);
-            frameToolShell(shell, name, titleWidth);
-            shell.addChild(this.selfRenderContainer);
+            const padding = this.outputPad ?? 1;
+            let cached = selfShells.get(this);
+            if (!cached || cached.content !== this.selfRenderContainer || cached.padding !== padding) {
+                const box = new (CoreBox ?? Box)(padding, 0);
+                frameToolShell(box, name, titleWidth);
+                box.addChild(this.selfRenderContainer);
+                cached = { content: this.selfRenderContainer, padding, box };
+                selfShells.set(this, cached);
+            }
+            const shell = cached.box;
             const lines = shell.render(width);
             if (!lines.length) return [];
             workerShells.set(this, shell);
@@ -381,11 +420,12 @@ export const patchUserMessageFrame = (): void => {
     const originalRender = (prototype[USER_MESSAGE_RENDER] ??= prototype.render) as UserMessageComponent['render'];
     const originalMouse = (prototype[USER_MESSAGE_MOUSE] ??= prototype.handleMouse) as UserMessageComponent['handleMouse'];
     const layouts = new WeakMap<UserMessageComponent, { left: number; inset: number; width: number; height: number }>();
+    const frames = new WeakMap<UserMessageComponent, { width: number; padding: number; input: string[]; output: string[] }>();
 
     prototype.render = function (width: number): string[] {
         renderedActivitySinceUserMessage = false;
         compactToolActivity.rendered = false;
-        if (width <= 0) { layouts.delete(this); return []; }
+        if (width <= 0) { layouts.delete(this); frames.delete(this); return []; }
         // Change only the native Markdown's display style, never the stored message.
         for (const child of this.children) {
             const markdown = child as Component & { defaultTextStyle?: { bgColor?: unknown; [key: string]: unknown } };
@@ -398,8 +438,13 @@ export const patchUserMessageFrame = (): void => {
         const maximum = inset ? Math.max(8, Math.floor(width * 0.8)) : width;
         const nativeWidth = Math.max(3, maximum - inset * 2);
         const lines = originalRender.call(this, nativeWidth);
-        const bodyWidth = lines.slice(1, -1).reduce((max, line) => Math.max(max, visibleWidth(stripTerminalSequences(line).trimEnd())), 0);
         const padding = (this as unknown as { outputPad: number }).outputPad;
+        const cached = frames.get(this);
+        // Native rendering still refreshes content and mouse layout. Reuse only the frame work.
+        if (cached?.width === width && cached.padding === padding && cached.input.length === lines.length
+            && lines.every((line, index) => line === cached.input[index])) return cached.output.slice();
+        frames.delete(this);
+        const bodyWidth = lines.slice(1, -1).reduce((max, line) => Math.max(max, visibleWidth(stripTerminalSequences(line).trimEnd())), 0);
         const frameWidth = inset ? Math.min(maximum, Math.max(8, bodyWidth + padding + 2)) : width;
         const left = width - frameWidth;
         layouts.set(this, { left, inset, width: nativeWidth, height: lines.length });
@@ -411,12 +456,14 @@ export const patchUserMessageFrame = (): void => {
         const footer = border('╰', 'bottomLeft', 'user') + border('─'.repeat(innerWidth), 'bottom', 'user') + border('╯', 'bottomRight', 'user');
         const leftSide = border('│', 'left', 'user');
         const rightSide = border('│', 'right', 'user');
-        return lines.map((line, index) => {
+        const output = lines.map((line, index) => {
             if (index === 0) return replaceVisibleContent(line, indent + header);
             if (index === lines.length - 1) return replaceVisibleContent(line, indent + footer);
             const markers = replaceVisibleContent(line, '');
             return markers + indent + leftSide + padToWidth(line.slice(markers.length), innerWidth) + rightSide;
         });
+        frames.set(this, { width, padding, input: lines.slice(), output });
+        return output.slice();
     };
     prototype.handleMouse = function (event) {
         const layout = layouts.get(this);

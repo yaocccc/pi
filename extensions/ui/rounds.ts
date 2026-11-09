@@ -81,23 +81,29 @@ function trimTrailingTextSpace(lines: string[]): string[] {
 class AssistantView implements Component {
     private display?: AssistantMessageComponent;
     private signature: unknown[] = [];
+    private configuration: unknown[] = [];
 
     constructor(private source: AssistantMessageComponent) {}
 
     render(width: number): string[] {
         const source = state(this.source);
         if (!source.lastMessage) return [];
-        const signature = [source.lastMessage, source.contentContainer.children, source.isStreaming,
-            source.hideThinkingBlock, source.markdownTheme, source.hiddenThinkingLabel, source.outputPad,
-            source.markdownTransformers,
+        const signature = [source.lastMessage, source.contentContainer.children, source.isStreaming];
+        const configuration = [source.hideThinkingBlock, source.markdownTheme, source.hiddenThinkingLabel,
+            source.outputPad, source.markdownTransformers,
             (globalThis as any)[Symbol.for('@earendil-works/pi-coding-agent:theme')]];
-        if (!this.display || signature.some((value, index) => value !== this.signature[index])) {
+        if (!this.display || configuration.some((value, index) => value !== this.configuration[index])) {
+            this.display = new AssistantMessageComponent(undefined, source.hideThinkingBlock, source.markdownTheme,
+                source.hiddenThinkingLabel, source.outputPad, source.markdownTransformers);
+            this.configuration = configuration;
+            this.signature = [];
+        }
+        if (signature.some((value, index) => value !== this.signature[index])) {
             const message: Message = {
                 ...source.lastMessage,
                 content: source.lastMessage.content.filter((part) => part.type !== 'thinking'),
             };
-            this.display = new AssistantMessageComponent(undefined, source.hideThinkingBlock, source.markdownTheme,
-                source.hiddenThinkingLabel, source.outputPad, source.markdownTransformers);
+            // Keep native Markdown block caches across streaming updates (Pi 1.5+).
             this.display.updateContent(message, source.isStreaming);
             this.signature = signature;
         }
@@ -132,6 +138,7 @@ export class RoundFrame implements Component {
     private inset = 0;
     private frameWidth = 0;
     private nativeWidth = 0;
+    private cached?: { width: number; label: string; content: string[]; lines: string[] };
 
     update(label: string, children: Component[]): void {
         this.label = stripTerminalSequences(label).replace(/\s+/g, ' ');
@@ -139,12 +146,32 @@ export class RoundFrame implements Component {
     }
 
     render(width: number): string[] {
-        this.contentHeight = this.contentOffset = this.frameWidth = 0;
-        if (width <= 0) return [];
-        // Render once at the available width; shrink only unused right padding afterward.
+        if (width <= 0) {
+            this.cached = undefined;
+            this.contentHeight = this.contentOffset = this.frameWidth = 0;
+            return [];
+        }
+        // Always render children: streaming/tool state and native mouse layouts may
+        // change even when the projected children or their visible text do not.
         this.inset = width >= 8 ? 1 : 0;
         this.nativeWidth = Math.max(3, width - this.inset * 2);
-        let content = trimTrailingTextSpace(this.body.render(this.nativeWidth));
+        const content = this.body.render(this.nativeWidth);
+        const cached = this.cached;
+        // The frame depends only on width, label and exact rendered strings (including
+        // theme ANSI, semantic markers and image protocols), not child identities.
+        if (cached && cached.width === width && cached.label === this.label
+            && cached.content.length === content.length
+            && content.every((line, index) => line === cached.content[index])) return cached.lines.slice();
+        const lines = this.renderFrame(width, content);
+        // Keep only the latest snapshot; streaming updates must not accumulate versions.
+        this.cached = { width, label: this.label, content: content.slice(), lines };
+        // Parent layout code may splice/replace rows; never expose the cached array.
+        return lines.slice();
+    }
+
+    private renderFrame(width: number, raw: string[]): string[] {
+        this.contentHeight = this.contentOffset = this.frameWidth = 0;
+        let content = trimTrailingTextSpace(raw);
         this.contentHeight = content.length;
         if (!content.length) return [];
         // Image renderers can reserve leading blank rows before placing the image.
@@ -174,7 +201,10 @@ export class RoundFrame implements Component {
         ];
     }
 
-    invalidate(): void { this.body.invalidate(); }
+    invalidate(): void {
+        this.cached = undefined;
+        this.body.invalidate();
+    }
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
         if (event.y < 1 || event.x < this.inset || event.x >= this.frameWidth - this.inset) return;
         const y = event.y - 1 + this.contentOffset;

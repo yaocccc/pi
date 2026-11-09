@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent } from '@earendil-works/pi-coding-agent';
+import { createEditToolDefinition, AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent } from '@earendil-works/pi-coding-agent';
 import { Container, Text, stripTerminalSequences, visibleWidth, type TuiMouseEvent } from '@earendil-works/pi-tui';
 import { patchToolDisplay, patchFinalResponseSeparator, patchMergeConsecutiveTools, patchUserMessageFrame } from './patches.ts';
 import { patchToolContext } from './tool-context.ts';
 import { frameBorder } from './utils.ts';
+import { ToolActivityGroup } from './folding.ts';
 import { WorkerRenderRefresh } from '../worker/presentation.ts';
 import { emptyWorkerUsage } from '../worker/ui.ts';
 import type { WorkerUiDetails, WorkerUiTask } from '../worker/types.ts';
@@ -47,7 +48,136 @@ const click = (container: Container, row: number, width = 80, extra: Partial<Tui
     width, height: container.render(width).length, shift: false, alt: false, ctrl: false, ...extra,
 });
 
-test('summary → call rows → compact preview, using the actual folded mouse layout', () => {
+test('stable group rows reuse only the latest formatting snapshot and still render children', (t) => {
+    const component = tool();
+    component.setExpanded(true);
+    const render = t.mock.method(component, 'render');
+    const group = new ToolActivityGroup();
+    group.open = true;
+    group.update([component], 0);
+    const expected = group.render(120);
+    const summary = (group as any).summaryBadge.current;
+    const previewCache = (group as any).previewBadges.get(component);
+    const preview = previewCache.current;
+    for (let i = 0; i < 5; i++) {
+        assert.deepEqual(group.render(120), expected);
+        assert.equal((group as any).summaryBadge.current, summary);
+        assert.equal(previewCache.current, preview);
+    }
+    assert.equal(render.mock.callCount(), 6, 'cached row formatting never skips native rendering or hit layout');
+    for (let i = 0; i < 20; i++) {
+        (component as any).args.path = `stream-${i}.ts`;
+        assert.match(group.render(120).map(stripTerminalSequences).join('\n'), new RegExp(`stream-${i}\\.ts`));
+        assert.equal((group as any).previewBadges.get(component), previewCache);
+        assert.notEqual(previewCache.current, preview);
+        assert.match(previewCache.current.text, new RegExp(`stream-${i}\\.ts`));
+    }
+    group.invalidate();
+    assert.equal((group as any).summaryBadge.current, undefined);
+    assert.equal((group as any).previewBadges.get(component), undefined);
+});
+
+test('cached badge rows match fresh formatting after content, width, status and folding changes', () => {
+    const component = tool();
+    const group = new ToolActivityGroup();
+    group.open = true;
+    let children = [component];
+    let notices = 0;
+    const compare = () => {
+        group.update(children, notices);
+        for (const width of [120, 120, 80, 79, 25, 24, 8, 1, 0, 120]) {
+            const fresh = new ToolActivityGroup();
+            fresh.open = group.open;
+            fresh.update(children, notices);
+            assert.deepEqual(group.render(width), fresh.render(width));
+            assert.deepEqual(group.render(width), fresh.render(width));
+        }
+    };
+    compare();
+    (component as any).args.path = 'changed 中文.ts';
+    component.updateResult({ content: [{ type: 'text', text: 'new result '.repeat(800) }], isError: true });
+    compare();
+    notices = 2;
+    children = [component, tool('bash', { pending: true })];
+    compare();
+    group.open = false;
+    compare();
+    component.setExpanded(true);
+    compare();
+    children = [component];
+    compare();
+});
+
+test('cached rows notice badge-only ANSI changes on the same theme object', () => {
+    const theme = (globalThis as any)[Symbol.for('@earendil-works/pi-coding-agent:theme')];
+    const original = theme.fg;
+    let badgeColor = 31;
+    theme.fg = function (color: string, text: string) {
+        return text.startsWith('≈') ? `\x1b[${badgeColor}m${text}\x1b[39m` : original.call(this, color, text);
+    };
+    try {
+        const component = tool();
+        const group = new ToolActivityGroup();
+        group.open = true;
+        group.update([component], 0);
+        const before = group.render(120);
+        const summary = (group as any).summaryBadge.current;
+        const preview = (group as any).previewBadges.get(component).current;
+        badgeColor = 32;
+        const after = group.render(120);
+        assert.deepEqual(after.map(stripTerminalSequences), before.map(stripTerminalSequences));
+        assert.notDeepEqual(after, before);
+        assert.equal((group as any).summaryBadge.current.text, summary.text);
+        assert.equal((group as any).previewBadges.get(component).current.text, preview.text);
+        assert.notEqual((group as any).summaryBadge.current, summary);
+        assert.notEqual((group as any).previewBadges.get(component).current, preview);
+        const fresh = new ToolActivityGroup();
+        fresh.open = true;
+        fresh.update([component], 0);
+        assert.deepEqual(after, fresh.render(120));
+    } finally { theme.fg = original; }
+});
+
+test('native edit folding never renders a hidden diff, including pending, failed and narrow states', (t) => {
+    const native = createEditToolDefinition(process.cwd());
+    const edit = new ToolExecutionComponent('edit', 'folded-native-edit', { path: 'example.ts' }, {}, native,
+        { requestRender() {} } as any, process.cwd());
+    const render = t.mock.method(edit, 'render');
+    const container = new Container();
+    container.addChild(edit);
+    for (const result of [undefined, { content: [{ type: 'text', text: 'changed' }], details: { diff: '-old\n+new' }, isError: false },
+        { content: [{ type: 'text', text: 'failed' }], isError: true }]) {
+        if (result) edit.updateResult(result as any);
+        for (const width of [120, 40, 1]) container.render(width);
+        assert.match(plain(container).join('\n'), /1 call/);
+    }
+    assert.equal(render.mock.callCount(), 0, 'visibility is established by native renderer identity, not rendering');
+    edit.setExpanded(true);
+    assert.ok(plain(container).some(line => line.includes('failed')));
+    assert.equal(render.mock.callCount(), 1, 'expanded native edit renders exactly once, without a visibility probe');
+    edit.setExpanded(false);
+    container.render(80);
+    assert.equal(render.mock.callCount(), 1);
+});
+
+test('overriding only native edit renderCall still probes dynamic self visibility on every frame', () => {
+    let visible = false;
+    let probes = 0;
+    const body = { render: () => { probes++; return visible ? ['custom edit'] : []; }, invalidate() {} };
+    const definition = { ...createEditToolDefinition(process.cwd()), renderCall: () => body };
+    const edit = new ToolExecutionComponent('edit', 'dynamic-edit', {}, {}, definition as any,
+        { requestRender() {} } as any, process.cwd());
+    const container = new Container();
+    container.addChild(edit);
+    assert.equal(plain(container).length, 0);
+    visible = true; // no updateDisplay or result identity change
+    assert.match(plain(container).join('\n'), /1 call/);
+    visible = false;
+    assert.equal(plain(container).length, 0);
+    assert.equal(probes, 3);
+});
+
+test('summary → call rows → compact → full → collapsed, using the actual folded mouse layout', () => {
     const first = tool();
     const second = tool('bash');
     const container = new Container();
@@ -82,7 +212,9 @@ test('summary → call rows → compact preview, using the actual folded mouse l
     assert.ok(lines.some((line) => line.includes('read preview')), 'clicking uses the native abbreviated renderer');
     assert.ok(!lines.some((line) => line.includes('FULL OUTPUT')));
     assert.equal(click(container, row)?.handled, true);
-    assert.ok(!plain(container).some((line) => line.includes('FULL OUTPUT')));
+    assert.match(plain(container).join('\n'), /read FULL OUTPUT/);
+    assert.equal(click(container, row)?.handled, true);
+    assert.doesNotMatch(plain(container).join('\n'), /FULL OUTPUT|read preview/);
     click(container, summary);
     assert.ok(!plain(container).some((line) => line.includes('read.ts')));
     assert.deepEqual(container.children, originalChildren, 'never replace transcript components');
@@ -117,6 +249,104 @@ test('clicked previews stay compact across updates and are bounded even for cust
     assert.equal(expandedOptions.at(-1), true);
     lines = plain(container);
     assert.match(lines.join('\n'), /detail line 49/, 'explicit global expansion remains available');
+});
+
+test('local clicks cycle clipped output without pre-rendering full output, and keep full updates full', () => {
+    const options: boolean[] = [];
+    const component = new ToolExecutionComponent('custom', 'local-cycle', {}, {}, {
+        renderCall: () => new Text('custom call', 0, 0),
+        renderResult: (_result: unknown, { expanded }: { expanded: boolean }) => {
+            options.push(expanded);
+            return new Text(Array.from({ length: 30 }, (_, i) => `row ${i}`).join('\n'), 0, 0);
+        },
+    } as any, { requestRender() {} } as any, process.cwd());
+    component.updateResult({ content: [{ type: 'text', text: 'done' }], isError: false });
+    const container = new Container();
+    container.addChild(component);
+    click(container, 0);
+    click(container, 1);
+    assert.doesNotMatch(plain(container).join('\n'), /row 29/);
+    for (let i = 0; i < 4; i++) plain(container);
+    assert.ok(options.every(option => !option), 'scroll/input redraws do not probe the full renderer');
+    click(container, 1);
+    assert.equal(options.at(-1), true);
+    assert.match(plain(container).join('\n'), /row 29/);
+    component.updateResult({ content: [{ type: 'text', text: 'stream update' }], isError: false }, true);
+    component.invalidate();
+    assert.equal(options.at(-1), true);
+    assert.match(plain(container).join('\n'), /row 29/);
+    click(container, 1);
+    assert.equal(plain(container).length, 2);
+    click(container, 1);
+    assert.equal(options.at(-1), false, 'reopening starts at the preview again');
+    assert.doesNotMatch(plain(container).join('\n'), /row 29/);
+    click(container, 0);
+    assert.equal(plain(container).length, 1, 'closing the group does not advance previews to full');
+    assert.equal((component as any).expanded, false);
+});
+
+test('short results without a second stage collapse immediately, including after resizing', () => {
+    const component = new ToolExecutionComponent('custom', 'short-cycle', {}, {}, {
+        renderCall: () => new Text('custom call', 0, 0),
+        renderResult: () => new Text('short result', 0, 0),
+    } as any, { requestRender() {} } as any, process.cwd());
+    component.updateResult({ content: [{ type: 'text', text: 'done' }], isError: false });
+    const container = new Container();
+    container.addChild(component);
+    click(container, 0);
+    for (const width of [80, 24, 80]) {
+        click(container, 1, width);
+        assert.match(plain(container, width).join('\n'), /short result/);
+        click(container, 1, width);
+        assert.equal((component as any).expanded, false);
+        assert.equal(plain(container, width).length, 2);
+    }
+    component.setExpanded(true);
+    assert.match(plain(container).join('\n'), /short result/);
+    click(container, 1);
+    assert.equal((component as any).expanded, false, 'a globally expanded tool closes on one local click');
+});
+
+test('image reserve rows are never clipped and do not add a redundant full stage', () => {
+    const component = tool();
+    const imageLines = ['\x1b_Ga=T,f=32;AAAA\x1b\\', ...Array.from({ length: 25 }, () => '')];
+    const updateDisplay = (component as any).updateDisplay.bind(component);
+    (component as any).updateDisplay = () => {
+        updateDisplay();
+        (component as any).imageComponents = [{}];
+    };
+    component.render = () => imageLines.slice();
+    const container = new Container();
+    container.addChild(component);
+    click(container, 0);
+    click(container, 1);
+    assert.equal(container.render(80).length, imageLines.length + 2);
+    click(container, 1);
+    assert.equal((component as any).expanded, false);
+    assert.equal(container.render(80).length, 2);
+});
+
+test('tool borders consume only left clicks without cycling; call rows cycle and scrolling stays native', () => {
+    const component = tool();
+    const container = new Container();
+    container.addChild(component);
+    click(container, 0);
+    click(container, 1);
+    let lines = plain(container);
+    const header = lines.findIndex(line => line.includes('╭─ read'));
+    assert.ok(header > 1);
+    const wheel = click(container, header, 80, { x: 2, type: 'scroll', button: 'wheel-down' } as any);
+    assert.equal(wheel, undefined);
+    assert.match(plain(container).join('\n'), /read preview/);
+    assert.equal(click(container, header, 80, { x: 2 })?.handled, true);
+    assert.match(plain(container).join('\n'), /read preview/);
+    click(container, 1);
+    assert.match(plain(container).join('\n'), /read FULL OUTPUT/);
+    lines = plain(container);
+    assert.equal(click(container, lines.findIndex(line => line.includes('╭─ read')), 80, { x: 2 })?.handled, true);
+    assert.match(plain(container).join('\n'), /read FULL OUTPUT/);
+    click(container, 1);
+    assert.equal(plain(container).length, 2);
 });
 
 test('native global expand/collapse, restored state and repeated patch installation', async () => {
@@ -285,6 +515,8 @@ test('folded groups show compact active Worker rows, then hide them on completio
     live.updateResult({ content: [{ type: 'text', text: 'done' }], isError: false });
     assert.match(plain(container).join('\n'), /worker preview/, 'preserve explicitly opened previews after completion');
     click(container, 1);
+    assert.match(plain(container).join('\n'), /worker FULL OUTPUT/);
+    click(container, 1);
     assert.equal(plain(container).length, 1);
     live.updateResult({ content: [{ type: 'text', text: 'working' }], isError: false }, true);
     done.updateResult({ content: [{ type: 'text', text: 'working' }], isError: false }, true);
@@ -346,6 +578,8 @@ test('every Worker task shows its own live metadata before its objective', (t) =
     click(container, 3, 160);
     assert.match(plain(container, 160).join('\n'), /worker preview/);
     click(container, 3, 160);
+    assert.match(plain(container, 160).join('\n'), /worker FULL OUTPUT/);
+    click(container, 3, 160);
     assert.equal(plain(container, 160).length, 6);
     for (const width of [1, 3, 12, 80]) {
         assert.ok(container.render(width).every((line) => visibleWidth(line) <= width));
@@ -370,6 +604,8 @@ test('every Worker task shows its own live metadata before its objective', (t) =
     assert.ok(taskRow > 0);
     click(framed, taskRow, 160);
     assert.match(plain(framed, 160).join('\n'), /worker preview/);
+    click(framed, taskRow, 160);
+    assert.match(plain(framed, 160).join('\n'), /worker FULL OUTPUT/);
     click(framed, taskRow, 160);
     component.updateResult({ content: [{ type: 'text', text: 'done' }], details: latest, isError: false });
     framedLines = plain(framed, 160);

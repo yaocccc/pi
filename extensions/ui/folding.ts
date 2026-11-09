@@ -1,4 +1,4 @@
-import { ToolExecutionComponent, type Theme } from '@earendil-works/pi-coding-agent';
+import { createEditToolDefinition, ToolExecutionComponent, type Theme } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
 import { padToWidth } from './utils.ts';
 import { colorToolTokens, estimateToolTokens, formatToolTokens } from './tool-tokens.ts';
@@ -19,15 +19,25 @@ type ToolState = {
     result?: ToolResult;
     imageComponents?: unknown[];
     rendererState?: Record<string, unknown>;
+    toolDefinition?: { renderCall?: unknown; renderResult?: unknown };
     getRenderShell?(): string;
+    updateDisplay(): void;
     ui?: { requestRender(): void };
 };
 const state = (tool: Tool): ToolState => tool as unknown as ToolState;
+const nativeEdit = createEditToolDefinition(process.cwd());
+// Native edit always draws a call header, even for an empty/error result.
+// Match both functions, not the name: extensions may override a tool named edit.
+export function hasNativeEditRenderer(tool: Tool): boolean {
+    const definition = state(tool).toolDefinition;
+    return definition?.renderCall === nativeEdit.renderCall && definition?.renderResult === nativeEdit.renderResult;
+}
 const groups = new WeakMap<Component, ToolActivityGroup>();
 const membership = new WeakMap<Tool, ToolActivityGroup>();
 const previews = new WeakSet<Tool>();
 const tokenCache = new WeakMap<Tool, { args: unknown; result: ToolResult; tokens: number }>();
 let localToggle = false;
+let cyclePreview = false;
 const theme = (): Pick<Theme, 'fg'> | undefined => (globalThis as any)[THEME_KEY];
 const fg = (color: Parameters<Theme['fg']>[0], text: string): string => theme()?.fg(color, text) ?? text;
 const clean = (text: string): string => stripTerminalSequences(text).replace(/\s+/g, ' ').replace(/[\x00-\x1f\x7f-\x9f]/g, '').trim();
@@ -45,18 +55,28 @@ function tokens(tool: Tool): number {
     return cached.tokens;
 }
 
-function withBadge(text: string, count: number, width: number, minWidth: number, suffix = '', inline = false): string {
+type BadgeCache = { current?: {
+    text: string; width: number; badge: string; painted: string; suffix: string; inline: boolean; line: string;
+} };
+
+function withBadge(cache: BadgeCache, text: string, count: number, width: number, minWidth: number, suffix = '', inline = false): string {
     const badge = count && width >= minWidth ? formatToolTokens(count) : '';
+    const painted = badge && theme() ? colorToolTokens(count, badge, theme()!) : badge;
+    const previous = cache.current;
+    // Cache only formatting, after resolving all dynamic text and badge colors.
+    // Exact strings also catch theme changes without relying on theme identity.
+    if (previous && previous.text === text && previous.width === width && previous.badge === badge
+        && previous.painted === painted && previous.suffix === suffix && previous.inline === inline) return previous.line;
     const gap = inline ? ' ' : '  ';
     const textWidth = width - (badge ? visibleWidth(badge) + gap.length : 0);
     const headroom = textWidth - visibleWidth(suffix);
     // Keep status adjacent to the text, padding only after the entire summary.
     // On narrow screens shorten the breakdown before dropping status.
     const body = suffix && headroom >= 2 ? truncateToWidth(text, headroom, '…') + suffix : text;
-    if (!badge) return fit(body, width);
-    const line = inline ? truncateToWidth(body, textWidth, '…') : fit(body, textWidth);
-    const painted = theme() ? colorToolTokens(count, badge, theme()!) : badge;
-    return fit(line + gap + painted, width);
+    const line = !badge ? fit(body, width)
+        : fit((inline ? truncateToWidth(body, textWidth, '…') : fit(body, textWidth)) + gap + painted, width);
+    cache.current = { text, width, badge, painted, suffix, inline, line };
+    return line;
 }
 
 function callLabel(tool: Tool): string {
@@ -117,6 +137,9 @@ export class ToolActivityGroup implements Component {
     private hits: Hit[] = [];
     private header = false;
     private notices = 0;
+    private summaryBadge: BadgeCache = {};
+    private previewBadges = new WeakMap<Tool, BadgeCache>();
+    private previewLayouts = new WeakMap<Tool, { width: number; lines: string[]; clipped: boolean }>();
 
     update(children: Component[], notices: number): void {
         this.children = children;
@@ -136,17 +159,20 @@ export class ToolActivityGroup implements Component {
     }
 
     invalidate(): void {
+        this.summaryBadge.current = undefined;
+        this.previewBadges = new WeakMap();
         for (const child of this.children) child.invalidate();
     }
 
     render(width: number): string[] {
         this.hits = [];
+        this.previewLayouts = new WeakMap();
         const lines: string[] = [];
-        // Ordinary tools are not rendered at all while folded, including their
-        // first pending frame. Self-renderers alone need a visibility probe:
-        // Worker continuation/control calls deliberately render zero lines.
+        // Native edit always has a header: do not render its whole diff just to
+        // decide visibility. Custom self renderers still need a live probe (e.g.
+        // Worker control calls can render zero lines without updateDisplay).
         const visible = this.tools().filter((tool) => !state(tool).hideComponent
-            && (state(tool).getRenderShell?.() !== 'self' || tool.render(width).length > 0));
+            && (state(tool).getRenderShell?.() !== 'self' || hasNativeEditRenderer(tool) || tool.render(width).length > 0));
         this.header = visible.length > 0;
         if (this.header) {
             const counts = new Map<string, number>();
@@ -168,7 +194,7 @@ export class ToolActivityGroup implements Component {
             ];
             const suffix = statuses.length ? '  ' + statuses.join('  ') : '';
             const summaryInset = width > 0 ? ' ' : '';
-            lines.push(summaryInset + withBadge(content, totalTokens, width - summaryInset.length, 24, suffix, true));
+            lines.push(summaryInset + withBadge(this.summaryBadge, content, totalTokens, width - summaryInset.length, 24, suffix, true));
         }
         const append = (component: Component, body: string[], toggle?: Tool, indent = 0) => {
             this.hits.push({ start: lines.length, height: body.length, component, toggle, indent, width: width - indent });
@@ -208,7 +234,12 @@ export class ToolActivityGroup implements Component {
                 const branch = fg('borderMuted', child === last ? '╰' : '├');
                 const preview = resultPreview(child);
                 const row = `${branch} ${arrow} ${status} ${callLabel(child)}${preview ? fg(value.result?.isError ? 'error' : 'dim', ` · ${preview}`) : ''}`;
-                append(child, [withBadge(row, tokens(child), width, 80)], child);
+                let cache = this.previewBadges.get(child);
+                if (!cache) {
+                    cache = {};
+                    this.previewBadges.set(child, cache);
+                }
+                append(child, [withBadge(cache, row, tokens(child), width, 80)], child);
             }
             if (!value.expanded) continue;
             // Worker frames align with the summary arrow, like ordinary output.
@@ -216,13 +247,14 @@ export class ToolActivityGroup implements Component {
             const indent = width > 4 && (value.toolName === 'worker' || value.getRenderShell?.() !== 'self') && !value.imageComponents?.length ? 2 : 0;
             const body = child.render(width - indent);
             const clipped = previews.has(child) && !value.imageComponents?.length && body.length > 12;
+            if (previews.has(child)) this.previewLayouts.set(child, { width: width - indent, lines: body.slice(), clipped });
             const footer = clipped && /^╭─.*╮$/.test(stripTerminalSequences(body[0]!))
                 && /^╰─*╯$/.test(stripTerminalSequences(body.at(-1)!)) ? body.at(-1) : undefined;
             append(child, clipped ? body.slice(0, footer ? 11 : 12) : body, undefined, indent);
             // A retained bottom edge is display-only, not a hit target for a hidden output row.
             if (footer) lines.push((indent ? fg('borderMuted', '│ ') : '') + footer);
             if (clipped) lines.push((indent ? fg('borderMuted', '│ ') : '')
-                + fit(fg('dim', '… Ctrl+O 查看完整输出'), width - indent));
+                + fit(fg('dim', '… 再次点击或 Ctrl+O 查看完整输出'), width - indent));
         }
         return lines;
     }
@@ -239,19 +271,34 @@ export class ToolActivityGroup implements Component {
         if (!hit) return undefined;
         if (hit.toggle) {
             if (!click) return undefined;
-            this.locally(() => hit.toggle!.setExpanded(!state(hit.toggle!).expanded));
+            this.locally(() => hit.toggle!.setExpanded(!state(hit.toggle!).expanded), true);
             this.requestRender();
             return { handled: true };
         }
         if (event.x < hit.indent) return undefined;
         return this.locally(() => hit.component.handleMouse?.({
             ...event, x: event.x - hit.indent, y: event.y - hit.start, height: hit.height, width: hit.width,
-        }));
+        }), click);
     }
 
-    private locally<T>(action: () => T): T {
+    expandPreview(tool: Tool): boolean {
+        const preview = this.previewLayouts.get(tool);
+        if (!preview) return false;
+        previews.delete(tool);
+        state(tool).updateDisplay();
+        // Only probe full output on the second click, never on input or scroll redraws.
+        if (preview.clipped) return true;
+        const full = tool.render(preview.width);
+        return full.length !== preview.lines.length || full.some((line, index) => line !== preview.lines[index]);
+    }
+
+    private locally<T>(action: () => T, cycle = false): T {
+        const previousToggle = localToggle;
+        const previousCycle = cyclePreview;
         localToggle = true;
-        try { return action(); } finally { localToggle = false; }
+        cyclePreview = cycle;
+        try { return action(); }
+        finally { localToggle = previousToggle; cyclePreview = previousCycle; }
     }
 }
 
@@ -279,6 +326,7 @@ export function patchToolFolding(): void {
     const original = prototype.setExpanded;
     const updateDisplay = prototype.updateDisplay;
     prototype.setExpanded = function (expanded: boolean): void {
+        if (cyclePreview && !expanded && previews.has(this) && membership.get(this)?.expandPreview(this)) return;
         if (localToggle && expanded) previews.add(this);
         else previews.delete(this);
         original.call(this, expanded);
@@ -290,7 +338,7 @@ export function patchToolFolding(): void {
     prototype.updateDisplay = function (): void {
         const value = state(this);
         const expanded = value.expanded;
-        // Clicking opens a native compact preview. Ctrl+O explicitly requests full output.
+        // First click uses the native compact renderer; second click (or Ctrl+O) requests full output.
         if (previews.has(this)) value.expanded = false;
         try { updateDisplay.call(this); }
         finally { value.expanded = expanded; }

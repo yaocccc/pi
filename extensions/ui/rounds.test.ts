@@ -236,6 +236,40 @@ test('streaming text and tool state refresh inside one frame without modifying s
     assert.equal(JSON.stringify([thinking, streamed, final]), snapshot);
 });
 
+test('streaming reuses the assistant display but configuration and invalidation recreate it', () => {
+    const msg = message('first chunk', { content: [
+        { type: 'thinking', thinking: 'private thought' }, { type: 'text', text: 'first chunk' },
+    ] });
+    const source = new AssistantMessageComponent(msg);
+    const frame = layoutRounds([source])[0] as RoundFrame;
+    frame.render(80);
+    const view = (frame as any).body.children[0];
+    const initial = view.display;
+    assert.ok(initial instanceof AssistantMessageComponent);
+
+    // The source message itself may be mutated in place during streaming.
+    msg.content[1].text += ' plus next chunk';
+    source.updateContent(msg, true);
+    const snapshot = JSON.stringify(msg);
+    let lines = frame.render(80).map(stripTerminalSequences).join('\n');
+    assert.equal(view.display, initial);
+    assert.match(lines, /plus next chunk/);
+    assert.doesNotMatch(lines, /private thought/);
+    assert.equal(JSON.stringify(msg), snapshot);
+
+    source.updateContent(msg, false);
+    frame.render(80);
+    assert.equal(view.display, initial, 'settling a stream retains native Markdown caches');
+    (source as any).outputPad = 3;
+    frame.render(80);
+    assert.notEqual(view.display, initial, 'configuration changes rebuild the display');
+    const configured = view.display;
+    frame.invalidate();
+    frame.render(80);
+    assert.notEqual(view.display, configured, 'theme/invalidate rebuilds the display');
+    assert.equal(JSON.stringify(msg), snapshot);
+});
+
 test('image control sequences and their reserved blank rows survive whole-reply framing', () => {
     const kitty = '\x1b_Ga=T,f=100,C=1;AAAA\x1b\\';
     const iterm = '\x1b[1A\x1b]1337;File=inline=1:AAAA\x07\x1b[1B';
@@ -284,6 +318,100 @@ test('trailing assistant blank rows disappear without losing paragraph spacing o
     assert.ok(lines.slice(1, -2).some(line => /^│ +│$/.test(line)), 'normal paragraph spacing remains');
     assert.deepEqual(rendered.join('').match(/\x1b\]133;[ABC]\x07/g), ['\x1b]133;A\x07', '\x1b]133;B\x07', '\x1b]133;C\x07']);
     assert.equal(JSON.stringify(original), snapshot);
+});
+
+test('unchanged frames reuse decoration while still rendering children and isolating returned arrays', (t) => {
+    let renders = 0;
+    const content = ['stable reply'];
+    const child = { render() { renders++; return content; }, invalidate() {} };
+    const frame = new RoundFrame();
+    const decorate = t.mock.method(frame as any, 'renderFrame');
+    frame.update(title, [child]);
+    const expected = frame.render(100);
+    for (let i = 0; i < 5; i++) {
+        frame.update(title, [child]); // layoutRounds rebuilds this array every render.
+        const result = frame.render(100);
+        assert.deepEqual(result, expected);
+        result.shift();
+        result[0] = 'parent mutation';
+    }
+    assert.equal(renders, 6, 'native render side effects/layout refresh are never skipped');
+    assert.equal(decorate.mock.callCount(), 1, 'unchanged history is not remeasured or reframed');
+    frame.invalidate();
+    assert.deepEqual(frame.render(100), expected);
+    assert.equal(decorate.mock.callCount(), 2);
+    content[0] = 'changed in place';
+    assert.match(frame.render(100).map(stripTerminalSequences).join('\n'), /changed in place/);
+    assert.equal(decorate.mock.callCount(), 3);
+    frame.update('new provider · new model', [child]);
+    assert.match(frame.render(100).map(stripTerminalSequences).join('\n'), /new provider · new model/);
+    assert.equal(decorate.mock.callCount(), 4);
+});
+
+test('cache hits refresh native hit testing when identical rows move between children', (t) => {
+    let moved = false;
+    let target = '';
+    const first: Component = {
+        render: () => moved ? ['same'] : ['same', 'same'], invalidate() {},
+        handleMouse: () => { target = 'first'; return { handled: true }; },
+    };
+    const second: Component = {
+        render: () => moved ? ['same', 'same'] : ['same'], invalidate() {},
+        handleMouse: () => { target = 'second'; return { handled: true }; },
+    };
+    const frame = new RoundFrame();
+    const decorate = t.mock.method(frame as any, 'renderFrame');
+    frame.update(title, [first, second]);
+    const container = new Container();
+    container.addChild(frame);
+    const expected = container.render(100);
+    click(container, 2, { x: 2 });
+    assert.equal(target, 'first');
+    moved = true;
+    assert.deepEqual(container.render(100), expected);
+    click(container, 2, { x: 2 });
+    assert.equal(target, 'second');
+    assert.equal(decorate.mock.callCount(), 1, 'identical frame output can reuse decoration with fresh child layout');
+});
+
+test('cached frames match fresh frames across width, styling, markers, images and empty content', () => {
+    let content: string[] = [];
+    const child = { render: () => content, invalidate() {} };
+    const frame = new RoundFrame();
+    frame.update(title, [child]);
+    for (const next of [
+        ['\x1b[31mtheme color\x1b[39m'], ['\x1b[32mtheme color\x1b[39m'],
+        ['\x1b]133;A\x07', 'reply', '\x1b]133;B\x07\x1b]133;C\x07'],
+        ['\x1b_Ga=T,f=100,C=1;AAAA\x1b\\', '', ''],
+        ['', '\x1b[1A\x1b]1337;File=inline=1:AAAA\x07\x1b[1B'],
+        ['short'], ['', 'longer content 中文', '', ''], [], ['reply after empty'],
+    ]) {
+        content = next;
+        for (const width of [100, 100, 40, 7, 3, 1, 0, 100]) {
+            const fresh = new RoundFrame();
+            fresh.update(title, [child]);
+            assert.deepEqual(frame.render(width), fresh.render(width));
+            assert.deepEqual(frame.render(width), fresh.render(width), 'warm output matches cold output');
+        }
+    }
+});
+
+test('streaming retains only the latest frame snapshot, not every historical version', () => {
+    const frame = new RoundFrame();
+    const content = ['chunk'];
+    frame.update(title, [{ render: () => content, invalidate() {} }]);
+    for (let i = 0; i < 100; i++) {
+        content[0] = `chunk ${i}`;
+        const result = frame.render(100);
+        const cached = (frame as any).cached;
+        assert.deepEqual(cached.content, content);
+        assert.equal(cached.content.length, 1);
+        assert.deepEqual(cached.lines, result);
+        assert.notEqual(cached.content, content);
+        assert.notEqual(cached.lines, result);
+    }
+    frame.invalidate();
+    assert.equal((frame as any).cached, undefined);
 });
 
 test('aborted, incomplete or unidentifiable conclusions never create persisted round boundaries', () => {

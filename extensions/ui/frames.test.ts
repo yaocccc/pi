@@ -82,11 +82,52 @@ test('user bubbles align right, shrink to content, wrap long prompts and preserv
     }
 });
 
+test('user frame caches are isolated and follow native content, width, padding and style changes', (t) => {
+    patchUserMessageFrame();
+    t.after(() => initTheme('dark', false));
+    const user = new UserMessageComponent('unchanged message');
+    const expected = user.render(80).slice();
+    const damaged = user.render(80);
+    damaged.shift();
+    damaged[0] = 'corrupted by a render consumer';
+    assert.deepEqual(user.render(80), expected);
+    // Narrow/empty renders must not leave cached hit-test geometry for another width.
+    for (const width of [3, 80, 0, 80, 120, 80]) {
+        const actual = user.render(width);
+        const fresh = new UserMessageComponent('unchanged message').render(width);
+        assert.deepEqual(actual, fresh);
+    }
+    const body = user.children[0];
+    let calls = 0;
+    let text = 'changed content';
+    const normalRender = body.render.bind(body);
+    body.render = width => { calls++; return normalRender(width).map(line => line.replace('unchanged message', text)); };
+    assert.match(user.render(80).map(stripTerminalSequences).join('\n'), /changed content/);
+    const current = user.render(80);
+    assert.ok(calls >= 2, 'cache hits still call native child rendering');
+    text = 'updated again';
+    user.invalidate();
+    assert.match(user.render(80).map(stripTerminalSequences).join('\n'), /updated again/);
+    assert.notDeepEqual(user.render(80), current);
+    body.render = normalRender;
+    (user as any).outputPad = 3;
+    const fresh = new UserMessageComponent('unchanged message');
+    (fresh as any).outputPad = 3;
+    assert.deepEqual(user.render(80), fresh.render(80));
+    initTheme('light', false);
+    user.invalidate();
+    fresh.invalidate();
+    assert.deepEqual(user.render(80), fresh.render(80));
+});
+
 test('right-aligned user content receives native mouse coordinates and repeated registration is stable', async () => {
     const user = new UserMessageComponent('clickable user message');
     const events: TuiMouseEvent[] = [];
     Object.assign(user.children[0], { handleMouse(event: TuiMouseEvent) { events.push(event); return { handled: true }; } });
     const lines = user.render(80).map(stripTerminalSequences);
+    user.render(3);
+    user.render(80);
+    user.render(80); // Cached frames retain the geometry after returning from a narrow layout.
     const left = lines[0].indexOf('╭');
     assert.equal(user.handleMouse(mouse(left - 1, 1, 80, lines.length)), undefined);
     assert.equal(user.handleMouse(mouse(left, 1, 80, lines.length)), undefined);

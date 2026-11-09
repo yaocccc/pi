@@ -11,7 +11,6 @@ test('hot reload upgrades a live v9 tool wrapper and a v2 final separator withou
     initTheme('dark', false);
     const nativeBoxRender = Box.prototype.render;
     const nativeTextRender = Text.prototype.render;
-    const nativeUpdateDisplay = (ToolExecutionComponent.prototype as any).updateDisplay;
 
     // Model the previous module's installed closures and symbols on the real Pi
     // prototypes. They keep their own activity flag after the new module loads.
@@ -39,6 +38,7 @@ test('hot reload upgrades a live v9 tool wrapper and a v2 final separator withou
     patches.patchFinalResponseSeparator();
     patches.patchUserMessageFrame();
     const firstToolRender = ToolExecutionComponent.prototype.render;
+    const firstUpdateDisplay = (ToolExecutionComponent.prototype as any).updateDisplay;
     const firstFinalRender = AssistantMessageComponent.prototype.render;
     // Repeated registration and a second module import must not stack wrappers.
     patches.patchToolDisplay(); patches.patchFinalResponseSeparator();
@@ -46,7 +46,7 @@ test('hot reload upgrades a live v9 tool wrapper and a v2 final separator withou
     reload.patchToolDisplay(); reload.patchFinalResponseSeparator();
     assert.equal(ToolExecutionComponent.prototype.render, firstToolRender);
     assert.equal(AssistantMessageComponent.prototype.render, firstFinalRender);
-    assert.equal((ToolExecutionComponent.prototype as any).updateDisplay, nativeUpdateDisplay);
+    assert.equal((ToolExecutionComponent.prototype as any).updateDisplay, firstUpdateDisplay, 'token invalidation wrapper is installed once');
     assert.equal(Box.prototype.render, nativeBoxRender);
     assert.equal(Text.prototype.render, nativeTextRender);
 

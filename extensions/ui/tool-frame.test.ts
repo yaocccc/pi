@@ -271,6 +271,80 @@ test('expanded Worker frame aligns with its summary arrow and preserves inner pa
     }
 });
 
+test('stable tool shells reuse framing and token estimates without exposing cached arrays', (t) => {
+    const measurements = t.mock.method(String.prototype, 'trimEnd');
+    for (const name of ['custom', 'worker', 'edit']) {
+        let serializations = 0;
+        const args = { path: 'example.ts', toJSON: () => { serializations++; return { path: 'example.ts' }; } };
+        const definition = name === 'edit' ? createEditToolDefinition(process.cwd()) : {
+            ...(name === 'worker' ? { renderShell: 'self' } : {}),
+            renderCall: () => new Text('stable call', 0, 0), renderResult: () => new Text('stable result', 0, 0),
+        };
+        const tool = new ToolExecutionComponent(name, `cached-${name}`, args, {}, definition as any,
+            { requestRender() {} } as any, process.cwd());
+        tool.updateResult({ content: [{ type: 'text', text: 'done' }], details: { diff: '-old\n+new' }, isError: false } as any);
+        const expected = tool.render(100);
+        measurements.mock.resetCalls(); serializations = 0;
+        const drawn = tool.render(100);
+        drawn[0] = 'parent mutation'; drawn.pop();
+        assert.deepEqual(tool.render(100), expected);
+        assert.equal(measurements.mock.callCount(), 0, `${name}: warm frames do not remeasure historical body rows`);
+        assert.equal(serializations, 0, `${name}: warm title width does not serialize the payload`);
+        measurements.mock.resetCalls(); tool.render(40);
+        assert.ok(measurements.mock.callCount() > 0, 'width changes reframe the shell');
+        measurements.mock.resetCalls();
+        assert.deepEqual(tool.render(100), expected);
+        assert.ok(measurements.mock.callCount() > 0, 'only the latest width is retained');
+        tool.updateResult({ content: [{ type: 'text', text: 'new result' }], details: { diff: '-old\n+newer' }, isError: false } as any);
+        tool.render(100);
+        assert.ok(serializations > 0, 'result updates re-estimate tokens');
+    }
+});
+
+test('cached self shells refresh mouse layout when identical rows move between children', () => {
+    let moved = false;
+    let target = '';
+    const first: Component = { render: () => moved ? ['same'] : ['same', 'same'], invalidate() {},
+        handleMouse: () => { target = 'first'; return { handled: true }; } };
+    const second: Component = { render: () => moved ? ['same', 'same'] : ['same'], invalidate() {},
+        handleMouse: () => { target = 'second'; return { handled: true }; } };
+    const body = new Container(); body.addChild(first); body.addChild(second);
+    const tool = make({ renderShell: 'self', renderCall: () => body, renderResult: () => new Container() }, 'worker');
+    const expected = tool.render(80);
+    const row = expected.map(stripTerminalSequences).findIndex(line => line.includes('same')) + 1;
+    click(tool, 3, row, 80);
+    assert.equal(target, 'first');
+    moved = true;
+    assert.deepEqual(tool.render(80), expected);
+    click(tool, 3, row, 80);
+    assert.equal(target, 'second', 'decoration cache must not bypass native child hit layout refresh');
+});
+
+test('shell caches follow theme, dynamic content, image sequences, padding and empty states', () => {
+    let rows = ['first'];
+    const body = { render: () => rows, invalidate() {} };
+    const definition = { renderShell: 'self', renderCall: () => body, renderResult: () => new Container() };
+    const tool = make(definition, 'worker');
+    try {
+        for (const mode of ['dark', 'light']) {
+            initTheme(mode, false);
+            for (const next of [['first'], ['changed', 'second'], ['\x1b[31mANSI\x1b[39m'], [],
+                ['\x1b_Ga=T,f=100,C=1;AAAA\x1b\\', '', ''], ['back after image']]) {
+                rows = next;
+                for (const width of [80, 80, 40, 2, 0, 80]) {
+                    const fresh = make(definition, 'worker');
+                    assert.deepEqual(tool.render(width), fresh.render(width));
+                    assert.deepEqual(tool.render(width), fresh.render(width), 'warm/cold output agree');
+                }
+            }
+        }
+        setOutputPad(tool, 3);
+        assert.deepEqual(tool.render(80), make(definition, 'worker', 3).render(80));
+        tool.invalidate();
+        assert.deepEqual(tool.render(80), make(definition, 'worker', 3).render(80));
+    } finally { initTheme('dark', false); }
+});
+
 test('native image rows stay outside the shell without losing control sequences or reserve rows', () => {
     const tool = make({ renderCall: () => new Text('call', 0, 0) });
     const image = ['\x1b_Ga=T,f=100;image\x1b\\', ' '.repeat(40), ' '.repeat(40)];
