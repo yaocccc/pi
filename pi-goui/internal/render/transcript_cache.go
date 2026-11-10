@@ -84,11 +84,12 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 		*c = TranscriptCache{}
 		return Document{}
 	}
-	if c.theme != theme || c.opts.Width != opts.Width || c.opts.AssistantTitle != opts.AssistantTitle || c.opts.ShowThinking != opts.ShowThinking || c.opts.ExpandTools != opts.ExpandTools || !maps.Equal(c.opts.Expanded, opts.Expanded) {
+	if c.theme != theme || c.opts.Width != opts.Width || c.opts.AssistantTitle != opts.AssistantTitle || c.opts.ShowThinking != opts.ShowThinking || c.opts.ExpandTools != opts.ExpandTools || !maps.Equal(c.opts.Expanded, opts.Expanded) || !maps.Equal(c.opts.AssistantStats, opts.AssistantStats) {
 		c.sections = nil
 	}
 	c.theme, c.opts = theme, opts
 	c.opts.Expanded = maps.Clone(opts.Expanded)
+	c.opts.AssistantStats = maps.Clone(opts.AssistantStats)
 	count := opts.MessageCount
 	for _, it := range items {
 		count = max(count, it.MessageIndex)

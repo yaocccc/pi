@@ -17,7 +17,7 @@ var localCommands = []command{
 	{"new", "New parallel session"}, {"sessions", "Switch / resume a session"}, {"resume", "Resume a saved session"},
 	{"model", "Select model"}, {"thinking", "Set thinking level"}, {"name", "Rename this session"},
 	{"tree", "Browse full saved tree"}, {"fork", "Branch from a user message"}, {"compact", "Compact model context; keep visible history"},
-	{"hotkeys", "Effective native keybindings"}, {"reload", "Reload frontend keybindings, theme and settings"},
+	{"theme", "Choose frontend color theme"}, {"hotkeys", "Effective native keybindings"}, {"reload", "Reload frontend keybindings, theme and settings"},
 	{"copy", "Copy last assistant response"}, {"export", "Export conversation as HTML"}, {"attach", "Attach an image by path"}, {"detach", "Remove pending image attachments"},
 	{"close", "Close this session"}, {"quit", "Exit; stop all open sessions"},
 }
@@ -485,7 +485,9 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 		return m.requestCloseSession(t, true), true
 	case "quit", "exit":
 		return tea.Quit, true
-	case "theme", "settings", "scoped-models", "login", "logout", "share", "changelog":
+	case "theme":
+		return m.chooseTheme(t, arg), true
+	case "settings", "scoped-models", "login", "logout", "share", "changelog":
 		t.status = "/" + name + " is a native interactive-pi command, not exposed over RPC. Use pi to manage it."
 		return nil, true
 	}

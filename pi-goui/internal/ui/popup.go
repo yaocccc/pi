@@ -208,7 +208,8 @@ func (m *Model) popupRows(d *dialog, p popupLayout) []string {
 	for _, line := range strings.Split(fitBox(strings.Join(body, "\n"), p.inner, p.height-2), "\n") {
 		rows = append(rows, m.paint("│", m.cfg.Theme.Accent)+" "+line+" "+m.paint("│", m.cfg.Theme.Accent))
 	}
-	return append(rows, m.paint("╰"+strings.Repeat("─", p.width-2)+"╯", m.cfg.Theme.Accent))
+	rows = append(rows, m.paint("╰"+strings.Repeat("─", p.width-2)+"╯", m.cfg.Theme.Accent))
+	return render.GradientFrame("popup", rows, p.width, m.cfg.Theme)
 }
 func (m *Model) overlayPopup(t *tab, view string) string {
 	if len(t.dialogs) == 0 {

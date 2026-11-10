@@ -68,6 +68,12 @@ Then launch the Go frontend from your project directory:
 
 Skip `mv` if `~/.pi/agent` does not exist. `npm ci` installs local dependencies from the lockfile in `extensions/` (runtime dependencies `typebox` and `node-telegram-bot-api`, plus Pi SDK / TypeScript development dependencies); it does not upgrade global Pi. Once Pi starts, it separately manages the `pi-web-access` extension package declared in `settings.json`. Native Pi can reload extensions, Skills, themes, and keybindings with `/reload`. In `pi-goui`, `/reload` only rereads frontend configuration; restart the frontend after changing extensions or frontend code to start fresh RPC backends. Local SDK development dependencies in the lockfile do not replace the validated global host version. SoL-Pi has been validated on global Pi **1.0.4**, and its isolated test runner requires that version. See [SoL-Pi validation instructions](extensions/sol-pi/README.md#offline-validation).
 
+### Update notices and release notes
+
+Startup checks Pi and user-level external packages in the background. Available updates appear below the default welcome content in the chat area: **notification only, with no popup or installation**. On the first launch after a Pi update, the same area shows the installed version's bundled release notes, with scrolling for longer entries. First use also shows them once; later launches do not repeat them. Extension release notes are not shown.
+
+Failed checks and unchanged versions stay quiet. Offline mode skips network checks but still allows local Pi release notes. Only the frontend's separate cache records the displayed version; Pi settings and conversation history are unchanged. See [startup update notices](pi-goui/README.md#启动更新通知与-pi-变更内容).
+
 ## Common commands
 
 | Command | Purpose |

@@ -98,6 +98,11 @@ func (m *Model) sessionDialog(t *tab, list []session.Summary, hideCurrent ...boo
 }
 func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 	d := t.dialogs[0]
+	defer func() {
+		if len(t.dialogs) > 0 && t.dialogs[0] == d {
+			m.previewTheme(d)
+		}
+	}()
 	if d.questionnaire != nil {
 		return m.questionnaireKey(t, d, k)
 	}
@@ -106,6 +111,7 @@ func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 		return d.editor.Update("", k)
 	}
 	if match("tui.select.cancel") {
+		m.restoreTheme(d)
 		t.dialogs = t.dialogs[1:]
 		return tea.Batch(respond(t, d, map[string]any{"cancelled": true}), m.focus(t))
 	}
@@ -232,6 +238,9 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 	}
 	t.dialogs = t.dialogs[1:]
 	switch d.kind {
+	case "theme":
+		m.restoreTheme(d)
+		return m.chooseTheme(t, value)
 	case "session":
 		if strings.HasPrefix(value, "@") {
 			var id int

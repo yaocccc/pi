@@ -51,6 +51,8 @@ type tab struct {
 	title                   string
 	selection               transcriptSelection
 	working                 workingState
+	workingStart            int
+	assistantStats          map[string]string
 	toast                   toastState
 }
 type command struct{ Name, Description string }
@@ -59,6 +61,7 @@ type option struct {
 	Data                 any
 }
 type dialog struct {
+	themeBefore                      *config.Theme
 	cwd                              *cwdCompletion
 	questionnaire                    *questionnaire
 	hideCurrent                      bool
@@ -71,6 +74,7 @@ type dialog struct {
 	namedOnly, showPath, reverseSort bool
 }
 type Model struct {
+	updates                        updateState
 	sessionActions                 map[string]*sessionAction
 	files                          fileCompletionState
 	fileReader                     fileReader
@@ -154,10 +158,12 @@ func (p *clientPool) close() error {
 func New(opts Options, cfg config.Config) *Model {
 	m := &Model{opts: opts, cfg: cfg, width: 100, height: 30, pool: &clientPool{clients: map[*rpc.Client]bool{}}}
 	m.quota = codex.New(cfg.AgentDir)
+	m.updates.reader = newUpdateReader()
 	m.addTab(opts.SessionFile)
 	return m
 }
 func (m *Model) Close() error {
+	m.updates.reader.close()
 	m.imagePreviews.Close()
 	m.fileReader.close()
 	m.quota.Close()
@@ -309,7 +315,7 @@ func nextEvent(t *tab) tea.Cmd {
 }
 func (m *Model) Init() tea.Cmd {
 	t := m.current()
-	return tea.Batch(m.start(t), t.editor.Area.Focus(), tick(), m.requestGit(time.Now()))
+	return tea.Batch(m.start(t), t.editor.Area.Focus(), tick(), m.requestGit(time.Now()), m.releaseNotesCommand(), m.updates.reader.command(m.updateConfig()))
 }
 func call(t *tab, op string, data map[string]any) tea.Cmd {
 	if t == nil || t.client == nil || t.dead {
@@ -375,6 +381,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	renderNow := true
 	switch v := msg.(type) {
+	case releaseNotesMsg:
+		m.receiveReleaseNotes(v)
+	case updateCheckMsg:
+		m.receiveUpdateCheck(v)
 	case sessionActionMsg:
 		cmds = append(cmds, m.finishSessionAction(v))
 	case tea.WindowSizeMsg:
@@ -448,6 +458,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(v.event.Data) > 0 {
 			var env struct{ Type string }
 			_ = json.Unmarshal(v.event.Data, &env)
+			wasWorking := t.working.active
+			if env.Type == "agent_start" && !wasWorking {
+				t.workingStart = len(t.state.Items)
+			}
 			t.working.apply(v.event.Data, time.Now())
 			if env.Type == "extension_ui_request" {
 				cmds = append(cmds, m.extension(t, v.event.Data))
@@ -467,6 +481,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				if env.Type == "agent_settled" {
+					if wasWorking {
+						t.saveAssistantStats()
+					}
 					t.status = "Ready"
 					t.sending = false
 					t.awaitingStart, t.interruptRequested = false, false
@@ -626,6 +643,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if d.kind != "help" {
 					d.selected = min(d.selected, max(0, len(m.filtered(d))-1))
 				}
+				m.previewTheme(d)
 			} else {
 				m.scroll(t, delta)
 			}
@@ -655,6 +673,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if t := m.current(); renderNow && t != nil && t.dirty {
 		m.document(t)
 	}
+	cmds = append(cmds, m.markReleaseNotesDisplayed())
 	return m, tea.Batch(cmds...)
 }
 func (m *Model) document(t *tab) {
@@ -669,7 +688,14 @@ func (m *Model) document(t *tab) {
 	if assistantTitle == "" {
 		assistantTitle = "助手"
 	}
-	t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, render.Options{AssistantTitle: assistantTitle, Width: m.mainWidth(), MessageCount: t.state.MessageCount, ExpandTools: t.expanded, ShowThinking: t.showThinking, Expanded: t.folds})
+	if m.showStartupInfo(t) {
+		if t.doc.Text == "" {
+			t.follow = false
+		}
+		t.doc = m.startupDocument(t)
+	} else {
+		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, render.Options{AssistantTitle: assistantTitle, AssistantStats: t.assistantStats, Width: m.mainWidth(), MessageCount: t.state.MessageCount, ExpandTools: t.expanded, ShowThinking: t.showThinking, Expanded: t.folds})
+	}
 	if t.selection.document != t.doc.Text {
 		t.selection = transcriptSelection{}
 	}
@@ -701,6 +727,7 @@ func (m *Model) editTarget(t *tab, action string, msg tea.Msg) tea.Cmd {
 		cmd := d.editor.Update(action, msg)
 		if d.editor.Value() != before {
 			d.selected = 0
+			m.previewTheme(d)
 		}
 		return cmd
 	}

@@ -19,6 +19,7 @@ type Options struct {
 	MessageCount int
 	// AssistantTitle is the current model's display name (or ID).
 	AssistantTitle            string
+	AssistantStats            map[string]string // Frozen working metrics keyed by a block in the bubble.
 	ExpandTools, ShowThinking bool
 	// An explicit entry overrides ExpandTools, permitting individual collapse.
 	Expanded       map[string]bool
@@ -142,12 +143,12 @@ func compactBubble(body []string, title string, available int) ([]string, int) {
 	return rows, min(available, width)
 }
 
-func frame(body []string, title string, width int, kind string, right bool, available int) []string {
-	rows, _ := frameContent(body, title, width, kind, right, available)
+func frame(body []string, title string, width int, kind string, right bool, available int, themes ...config.Theme) []string {
+	rows, _ := frameContent(body, title, width, kind, right, available, themes...)
 	return rows
 }
 
-func frameContent(body []string, title string, width int, kind string, right bool, available int) ([]string, []ContentSpan) {
+func frameContent(body []string, title string, width int, kind string, right bool, available int, themes ...config.Theme) ([]string, []ContentSpan) {
 	width = max(4, width)
 	title = fit(oneLine(title), width-6)
 	middle := strings.Repeat("─", width-2)
@@ -173,6 +174,7 @@ func frameContent(body []string, title string, width int, kind string, right boo
 		}
 	}
 	out = append(out, FrameBorder(kind, "bottomLeft", "╰")+FrameBorder(kind, "bottom", strings.Repeat("─", width-2))+FrameBorder(kind, "bottomRight", "╯"))
+	out = gradientFrame(kind, out, width, themes...)
 	if right {
 		for i := range out {
 			out[i] = strings.Repeat(" ", max(0, available-width)) + out[i]
@@ -217,7 +219,7 @@ func toolBody(item session.Item, theme config.Theme, opts Options, width int) []
 			frameItem.Error = false
 			detail = codemodeFrame(detail, frameItem, frameTheme, width)
 		} else {
-			detail = frame(detail, name+" · result", width, "tool", false, width)
+			detail = frame(detail, name+" · result", width, "tool", false, width, theme)
 		}
 	}
 	return append(out, detail...)
@@ -294,6 +296,7 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 	for i := 0; i < len(items); {
 		item := items[i]
 		if item.Role == "assistant" || item.Role == "tool" || item.Role == "toolResult" || item.Role == "thinking" {
+			start := i
 			inner := max(1, width-4)
 			var body []string
 			var group []Block
@@ -408,8 +411,15 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			if len(body) > 0 {
 				if width >= 8 {
 					var bubbleWidth int
-					body, bubbleWidth = compactBubble(body, assistantTitle, width)
-					body, sectionContent = frameContent(body, assistantTitle, bubbleWidth, "assistant", false, width)
+					title := assistantTitle
+					for n := i - 1; n >= start; n-- {
+						if stats := opts.AssistantStats[items[n].ID]; stats != "" {
+							title += " · " + oneLine(stats)
+							break
+						}
+					}
+					body, bubbleWidth = compactBubble(body, title, width)
+					body, sectionContent = frameContent(body, title, bubbleWidth, "assistant", false, width, theme)
 					for n := range group {
 						group[n].Start++
 						group[n].End++
@@ -430,8 +440,9 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 				continue
 			}
 			if width >= 8 {
-				body, bubbleWidth = compactBubble(body, "你", bubbleWidth)
-				body, sectionContent = frameContent(body, "你", bubbleWidth, "user", true, width)
+				title := "你"
+				body, bubbleWidth = compactBubble(body, title, bubbleWidth)
+				body, sectionContent = frameContent(body, title, bubbleWidth, "user", true, width, theme)
 			}
 			var links []ImageLink
 			body, links = imageRows(body, item.ID, len(item.Images), len(out))
@@ -441,8 +452,9 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			body := []string{paint(fit(systemSynopsis(item.Text), max(1, width-4)), theme.Muted)}
 			if width >= 8 {
 				var bubbleWidth int
-				body, bubbleWidth = compactBubble(body, "系统", width)
-				body, sectionContent = frameContent(body, "系统", bubbleWidth, "system", false, width)
+				title := "系统"
+				body, bubbleWidth = compactBubble(body, title, width)
+				body, sectionContent = frameContent(body, title, bubbleWidth, "system", false, width, theme)
 			} else {
 				body = []string{paint(fit(systemSynopsis(item.Text), width), theme.Muted)}
 			}

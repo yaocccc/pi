@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"pi-goui/internal/config"
 	"strconv"
 	"strings"
 
@@ -53,7 +54,7 @@ func FrameBorder(kind, edge, text string) string {
 // FrameBox makes a square, transparent frame around already-rendered body rows.
 // Width includes borders and, where space permits, one padding cell per side.
 // It is used by the editor so its text/footer widths and hit positions stay put.
-func FrameBox(kind string, body []string, width int) []string {
+func FrameBox(kind string, body []string, width int, themes ...config.Theme) []string {
 	if width <= 0 {
 		return nil
 	}
@@ -77,5 +78,5 @@ func FrameBox(kind string, body []string, width int) []string {
 		line = ansi.Truncate(line, inside, "")
 		rows = append(rows, FrameBorder(kind, "left", "│")+strings.Repeat(" ", padding)+line+strings.Repeat(" ", max(0, inside-ansi.StringWidth(line))+padding)+FrameBorder(kind, "right", "│"))
 	}
-	return append(rows, border("└", "┘", "bottom", "bottomLeft", "bottomRight"))
+	return gradientFrame(kind, append(rows, border("└", "┘", "bottom", "bottomLeft", "bottomRight")), width, themes...)
 }

@@ -303,6 +303,10 @@ func workingTokens(value float64) string {
 	return fmt.Sprintf("%.0f", value)
 }
 func (w *workingState) line(now time.Time, theme config.Theme) string {
+	return w.formatLine(now, theme, true)
+}
+
+func (w *workingState) formatLine(now time.Time, theme config.Theme, detailed bool) string {
 	if !w.present {
 		return ""
 	}
@@ -324,7 +328,10 @@ func (w *workingState) line(now time.Time, theme config.Theme) string {
 	if w.current {
 		output += math.Max(w.live.output, w.estimate())
 	}
-	parts := []string{fmt.Sprintf("Turn %d", max(1, w.turn))}
+	var parts []string
+	if detailed {
+		parts = append(parts, fmt.Sprintf("Turn %d", max(1, w.turn)))
+	}
 	var usage []string
 	if input > 0 {
 		usage = append(usage, "↑"+workingTokens(input))
@@ -335,7 +342,7 @@ func (w *workingState) line(now time.Time, theme config.Theme) string {
 	if len(usage) > 0 {
 		parts = append(parts, strings.Join(usage, " "))
 	}
-	if elapsed > 0 && output > 0 {
+	if detailed && elapsed > 0 && output > 0 {
 		parts = append(parts, fmt.Sprintf("%.1f TPS", output/elapsed.Seconds()))
 	}
 	parts = append(parts, duration)

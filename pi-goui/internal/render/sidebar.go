@@ -266,7 +266,7 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 		rows = rows[:max(0, height-1)]
 	}
 	rows = append(rows, border("└", "┘"))
-	return strings.Join(rows, "\n")
+	return strings.Join(gradientFrame("sidebar", rows, width, theme), "\n")
 }
 func number(n int) string {
 	unit := ""

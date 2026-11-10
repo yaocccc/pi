@@ -220,5 +220,12 @@ func codemodeFrame(body []string, item session.Item, theme config.Theme, width i
 	title = fit(title, max(0, width-6))
 	rows[0] = paint("┌─ ", border) + title + paint(" "+strings.Repeat("─", max(0, width-5-ansi.StringWidth(title)))+"┐", border)
 	rows[len(rows)-1] = paint("└"+strings.Repeat("─", max(0, width-2))+"┘", border)
+	kind := "codemode"
+	if item.Error {
+		kind = "error"
+	}
+	rows = gradientFrame(kind, rows, width, theme)
+	// Keep the semantic token badge colors inside the gradient border.
+	rows[0] = ansi.Cut(rows[0], 0, 3) + title + ansi.Cut(rows[0], 3+ansi.StringWidth(title), width)
 	return rows
 }

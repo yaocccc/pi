@@ -131,8 +131,8 @@ func (m *Model) View() tea.View {
 			visible[i] = m.selectionLine(t, visible[i], offset+i)
 		}
 		text := strings.Join(visible, "\n")
-		if len(t.state.Items) == 0 {
-			text = m.paint("\n  A quiet place to work.\n\n  Ask pi a question, or use / to explore commands.\n  Create a second session with /new; both can run in parallel.", theme.Muted)
+		if len(t.state.Items) == 0 && !m.showStartupInfo(t) {
+			text = m.paint(welcomeText, theme.Muted)
 		}
 		var rows []string
 		rows = append(rows, fitBox(text, w, height))

@@ -474,7 +474,7 @@ func workerLayout(item session.Item, theme config.Theme, opts Options, width int
 		if runningWorker(item) {
 			title = "worker · running"
 		}
-		detail = frame(detail, title, width, "tool", false, width)
+		detail = frame(detail, title, width, "worker", false, width, theme)
 	}
 	rows = append(rows, detail...)
 	if !runningWorker(item) {
