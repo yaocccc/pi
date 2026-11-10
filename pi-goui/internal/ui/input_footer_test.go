@@ -98,7 +98,7 @@ func TestWorkingRowDirectlyAboveInputFrame(t *testing.T) {
 	tab.status = ""
 	lines := strings.Split(m.View().Content, "\n")
 	row := m.editorTop(tab) - 1
-	if !strings.Contains(ansi.Strip(lines[row]), "Turn 1") {
+	if !strings.Contains(ansi.Strip(lines[row]), "1 turns") {
 		t.Fatalf("working message not directly above frame: %q", lines[row])
 	}
 	if !strings.Contains(lines[row], "\x1b[") {

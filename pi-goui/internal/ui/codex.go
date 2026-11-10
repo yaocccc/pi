@@ -22,6 +22,9 @@ func (m *Model) quotaIdentity() (string, codex.Identity) {
 	return id.Provider + "\n" + id.BaseURL, id
 }
 func (m *Model) pollQuota(now time.Time) tea.Cmd {
+	if t := m.current(); t == nil || t.state.Model.Provider == "" {
+		return nil // Session initialization must not invalidate cached quota.
+	}
 	key, id := m.quotaIdentity()
 	if key != m.quotaKey {
 		m.quotaGeneration++

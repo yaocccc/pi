@@ -23,8 +23,8 @@ func TestQuotaViewGatedByCurrentIdentityAndRejectsLateReply(t *testing.T) {
 	}
 	msg := cmd().(quotaMsg)
 	m.Update(msg)
-	if m.sidebarContext().Quota != nil {
-		t.Fatal("non-login quota appeared")
+	if q := m.sidebarContext().Quota; q == nil || q.RemainingPercent != nil {
+		t.Fatal("missing default quota placeholder")
 	}
 	key, _ := m.quotaIdentity()
 	remaining, credits := 80.2, 82334.75
@@ -33,13 +33,18 @@ func TestQuotaViewGatedByCurrentIdentityAndRejectsLateReply(t *testing.T) {
 	if m.sidebarContext().Quota == nil {
 		t.Fatal("matching logged-in quota missing")
 	}
+	tab.state.Model.Provider = ""
+	m.pollQuota(time.Now())
+	if q := m.sidebarContext().Quota; q == nil || q.RemainingPercent != snapshot.RemainingPercent {
+		t.Fatal("session initialization cleared cached quota")
+	}
 	tab.state.Model.Provider = "other"
-	if m.sidebarContext().Quota != nil {
+	if q := m.sidebarContext().Quota; q == nil || q.RemainingPercent != nil {
 		t.Fatal("other provider inherited Codex quota")
 	}
 	m.pollQuota(time.Now())
 	m.Update(quotaMsg{key: key, generation: m.quotaGeneration - 1, snapshot: snapshot})
-	if m.sidebarContext().Quota != nil {
+	if q := m.sidebarContext().Quota; q == nil || q.RemainingPercent != nil {
 		t.Fatal("late response resurrected previous account display")
 	}
 }
@@ -55,7 +60,7 @@ func TestWorkingCompletionPersistsUntilNewMainInput(t *testing.T) {
 	tab.working.apply([]byte(`{"type":"turn_start"}`), now)
 	tab.working.apply([]byte(`{"type":"agent_settled"}`), now.Add(time.Second))
 	before := ansi.Strip(m.workingLine(tab))
-	if !strings.HasPrefix(before, "✓ Turn 1") {
+	if !strings.HasPrefix(before, "✓ 1 turns") {
 		t.Fatal(before)
 	}
 	m.Update(tickMsg(time.Now()))

@@ -25,6 +25,7 @@ type Options struct {
 	PiArgs                []string
 }
 type tab struct {
+	footerHover footerHoverState
 	newSession                                                                     bool
 	mutation                                                                       *sessionAction
 	awaitingStart, interruptRequested                                              bool
@@ -50,6 +51,7 @@ type tab struct {
 	revision, draftRevision uint64
 	title                   string
 	selection               transcriptSelection
+	scrollbarUntil          time.Time
 	working                 workingState
 	workingStart            int
 	assistantStats          map[string]string
@@ -74,6 +76,7 @@ type dialog struct {
 	namedOnly, showPath, reverseSort bool
 }
 type Model struct {
+	sidebarHistory                 sidebarHistoryState
 	updates                        updateState
 	sessionActions                 map[string]*sessionAction
 	files                          fileCompletionState
@@ -315,7 +318,7 @@ func nextEvent(t *tab) tea.Cmd {
 }
 func (m *Model) Init() tea.Cmd {
 	t := m.current()
-	return tea.Batch(m.start(t), t.editor.Area.Focus(), tick(), m.requestGit(time.Now()), m.releaseNotesCommand(), m.updates.reader.command(m.updateConfig()))
+	return tea.Batch(m.start(t), t.editor.Area.Focus(), tick(), m.requestGit(time.Now()), m.requestSidebarHistory(time.Now()), m.releaseNotesCommand(), m.updates.reader.command(m.updateConfig()))
 }
 func call(t *tab, op string, data map[string]any) tea.Cmd {
 	if t == nil || t.client == nil || t.dead {
@@ -381,6 +384,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	renderNow := true
 	switch v := msg.(type) {
+	case footerReplyMsg:
+		cmds = append(cmds, m.footerReply(v))
 	case releaseNotesMsg:
 		m.receiveReleaseNotes(v)
 	case updateCheckMsg:
@@ -545,6 +550,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		cmds = append(cmds, m.reply(t, v))
+	case sidebarHistoryMsg:
+		m.sidebarHistory.pending = false
+		if m.sidebarHistory.cwd != v.cwd {
+			m.sidebarHistory.offset = 0
+		}
+		m.sidebarHistory.cwd = v.cwd
+		if v.err == nil {
+			m.sidebarHistory.sessions = v.sessions
+		} else {
+			m.sidebarHistory.sessions = nil
+		}
+		m.revealSidebar()
 	case sessionsMsg:
 		t := m.byID(v.id)
 		if t == nil {
@@ -620,12 +637,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clipboardTarget = nil
 	case tea.MouseClickMsg:
+		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		cmds = append(cmds, m.mouse(v.Mouse()))
 	case tea.MouseMotionMsg:
+		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		m.mouseMotion(v.Mouse())
+		cmds = append(cmds, m.hoverFooter())
 	case tea.MouseReleaseMsg:
+		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		cmds = append(cmds, m.mouseRelease(v.Mouse()))
 	case tea.MouseWheelMsg:
+		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
+		if m.footerHoverKind(m.current()) != "" {
+			delta := 0
+			if v.Button == tea.MouseWheelUp { delta = -1 }
+			if v.Button == tea.MouseWheelDown { delta = 1 }
+			m.scrollFooterPopup(m.current(), delta)
+			break
+		}
 		t := m.current()
 		if t != nil {
 			delta := 0
@@ -635,8 +664,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delta = 3
 			}
 			if m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
-				visible := max(1, m.sidebarLayout().Capacity)
-				m.sidebarOffset = min(max(0, m.sidebarOffset+delta), max(0, len(m.tabs)-visible))
+				layout := m.sidebarLayout()
+				if v.Y >= layout.HistoryStart && v.Y < layout.HistoryStart+layout.HistoryCount*render.SidebarHistoryRows {
+					m.sidebarHistory.offset = min(max(0, layout.HistoryOffset+delta), max(0, len(m.sidebarHistory.sessions)-layout.HistoryCount))
+				} else if v.Y >= layout.SessionsStart && v.Y < m.height-1 {
+					visible := max(1, layout.Capacity)
+					m.sidebarOffset = min(max(0, m.sidebarOffset+delta), max(0, len(m.tabs)-visible))
+				}
 			} else if len(t.dialogs) > 0 {
 				d := t.dialogs[0]
 				d.selected = max(0, d.selected+delta)
@@ -663,7 +697,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		cmds = append(cmds, tick(), m.requestGit(now), m.pollQuota(now))
+		cmds = append(cmds, tick(), m.requestGit(now), m.requestSidebarHistory(now), m.pollQuota(now))
 	default:
 		if t := m.current(); t != nil {
 			cmds = append(cmds, m.editTarget(t, "", msg))
@@ -694,7 +728,7 @@ func (m *Model) document(t *tab) {
 		}
 		t.doc = m.startupDocument(t)
 	} else {
-		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, render.Options{AssistantTitle: assistantTitle, AssistantStats: t.assistantStats, Width: m.mainWidth(), MessageCount: t.state.MessageCount, ExpandTools: t.expanded, ShowThinking: t.showThinking, Expanded: t.folds})
+		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, render.Options{ShowToolActivity: t.state.Busy && !t.dead && !t.state.Compacting, AssistantTitle: assistantTitle, AssistantStats: t.assistantStats, Width: m.mainWidth(), MessageCount: t.state.MessageCount, ExpandTools: t.expanded, ShowThinking: t.showThinking, Expanded: t.folds})
 	}
 	if t.selection.document != t.doc.Text {
 		t.selection = transcriptSelection{}
@@ -711,6 +745,7 @@ func (m *Model) clampScroll(t *tab) {
 	}
 }
 func (m *Model) scroll(t *tab, delta int) {
+	t.noteScroll()
 	t.follow = false
 	t.offset += delta
 	m.clampScroll(t)

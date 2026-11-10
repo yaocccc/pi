@@ -193,6 +193,7 @@ func (v workerView) overall(item session.Item) string {
 	return "unknown"
 }
 func workerHeader(item session.Item, v workerView, expanded bool, theme config.Theme, width int) string {
+	width = min(width, 80)
 	arrow := "›"
 	if expanded {
 		arrow = "⌄"
@@ -208,7 +209,7 @@ func workerHeader(item session.Item, v workerView, expanded bool, theme config.T
 		label += " · " + oneLine(v.batch)
 	}
 	header := paint(arrow, theme.Muted) + " " + paint(icon, color) + " " + paint(label, theme.Text)
-	return withToolBadge(header, tokenBadge(item.EstimatedTokens, theme), width, 24, true)
+	return withToolBadge(header, tokenBadge(item.EstimatedTokens, theme), width, 24, false)
 }
 func workerDuration(c workerCard, now float64) string {
 	end := c.finished
@@ -239,7 +240,7 @@ func workerRuntime(c workerCard, now float64) string {
 		parts = append(parts, c.preset)
 	}
 	if n := workerNumber(c.usage, "turns"); n > 0 {
-		parts = append(parts, fmt.Sprintf("Turn %.0f", n))
+		parts = append(parts, fmt.Sprintf("%.0f turns", n))
 	}
 	var usage []string
 	if n := workerNumber(c.usage, "input"); n > 0 {
@@ -261,6 +262,13 @@ func workerTaskID(item session.Item, index int, position int) string {
 	// Native indices are stable; position disambiguates malformed duplicate indices.
 	return fmt.Sprintf("worker-task:%s:%d:%d", item.ID, index, position)
 }
+func workerSlotNotice(text string) bool {
+	if strings.Contains(text, "超时") || strings.Contains(text, "取消") || strings.Contains(text, "失败") {
+		return false
+	}
+	return strings.Contains(text, "等待执行槽位") || strings.Contains(text, "等待槽位") || strings.Contains(text, "已获得槽位")
+}
+
 func workerDetailRows(item session.Item, theme config.Theme, _ Options, width int) ([]string, []Block) {
 	width = max(1, width)
 	v := workerData(item)
@@ -334,7 +342,7 @@ func workerDetailRows(item session.Item, theme config.Theme, _ Options, width in
 				text := visualString(a, "detail")
 				if kind == "phase" {
 					label := visualString(a, "label")
-					if label == "等待槽位" || label == "已获得槽位" {
+					if visualString(a, "status") != "failed" && (workerSlotNotice(label) || workerSlotNotice(text)) {
 						continue
 					}
 					text = workerFirst(text, label)
@@ -343,7 +351,7 @@ func workerDetailRows(item session.Item, theme config.Theme, _ Options, width in
 					progress = append(progress, text)
 				}
 			}
-			if len(progress) == 0 {
+			if len(progress) == 0 && !workerSlotNotice(c.phase) {
 				switch c.status {
 				case "running", "cancelling":
 					progress = append(progress, workerFirst(c.phase, "正在执行中..."))

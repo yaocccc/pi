@@ -83,7 +83,8 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 		*c = TranscriptCache{}
 		return Document{}
 	}
-	if c.theme != theme || c.opts.Width != opts.Width || c.opts.AssistantTitle != opts.AssistantTitle || c.opts.ShowThinking != opts.ShowThinking || c.opts.ExpandTools != opts.ExpandTools || !maps.Equal(c.opts.Expanded, opts.Expanded) || !maps.Equal(c.opts.AssistantStats, opts.AssistantStats) {
+	opts.activityGroup = toolActivityGroup(items, opts)
+	if c.opts.activityGroup != opts.activityGroup || c.theme != theme || c.opts.Width != opts.Width || c.opts.AssistantTitle != opts.AssistantTitle || c.opts.ShowThinking != opts.ShowThinking || c.opts.ExpandTools != opts.ExpandTools || !maps.Equal(c.opts.Expanded, opts.Expanded) || !maps.Equal(c.opts.AssistantStats, opts.AssistantStats) {
 		c.sections = nil
 	}
 	c.theme, c.opts = theme, opts
@@ -134,6 +135,7 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 	var blocks []Block
 	var content []ContentSpan
 	var imageLinks []ImageLink
+	var activityRows []int
 	lines := 0
 	for _, section := range next {
 		if section.doc.Text != "" || len(section.doc.Blocks) > 0 {
@@ -142,6 +144,9 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 			}
 			text.WriteString(section.doc.Text)
 			content = append(content, section.doc.Content...)
+			for _, row := range section.doc.ActivityRows {
+				activityRows = append(activityRows, row+lines)
+			}
 			for _, link := range section.doc.ImageLinks {
 				link.Row += lines
 				imageLinks = append(imageLinks, link)
@@ -155,5 +160,5 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 		}
 	}
 	c.sections = next
-	return Document{Text: text.String(), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: count}
+	return Document{ActivityRows: activityRows, Text: text.String(), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: count}
 }

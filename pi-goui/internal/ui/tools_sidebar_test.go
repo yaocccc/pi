@@ -7,7 +7,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/render"
 )
 
 func TestNativeToolHistoryReachesSemanticViews(t *testing.T) {
@@ -50,7 +49,7 @@ func TestSidebarCardClickWheelAndResize(t *testing.T) {
 	}
 	m.activate(0)
 	m.sidebarOffset = 0
-	for _, row := range []int{render.SidebarSessionStart + 2, render.SidebarSessionStart + 3} {
+	for _, row := range []int{m.sidebarLayout().SessionsStart + 2, m.sidebarLayout().SessionsStart + 3} {
 		m.mouse(tea.Mouse{Button: tea.MouseLeft, X: m.mainWidth() + 3, Y: row})
 		if m.active != 1 {
 			t.Fatalf("both card rows must activate session 2, row=%d active=%d", row, m.active)
@@ -59,17 +58,17 @@ func TestSidebarCardClickWheelAndResize(t *testing.T) {
 	m.current().dirty = false
 	m.current().offset = 7
 	oldActive := m.active
-	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: m.mainWidth() + 3, Y: 20})
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: m.mainWidth() + 3, Y: m.sidebarLayout().SessionsStart})
 	if m.sidebarOffset != 3 || m.active != oldActive || m.current().offset != 7 {
 		t.Fatalf("sidebar wheel leaked into transcript/focus: offset=%d active=%d chat=%d", m.sidebarOffset, m.active, m.current().offset)
 	}
-	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: m.mainWidth() + 3, Y: render.SidebarSessionStart + 1})
+	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: m.mainWidth() + 3, Y: m.sidebarLayout().SessionsStart + 1})
 	if m.active != 3 {
 		t.Fatal("scrolled card click did not map offset")
 	}
 	m.activate(len(m.tabs) - 1)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
-	visible := render.SidebarSessionCapacity(m.height)
+	visible := max(1, m.sidebarLayout().Capacity)
 	if m.active < m.sidebarOffset || m.active >= m.sidebarOffset+visible {
 		t.Fatal("resize hid selected session")
 	}

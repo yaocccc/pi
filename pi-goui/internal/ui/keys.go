@@ -169,10 +169,12 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 		m.scroll(t, 1)
 		return nil
 	case match("tui.altScreen.top"):
+		t.noteScroll()
 		t.follow = false
 		t.offset = 0
 		return nil
 	case match("tui.altScreen.bottom"):
+		t.noteScroll()
 		t.follow = true
 		m.clampScroll(t)
 		return nil
@@ -253,6 +255,7 @@ func (m *Model) history(t *tab, delta int) {
 	m.resizeEditor(t)
 }
 func (m *Model) promptScroll(t *tab, direction int) {
+	t.noteScroll()
 	if direction < 0 {
 		for i := len(t.doc.Blocks) - 1; i >= 0; i-- {
 			b := t.doc.Blocks[i]

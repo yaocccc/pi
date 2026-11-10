@@ -37,7 +37,7 @@ func TestSidebarInformationGeometryAndAlignment(t *testing.T) {
 				t.Fatalf("unexpected %s", absent)
 			}
 		}
-		if !strings.Contains(rows[layout.NewRow], "+ New session") || !strings.Contains(rows[layout.SessionsStart+1], "Selected") {
+		if !strings.Contains(rows[layout.NewRow], "+ New") || !strings.Contains(rows[layout.SessionsStart+1], "Selected") {
 			t.Fatal("optional git row shifted actions incorrectly")
 		}
 		for i, row := range strings.Split(raw, "\n") {

@@ -13,9 +13,12 @@ import (
 	"pi-goui/internal/session"
 )
 
-// Default positions without Git or quota. Always use SidebarGeometry for hit tests.
-const SidebarNewRow = 10
-const SidebarSessionStart = 12
+// Default positions with empty history and no quota. Use SidebarGeometry for hit tests.
+const SidebarNewRow = 13
+const SidebarSessionStart = 15
+
+// Each history entry occupies one row.
+const SidebarHistoryRows = 1
 
 type SessionRow struct {
 	ID, Name, Status string
@@ -37,12 +40,16 @@ type SidebarQuota struct {
 	Now              time.Time
 }
 type SidebarContext struct {
-	Directory string
-	Git       *GitStatus
-	Quota     *SidebarQuota
+	Directory      string
+	Git            *GitStatus
+	Quota          *SidebarQuota
+	History        []string
+	HistoryHovered []bool
+	HistoryOffset  int
 }
 type SidebarLayout struct {
 	DirectoryRow, ContextRow, StatsRow, QuotaRow, NewRow, SessionsStart, Capacity int
+	HistoryRow, HistoryStart, HistoryCount, HistoryOffset                         int
 }
 
 func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
@@ -52,6 +59,11 @@ func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 		quotaRow = 10 + extra
 		extra += 4
 	}
+	historyRow := 10 + extra
+	// Keep only complete history entries and room for New session and one open-session card.
+	historyCount := min(5, len(context.History), max(0, (height-historyRow-8)/SidebarHistoryRows))
+	extra += historyCount * SidebarHistoryRows
+	newRow := SidebarNewRow + extra
 	start := SidebarSessionStart + extra
 	directoryRow := -1
 	if height > 4 {
@@ -59,7 +71,9 @@ func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 	}
 	return SidebarLayout{
 		DirectoryRow: directoryRow, ContextRow: 4, StatsRow: 6, QuotaRow: quotaRow,
-		NewRow: SidebarNewRow + extra, SessionsStart: start,
+		HistoryRow: historyRow, HistoryStart: historyRow + 2, HistoryCount: historyCount,
+		HistoryOffset: min(max(0, context.HistoryOffset), max(0, len(context.History)-historyCount)),
+		NewRow:        newRow, SessionsStart: start,
 		Capacity: max(0, (height-start-1)/SidebarSessionRows),
 	}
 }
@@ -254,8 +268,34 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 			cell(sidebarPair("Resets in", quotaCountdown(q), inner, theme)),
 			cell(sidebarPair("Credits", quotaCredits(q), inner, theme)), separator())
 	}
-	rows = append(rows, cell(NewSessionLabel()), cell(""))
 	layout := SidebarGeometry(height, ctx)
+	rows = append(rows, cell(title("RECENTS")), cell(""))
+	historyRows := layout.HistoryCount * SidebarHistoryRows
+	for row := 0; row < historyRows; row++ {
+		i := layout.HistoryOffset + row/SidebarHistoryRows
+		hovered := i < len(ctx.HistoryHovered) && ctx.HistoryHovered[i]
+		contentWidth := inner
+		scrollbar := len(ctx.History) > layout.HistoryCount && inner >= 2
+		if scrollbar {
+			contentWidth -= 2
+		}
+		line := sidebarHistoryRow(ctx.History[i], contentWidth, hovered)
+		if hovered {
+			line = SidebarHoverText(line)
+		}
+		if scrollbar {
+			visibleRows := historyRows
+			thumbSize := max(1, visibleRows*layout.HistoryCount/len(ctx.History))
+			thumbStart := layout.HistoryOffset * (visibleRows - thumbSize) / (len(ctx.History) - layout.HistoryCount)
+			mark := "│"
+			if row >= thumbStart && row < thumbStart+thumbSize {
+				mark = "┃"
+			}
+			line += strings.Repeat(" ", max(0, contentWidth-ansi.StringWidth(line))+1) + ScrollbarMark(mark)
+		}
+		rows = append(rows, cell(line))
+	}
+	rows = append(rows, cell(""), cell(NewSessionLabel()), cell(""))
 	for _, card := range sidebarSessionCards(sessions, inner, max(0, height-layout.SessionsStart-1)) {
 		rows = append(rows, cell(card))
 	}
@@ -268,6 +308,31 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 	rows = append(rows, border("└", "┘"))
 	return strings.Join(gradientFrame("sidebar", rows, width, theme), "\n")
 }
+
+// SidebarHoverText shares the RECENTS hover palette with sidebar-style popups.
+func SidebarHoverText(text string) string {
+	return workbenchStyle(ansi.Strip(text), workbenchAccent, false)
+}
+
+// SidebarDetailFrame uses the same text palette and frame gradient as the sidebar.
+func SidebarDetailFrame(nameRows, detailRows []string, width int, theme config.Theme) []string {
+	inner := max(0, width-4)
+	cell := func(s, color string) string {
+		s = fit(s, inner)
+		return "│ " + workbenchStyle(s+strings.Repeat(" ", max(0, inner-ansi.StringWidth(s))), color, false) + " │"
+	}
+	rows := []string{"╭" + strings.Repeat("─", max(0, width-2)) + "╮"}
+	for _, line := range nameRows {
+		rows = append(rows, cell(line, workbenchText))
+	}
+	rows = append(rows, cell("", workbenchMuted))
+	for _, line := range detailRows {
+		rows = append(rows, cell(line, workbenchMuted))
+	}
+	rows = append(rows, "╰"+strings.Repeat("─", max(0, width-2))+"╯")
+	return gradientFrame("sidebar", rows, width, theme)
+}
+
 func number(n int) string {
 	unit := ""
 	value := float64(n)

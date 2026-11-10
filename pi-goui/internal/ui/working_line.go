@@ -36,6 +36,9 @@ func (t *tab) dismissCompletedWorking() {
 // Only this method feeds styled, trusted foreground sequences to the status row.
 func (m *Model) workingLine(t *tab) string {
 	line := t.working.line(time.Now(), m.cfg.Theme)
+	if t.working.active {
+		line = render.AnimateWorkingLine(line, m.cfg.Theme, m.frame)
+	}
 	if line == "" || t.dead || t.state.Compacting || t.sending || len(t.dialogs) > 0 {
 		status := m.status(t)
 		if status == "Ready" || status == "ready" {

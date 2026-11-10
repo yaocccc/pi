@@ -141,7 +141,7 @@ func TestSidebarSectionsDimensionsAndRows(t *testing.T) {
 			t.Errorf("missing %s", term)
 		}
 	}
-	if !strings.Contains(rows[SidebarNewRow], "+ New session") || !strings.Contains(rows[SidebarSessionStart+1], "Main") || !strings.Contains(rows[SidebarSessionStart+SidebarSessionRows+1], "Background") {
+	if !strings.Contains(rows[SidebarNewRow], "+ New") || !strings.Contains(rows[SidebarSessionStart+1], "Main") || !strings.Contains(rows[SidebarSessionStart+SidebarSessionRows+1], "Background") {
 		t.Fatalf("incorrect click row positions: %q", rows)
 	}
 	for _, size := range [][2]int{{8, 4}, {16, 15}, {24, 30}, {1, 1}} {

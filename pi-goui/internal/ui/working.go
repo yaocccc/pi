@@ -12,10 +12,6 @@ import (
 	"pi-goui/internal/config"
 )
 
-const workingFrameInterval = 120 * time.Millisecond
-
-var workingFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
 const workingDedupLimit = 4096
 
 type workingUsage struct{ input, output float64 }
@@ -330,7 +326,7 @@ func (w *workingState) formatLine(now time.Time, theme config.Theme, detailed bo
 	}
 	var parts []string
 	if detailed {
-		parts = append(parts, fmt.Sprintf("Turn %d", max(1, w.turn)))
+		parts = append(parts, fmt.Sprintf("%d turns", max(1, w.turn)))
 	}
 	var usage []string
 	if input > 0 {
@@ -346,16 +342,15 @@ func (w *workingState) formatLine(now time.Time, theme config.Theme, detailed bo
 		parts = append(parts, fmt.Sprintf("%.1f TPS", output/elapsed.Seconds()))
 	}
 	parts = append(parts, duration)
-	frame, color := "✓", theme.Success
-	if w.active {
-		frame = workingFrames[int(elapsed/workingFrameInterval)%len(workingFrames)]
-		color = theme.Accent
-	}
 	paint := func(s, c string) string {
 		if c == "" {
 			return s
 		}
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render(s)
 	}
-	return paint(frame, color) + " " + paint(strings.Join(parts, " · "), theme.Muted)
+	text := strings.Join(parts, " · ")
+	if w.active {
+		return paint(text, theme.Muted)
+	}
+	return paint("✓", theme.Success) + " " + paint(text, theme.Muted)
 }

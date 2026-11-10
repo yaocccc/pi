@@ -31,6 +31,32 @@ func (m *Model) resumeTarget(file string) (string, bool) {
 	}
 	return file, true
 }
+
+// openRecent preserves work in the current tab, unlike explicit resume/replace.
+func (m *Model) openRecent(file string) tea.Cmd {
+	file, ok := m.resumeTarget(file)
+	if !ok {
+		return nil
+	}
+	for i, other := range m.tabs {
+		if !other.dead && sessionPath(other.state.File) == file {
+			return m.activate(i)
+		}
+	}
+	t := m.current()
+	// A saved tab still loading its history is not known to be empty.
+	empty := (t.newSession || t.state.ID != "") && !t.refreshing &&
+		len(t.state.Items) == 0 && t.state.MessageCount == 0 && len(t.history) == 0 &&
+		t.editor.Value() == "" && len(t.images) == 0 && t.imagePending == 0 && m.clipboardTarget != t &&
+		len(t.state.Steering) == 0 && len(t.state.FollowUp) == 0 &&
+		!t.state.Busy && !t.state.Compacting && !t.sending && !t.awaitingStart && !t.interruptRequested &&
+		t.mutation == nil && !m.reservedSession(t.state.File) && len(t.dialogs) == 0
+	if empty {
+		return m.replaceSession(t, file)
+	}
+	return m.open(file)
+}
+
 func (m *Model) resume(file string) tea.Cmd {
 	file, ok := m.resumeTarget(file)
 	if !ok {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	"pi-goui/internal/render"
 )
 
 func workingApply(w *workingState, raw string, now time.Time) { w.apply(json.RawMessage(raw), now) }
@@ -18,7 +19,7 @@ func workingFinal(stamp, output int) string {
 func TestWorkingLifecycleAndMetrics(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	w := workingState{}
-	theme := config.Theme{Accent: "#123456", Success: "#345678", Muted: "#567890"}
+	theme := config.Theme{Accent: "1 turns23456", Success: "#345678", Muted: "#567890"}
 	if w.line(now, theme) != "" {
 		t.Fatal("working before a run")
 	}
@@ -30,14 +31,14 @@ func TestWorkingLifecycleAndMetrics(t *testing.T) {
 	workingApply(&w, `{"type":"turn_start","turnIndex":0}`, now)
 	workingApply(&w, `{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"abcdefgh"}}`, now)
 	line := ansi.Strip(w.line(now.Add(time.Second), theme))
-	for _, s := range []string{"Turn 1", "1s", "↓2", "2.0 TPS"} {
+	for _, s := range []string{"1 turns", "1s", "↓2", "2.0 TPS"} {
 		if !strings.Contains(line, s) {
 			t.Fatalf("missing %q: %s", s, line)
 		}
 	}
 	workingApply(&w, workingFinal(1, 4), now.Add(2*time.Second))
 	line = ansi.Strip(w.line(now.Add(2*time.Second), theme))
-	if !strings.Contains(line, "Turn 1 · ↑35 ↓4 · 2.0 TPS · 2s") {
+	if !strings.Contains(line, "1 turns · ↑35 ↓4 · 2.0 TPS · 2s") {
 		t.Fatal(line)
 	}
 	workingApply(&w, `{"type":"agent_end"}`, now.Add(2*time.Second))
@@ -119,16 +120,15 @@ func TestWorkingAnimationAndBoundedDedup(t *testing.T) {
 	now := time.Unix(1, 0)
 	var w workingState
 	workingApply(&w, `{"type":"agent_start"}`, now)
-	seen := map[string]bool{}
-	for i := 0; i < 10; i++ {
-		line := w.line(now.Add(time.Duration(i)*workingFrameInterval), config.Theme{})
-		seen[strings.Fields(line)[0]] = true
+	theme := config.Theme{Text: "#cdd6f4", Muted: "#6c7086", Success: "#a6e3a1"}
+	base := w.line(now, theme)
+	bright := render.AnimateWorkingLine(base, theme, 0)
+	dim := render.AnimateWorkingLine(base, theme, 3)
+	if bright == dim || ansi.Strip(bright) != "1 turns · 0s" || ansi.Strip(dim) != ansi.Strip(bright) {
+		t.Fatal("working highlight must flow in place without a spinner")
 	}
-	if len(seen) != 10 {
-		t.Fatal("expected ten reference frames")
-	}
-	if strings.Fields(w.line(now, config.Theme{}))[0] != strings.Fields(w.line(now.Add(10*workingFrameInterval), config.Theme{}))[0] {
-		t.Fatal("animation period")
+	if ansi.StringWidth(bright) != ansi.StringWidth(dim) || strings.Contains(bright+dim, "[48;") {
+		t.Fatal("highlight changed geometry or background")
 	}
 	for i := 0; i < workingDedupLimit+5; i++ {
 		workingApply(&w, workingFinal(i, 1), now)

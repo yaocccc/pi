@@ -119,7 +119,7 @@ func TestSemanticCommonAndUnknownTools(t *testing.T) {
 		{visualItem("ls", map[string]any{"path": "src"}, nil, "a.go\nsubdir/"), []string{"Path: src", "subdir/"}},
 		{visualItem("codemode", map[string]any{"code": "const result = await tools.read({path: 'a.go'});"}, nil, "done"), []string{"const result", "done"}},
 		{visualItem("worker", map[string]any{"tasks": []any{map[string]any{"objective": "Run unit tests", "mode": "test"}}}, nil, `{"status":"completed","results":[{"task":"Unit tests","status":"passed"}]}`), []string{"✓ test", "Run unit tests"}},
-		{visualItem("ask_question", map[string]any{"question": "Pick one", "options": []string{"Alpha", "Beta"}}, nil, `{"value":"Beta"}`), []string{"Questions and choices", "Question: Pick one", "1: Alpha", "2: Beta", "Value: Beta"}},
+		{visualItem("ask_question", map[string]any{"question": "Pick one", "options": []string{"Alpha", "Beta"}}, nil, `{"value":"Beta"}`), []string{"◦ Pick one", "○ Alpha", "✓ Beta"}},
 		{visualItem("custom_extension", map[string]any{"enabled": true, "rules": []any{map[string]any{"scope": "src", "checks": []string{"lint", "test"}}}, "nullable": nil}, map[string]any{"durationMs": 12}, `{"matches":[{"path":"src/main.go","line":3}],"message":"Found one"}`), []string{"Enabled: yes", "Nullable: —", "Scope: src", "1: lint", "2: test", "Path: src/main.go", "Line: 3", "Message: Found one"}},
 	}
 	for _, fixture := range fixtures {

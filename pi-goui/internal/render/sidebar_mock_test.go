@@ -48,7 +48,7 @@ func TestMockSidebarOptionalSectionsAndHitGeometry(t *testing.T) {
 			if !strings.HasPrefix(plain[layout.StatsRow-1], "│ ─") || !strings.HasPrefix(plain[layout.StatsRow+3], "│ ─") {
 				t.Fatal("missing inset dividers")
 			}
-			if !strings.Contains(plain[layout.NewRow], "+ New session") || !strings.Contains(plain[layout.SessionsStart], "1 idle") {
+			if !strings.Contains(plain[layout.NewRow], "+ New") || !strings.Contains(plain[layout.SessionsStart], "1 idle") {
 				t.Fatal("geometry does not match actions")
 			}
 			if strings.TrimSpace(strings.Trim(plain[layout.SessionsStart+1], "│")) != "" {
@@ -64,7 +64,7 @@ func TestMockSidebarOptionalSectionsAndHitGeometry(t *testing.T) {
 						t.Fatalf("missing quota field %s", term)
 					}
 				}
-				if !strings.HasPrefix(plain[layout.NewRow-1], "│ ─") {
+				if !strings.HasPrefix(plain[layout.QuotaRow+3], "│ ─") {
 					t.Fatal("quota requires ending divider")
 				}
 			} else if layout.QuotaRow != -1 || strings.Contains(all, "Weekly limit") || strings.Contains(all, "Credits") {

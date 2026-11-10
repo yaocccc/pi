@@ -36,9 +36,28 @@ func workbenchStyle(text, color string, bold bool) string {
 	return start + "\x1b[38;2;" + color + "m" + text + "\x1b[39m" + end
 }
 
+// ScrollbarMark shares the muted palette between RECENTS and the transcript.
+func ScrollbarMark(mark string) string { return workbenchStyle(mark, workbenchMuted, false) }
+
 // SessionSectionTitle and NewSessionLabel use the workbench palette.
 func SessionSectionTitle() string { return workbenchStyle("SESSIONS", workbenchText, true) }
 func NewSessionLabel() string     { return workbenchStyle("+ New session", workbenchAccent, false) }
+
+// SidebarNewButton makes the entire inner row clickable, including padding.
+func SidebarNewButton(width int) (start, length int) {
+	return 0, max(0, width)
+}
+
+// sidebarHistoryRow reserves a navigation gutter before truncating the name.
+func sidebarHistoryRow(name string, width int, active bool) string {
+	marker := fit("  ", width)
+	color, markerColor := workbenchText, workbenchMuted
+	if active {
+		color, markerColor = workbenchAccent, workbenchAccent
+	}
+	name = fit(oneLine(name), max(0, width-ansi.StringWidth(marker)))
+	return workbenchStyle(marker, markerColor, false) + workbenchStyle(name, color, active)
+}
 
 func workbenchStatus(status string) (string, string) {
 	status = oneLine(status)

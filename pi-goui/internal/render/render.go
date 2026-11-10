@@ -2,6 +2,7 @@
 package render
 
 import (
+	"maps"
 	"strings"
 	"unicode"
 
@@ -15,8 +16,10 @@ import (
 )
 
 type Options struct {
-	Width        int
-	MessageCount int
+	ShowToolActivity bool // Live-only recent-call card; never enabled for saved history alone.
+	activityGroup    string
+	Width            int
+	MessageCount     int
 	// AssistantTitle is the current model's display name (or ID).
 	AssistantTitle            string
 	AssistantStats            map[string]string // Frozen working metrics keyed by a block in the bubble.
@@ -33,6 +36,7 @@ type ContentSpan struct {
 }
 
 type Document struct {
+	ActivityRows []int // Heading rows animated by the UI without rebuilding the transcript.
 	ImageLinks   []ImageLink
 	Content      []ContentSpan
 	Text         string
@@ -219,7 +223,7 @@ func toolBody(item session.Item, theme config.Theme, opts Options, width int) []
 			detail = codemodeFrame(detail, frameItem, frameTheme, width)
 		} else {
 			cardWidth := width
-			if tool := visualName(item.ToolName); tool == "read" || tool == "bash" || tool == "edit" || tool == "write" || genericTool(tool) {
+			if tool := visualName(item.ToolName); tool == "read" || tool == "bash" || tool == "edit" || tool == "write" || tool == "ask_question" || genericTool(tool) {
 				detail, cardWidth = compactBubble(detail, name, width)
 			}
 			detail = frame(detail, name, cardWidth, "tool", false, width, theme)
@@ -255,6 +259,7 @@ func systemSynopsis(text string) string {
 // share one left-aligned bubble; user messages are right-aligned and narrower.
 // Hidden thinking and collapsed tool output remain untouched in the input data.
 func Transcript(items []session.Item, theme config.Theme, opts Options) Document {
+	opts.activityGroup = toolActivityGroup(items, opts)
 	return transcript(items, theme, opts, markdown)
 }
 
@@ -274,6 +279,7 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 	items = visibleItems(items, opts)
 	var out []string
 	var imageLinks []ImageLink
+	var activityRows []int
 	var blocks []Block
 	var content []ContentSpan
 	var sectionContent []ContentSpan
@@ -303,9 +309,10 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			inner := max(1, width-4)
 			var body []string
 			var group []Block
+			activityRow := -1
 			afterToolGroup := false
-			appendTool := func(it session.Item, available, indent int) {
-				rows, childBlocks := toolLayout(it, theme, opts, available)
+			appendTool := func(it session.Item, available, indent int, childOpts Options) {
+				rows, childBlocks := toolLayout(it, theme, childOpts, available)
 				offset := len(body)
 				for _, row := range rows {
 					body = append(body, strings.Repeat(" ", indent)+row)
@@ -332,11 +339,12 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 					run := items[i-1 : end]
 					id := "tool-group:" + it.ID
 					expanded := isExpanded(id, opts)
+					activity := id == opts.activityGroup
 					if len(body) > 0 && strings.TrimSpace(ansi.Strip(body[len(body)-1])) != "" {
 						body = append(body, "")
 					}
 					start := len(body)
-					body = append(body, toolGroupHeader(run, expanded, theme, inner))
+					body = append(body, toolGroupHeader(run, expanded, theme, inner, activity))
 					index := 0
 					if !expanded {
 						for _, child := range run {
@@ -345,9 +353,29 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 					}
 					group = append(group, Block{ID: id, Role: "toolGroup", MessageIndex: index, Start: start, End: start + 1, Foldable: true, Expanded: expanded})
 					if expanded {
-						for _, child := range run {
+						for position, child := range run {
+							childOpts := opts
+							if _, explicit := opts.Expanded[child.ID]; activity && visualName(child.ToolName) == "worker" && !explicit {
+								childOpts.Expanded = maps.Clone(opts.Expanded)
+								if childOpts.Expanded == nil {
+									childOpts.Expanded = map[string]bool{}
+								}
+								childOpts.Expanded[child.ID] = position >= len(run)-3
+							}
 							indent := min(2, max(0, inner-1))
-							appendTool(child, inner-indent, indent)
+							appendTool(child, inner-indent, indent, childOpts)
+						}
+					}
+					if activity {
+						activityRow = start
+						if !expanded {
+							rows, activityBlocks := toolActivityLayout(run, theme, opts, inner)
+							for _, block := range activityBlocks {
+								block.Start += len(body)
+								block.End += len(body)
+								group = append(group, block)
+							}
+							body = append(body, rows...)
 						}
 					}
 					afterToolGroup = true
@@ -399,10 +427,16 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 					}
 					body, bubbleWidth = compactBubble(body, title, width)
 					body, sectionContent = frameContent(body, title, bubbleWidth, "assistant", false, width, theme)
+					if activityRow >= 0 {
+						activityRow++
+					}
 					for n := range group {
 						group[n].Start++
 						group[n].End++
 					}
+				}
+				if activityRow >= 0 {
+					activityRows = append(activityRows, len(out)+activityRow)
 				}
 				appendSection(body, group)
 			}
@@ -448,5 +482,5 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			appendSection(body, []Block{{ID: item.ID, Role: item.Role, MessageIndex: item.MessageIndex, Start: 0, End: len(body)}})
 		}
 	}
-	return Document{Text: strings.Join(out, "\n"), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: messageCount}
+	return Document{ActivityRows: activityRows, Text: strings.Join(out, "\n"), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: messageCount}
 }

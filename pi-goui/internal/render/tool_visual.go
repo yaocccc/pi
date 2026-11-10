@@ -301,6 +301,9 @@ func toolDetailRows(item session.Item, theme config.Theme, width int) []string {
 	if width <= 0 {
 		return nil
 	}
+	if visualName(item.ToolName) == "ask_question" {
+		return questionRows(item, theme, width)
+	}
 	if visualName(item.ToolName) == "read" {
 		return readDetailRows(item, theme, width)
 	}
@@ -335,10 +338,6 @@ func toolDetailRows(item session.Item, theme config.Theme, width int) []string {
 	case "worker":
 		rows, _ := workerDetailRows(item, theme, Options{ExpandTools: true}, width)
 		return rows
-	case "ask_question":
-		v.heading("Questions and choices")
-		v.arguments(item.Arguments)
-		v.result(item)
 	}
 	v.metadata(item.Details)
 	if len(v.rows) == 0 {

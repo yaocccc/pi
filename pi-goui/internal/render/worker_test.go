@@ -15,6 +15,22 @@ func workerFixture() session.Item {
 		Text:    `{"status":"failed","summary":["CONTENT MUST NOT OVERRIDE DETAILS"]}`,
 		Details: json.RawMessage(`{"kind":"worker-ui","batchId":"batch-demo","snapshotAt":12000,"startedAt":1000,"total":2,"completed":1,"tasks":[{"index":0,"mode":"implement","objective":"Improve worker cards","status":"completed","requestedPreset":"normal","modelId":"provider/requested","sessionMode":"fork","startedAt":1000,"finishedAt":11000,"usage":{"input":1200,"output":300,"turns":2},"activities":[{"id":"read-1","type":"tool","status":"completed","label":"read","detail":"render.go"}],"result":{"status":"completed","summary":["Implemented task cards"],"changed_files":[{"path":"worker.go","kind":"added"}],"validation":[{"command":"go test ./internal/render","result":"passed","details":"12 checks"}],"execution":{"actual_model_id":"provider/actual","route_debug":"HIDDEN ROUTING"}}},{"index":1,"mode":"test","objective":"Verify widths 中文","status":"blocked","requestedPreset":"fast","startedAt":10000,"usage":{"input":0,"output":0,"turns":0},"result":{"status":"blocked","summary":["Missing fixture"],"error":{"message":"Fixture unavailable"}}}]}`)}
 }
+func TestWorkerHeaderDoesNotStretchViewport(t *testing.T) {
+	item := workerFixture()
+	view := workerData(item)
+	view.batch = "a7bd3f65-91ae-430d-90f8-230587f3cdf4"
+	for _, width := range []int{40, 80, 120, 240} {
+		row := workerHeader(item, view, true, testTheme(), width)
+		plain := ansi.Strip(row)
+		if ansi.StringWidth(row) > min(width, 80) || strings.Contains(plain, "  ") {
+			t.Fatalf("header padded or oversized at width %d: %q", width, plain)
+		}
+		if !strings.HasSuffix(plain, " ≈6.0k tok") {
+			t.Fatal("token badge lost or detached")
+		}
+	}
+}
+
 func TestWorkerDurationWholeSeconds(t *testing.T) {
 	for _, tc := range []struct {
 		elapsed float64
@@ -64,6 +80,27 @@ func TestWorkerTaskSectionIndentation(t *testing.T) {
 	}
 }
 
+func TestWorkerSlotNoticesHidden(t *testing.T) {
+	for _, phase := range []string{"等待执行槽位", "等待槽位", "已获得槽位"} {
+		for _, status := range []string{"queued", "running"} {
+			details, _ := json.Marshal(map[string]any{"kind": "worker-ui", "tasks": []any{map[string]any{
+				"mode": "scout", "objective": "Inspect", "status": status, "phase": phase,
+				"activities": []any{map[string]any{"type": "phase", "label": phase, "status": "running"}},
+			}}})
+			item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: details}
+			rows, _ := workerDetailRows(item, testTheme(), Options{}, 80)
+			if strings.Contains(ansi.Strip(strings.Join(rows, "\n")), "槽位") {
+				t.Fatal("slot notice leaked")
+			}
+		}
+	}
+	for _, failure := range []string{"等待执行槽位超时", "Worker 在等待执行槽位时已取消"} {
+		if workerSlotNotice(failure) {
+			t.Fatal("failure must not be hidden")
+		}
+	}
+}
+
 func TestWorkerToolsPrecedeOrderedExplanations(t *testing.T) {
 	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"status":"running","mode":"scout","objective":"Inspect source","modelId":"hidden/model","sessionMode":"fork","activities":[{"type":"thinking","label":"思考","detail":"First explanation"},{"type":"tool","status":"running","label":"read","detail":"secret.go"},{"type":"thinking","label":"思考","detail":"Second explanation"},{"type":"phase","label":"等待槽位"},{"type":"phase","label":"已获得槽位"}]}]}`)}
 	opts := Options{Expanded: map[string]bool{workerTaskID(item, 0, 0): false}}
@@ -92,7 +129,7 @@ func TestWorkerDetailsAuthoritativeAndTaskFolds(t *testing.T) {
 	opts := Options{Width: 120, Expanded: map[string]bool{"tool-group:" + item.ID: true, item.ID: true}}
 	doc := Transcript([]session.Item{item}, testTheme(), opts)
 	plain := ansi.Strip(doc.Text)
-	for _, want := range []string{"worker · 2 tasks · blocked", "implement · normal · Turn 2", "test · fast", "• Implemented task cards", "Implemented task cards", "Missing fixture", "↑1.2k ↓300", "10s", "2s", "Improve worker cards"} {
+	for _, want := range []string{"worker · 2 tasks · blocked", "implement · normal · 2 turns", "test · fast", "• Implemented task cards", "Implemented task cards", "Missing fixture", "↑1.2k ↓300", "10s", "2s", "Improve worker cards"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q:\n%s", want, plain)
 		}
@@ -238,7 +275,7 @@ func TestWorkerFallbackEnvelopesAndUnavailableMetrics(t *testing.T) {
 	item.Text = ""
 	item.HasResult = false
 	plain = ansi.Strip(Transcript([]session.Item{item}, testTheme(), Options{Width: 100, ExpandTools: true}).Text)
-	if !strings.Contains(plain, "queued") || strings.Contains(plain, "Turn 1") || strings.Contains(plain, "0ms") {
+	if !strings.Contains(plain, "queued") || strings.Contains(plain, "1 turns") || strings.Contains(plain, "0ms") {
 		t.Fatal("arguments-only call invents progress")
 	}
 	for _, status := range []string{"failed", "cancelled", "blocked"} {

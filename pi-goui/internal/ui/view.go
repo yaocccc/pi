@@ -127,6 +127,11 @@ func (m *Model) View() tea.View {
 		offset := min(max(0, t.offset), len(lines))
 		bottom := min(len(lines), offset+height)
 		visible := append([]string(nil), lines[offset:bottom]...)
+		for _, row := range t.doc.ActivityRows {
+			if row >= offset && row < bottom {
+				visible[row-offset] = render.AnimateToolActivity(visible[row-offset], theme, m.frame)
+			}
+		}
 		for i := range visible {
 			visible[i] = m.selectionLine(t, visible[i], offset+i)
 		}
@@ -135,7 +140,7 @@ func (m *Model) View() tea.View {
 			text = m.paint(welcomeText, theme.Muted)
 		}
 		var rows []string
-		rows = append(rows, fitBox(text, w, height))
+		rows = append(rows, m.transcriptViewport(t, text, len(lines), height))
 		if m.searching != "" {
 			rows = append(rows, m.paint(fitLine(" Find: "+m.search+"▏  · Enter next / Esc close", w), theme.Accent))
 		}
@@ -160,6 +165,7 @@ func (m *Model) View() tea.View {
 		main = top + "\n" + m.statusLine(t, m.workingLine(t)) + "\n" + m.editorFrame(&backdrop)
 	}
 	main = fitBox(main, w, m.height)
+	main = m.overlayFooterHover(t, main)
 	main = m.overlayToast(t, main, time.Now())
 	main = m.overlayPopup(t, main)
 	if sw := m.sidebarWidth(); sw > 0 {
@@ -191,10 +197,11 @@ func (m *Model) View() tea.View {
 		}
 		main = strings.Join(mainLines, "\n")
 	}
+	main = m.overlaySidebarHistoryTooltip(t, main)
 	view := tea.NewView(main)
 	view.Cursor = m.inputCursor(t)
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeCellMotion
+	view.MouseMode = tea.MouseModeAllMotion
 	view.WindowTitle = "pi · " + render.Clean(m.sessionLabel(t))
 	if t.title != "" {
 		view.WindowTitle = render.Clean(t.title)
@@ -250,12 +257,21 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	if cmd, handled := m.clickFooterPopup(t, v.X, v.Y); handled {
+		return cmd
+	}
 	if m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
 		layout := m.sidebarLayout()
 		if v.Y == layout.DirectoryRow && v.X >= m.mainWidth()+2 && v.X < m.width-2 {
 			return m.openCwd(t)
 		}
-		if v.Y == layout.NewRow {
+		historyIndex := v.Y - layout.HistoryStart
+		if historyIndex >= 0 && historyIndex < layout.HistoryCount*render.SidebarHistoryRows && v.Y < m.height-1 && v.X >= m.mainWidth()+2 && v.X < m.width-2 {
+			return m.openRecent(m.sidebarHistory.sessions[layout.HistoryOffset+historyIndex/render.SidebarHistoryRows].Path)
+		}
+		newStart, newWidth := render.SidebarNewButton(max(0, m.sidebarWidth()-4))
+		newX := m.mainWidth() + 2 + newStart
+		if v.Y == layout.NewRow && v.Y < m.height-1 && newWidth > 0 && v.X >= newX && v.X < newX+newWidth {
 			return m.open("")
 		}
 		row := v.Y - layout.SessionsStart
@@ -284,17 +300,9 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 		t.selection.dragging = false
 		return nil
 	}
-	footer := m.inputFooter(t)
-	if footer.visible {
-		if footer.model.contains(v.X, v.Y) {
-			return call(t, "get_available_models", nil)
-		}
-		if footer.thinking.contains(v.X, v.Y) {
-			return call(t, "cycle_thinking_level", nil)
-		}
-	}
 	if _, rect, visible := m.latestButton(t); visible && rect.contains(v.X, v.Y) {
 		t.selection = transcriptSelection{}
+		t.noteScroll()
 		t.follow = true
 		m.clampScroll(t)
 		return nil

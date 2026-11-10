@@ -116,7 +116,7 @@ func (m *Model) startupDocument(t *tab) render.Document {
 	text := m.paint(welcomeText, m.cfg.Theme.Muted)
 	if m.updates.notice != "" {
 		// Wrap with the same transcript width; no footer/banner or popup.
-		notice := ansi.Wrap(m.updates.notice, max(1, m.mainWidth()-4), "")
+		notice := ansi.Wrap(m.updates.notice+"\nRun `pi update` to update.", max(1, m.mainWidth()-4), "")
 		text += "\n\n" + m.paint("  "+strings.ReplaceAll(notice, "\n", "\n  "), m.cfg.Theme.Muted)
 	}
 	if n := m.updates.notes; n.Markdown != "" {

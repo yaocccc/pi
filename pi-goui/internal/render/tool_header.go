@@ -71,7 +71,7 @@ func toolCallHeader(item session.Item, expanded bool, theme config.Theme, width 
 	}
 	return withToolBadge(header, tokenBadge(item.EstimatedTokens, theme), width, 80, false)
 }
-func toolGroupHeader(items []session.Item, expanded bool, theme config.Theme, width int) string {
+func toolGroupHeader(items []session.Item, expanded bool, theme config.Theme, width int, active ...bool) string {
 	arrow := "›"
 	if expanded {
 		arrow = "⌄"
@@ -98,7 +98,12 @@ func toolGroupHeader(items []session.Item, expanded bool, theme config.Theme, wi
 	for _, name := range names {
 		parts = append(parts, fmt.Sprintf("%d%s", counts[name], name))
 	}
-	header := paint(arrow, theme.Muted) + " " + paint(fmt.Sprintf("%d calls", len(items)), theme.Text)
+	arrowColor := theme.Muted
+	if len(active) > 0 && active[0] {
+		arrow, arrowColor = "⋯", theme.Warning
+	}
+	header := paint(arrow, arrowColor) + " "
+	header += paint(fmt.Sprintf("%d calls", len(items)), theme.Text)
 	header += paint(" · ", theme.Muted) + paint(strings.Join(parts, "  "), visualDim(theme))
 	status := ""
 	if failed > 0 {
