@@ -8,7 +8,7 @@ import (
 	"pi-goui/internal/session"
 )
 
-func TestPendingToolGroupShowsLastThreeSummaries(t *testing.T) {
+func TestToolGroupHasNoAutomaticPreviews(t *testing.T) {
 	items := []session.Item{
 		{ID: "a", Role: "tool", ToolName: "first", HasResult: true, Text: "short summary\nhidden output"},
 		{ID: "b", Role: "tool", ToolName: "second", HasResult: true, Text: "short summary\nhidden output"},
@@ -18,23 +18,23 @@ func TestPendingToolGroupShowsLastThreeSummaries(t *testing.T) {
 	opts := Options{Width: 100}
 	doc := Transcript(items, testTheme(), opts)
 	group := blockByID(t, doc, "tool-group:a")
-	if !group.Expanded || group.End-group.Start != 5 {
-		t.Fatalf("expected automatically expanded header with three previews: %+v", group)
+	if group.Expanded || group.End-group.Start != 1 {
+		t.Fatalf("expected a collapsed single-line header: %+v", group)
 	}
 	plain := ansi.Strip(doc.Text)
-	for _, want := range []string{"⌄ 4 calls", "……", "✓ second", "✓ third", "⋯ fourth"} {
+	for _, want := range []string{"› 4 calls"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %s: %s", want, plain)
 		}
 	}
-	if strings.Contains(plain, "✓ first") || strings.Contains(plain, "hidden output") {
+	if strings.Contains(plain, "✓ first") || strings.Contains(plain, "✓ second") || strings.Contains(plain, "✓ third") || strings.Contains(plain, "⋯ fourth") || strings.Contains(plain, "……") || strings.Contains(plain, "hidden output") {
 		t.Fatal("preview exposed extra tools or results")
 	}
 	items[3].Running = false
 	items[3].HasResult = true
 	settled := Transcript(items, testTheme(), opts)
-	if b := blockByID(t, settled, "tool-group:a"); !b.Expanded || b.End-b.Start != 5 {
-		t.Fatal("tool completion hid previews before prose arrived")
+	if b := blockByID(t, settled, "tool-group:a"); b.Expanded || b.End-b.Start != 1 {
+		t.Fatal("tool completion changed the collapsed header")
 	}
 	for _, global := range []bool{false, true} {
 		collapsed := Transcript(items, testTheme(), Options{Width: 100, ExpandTools: global, Expanded: map[string]bool{"tool-group:a": false}})

@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,29 +15,75 @@ func workerFixture() session.Item {
 		Text:    `{"status":"failed","summary":["CONTENT MUST NOT OVERRIDE DETAILS"]}`,
 		Details: json.RawMessage(`{"kind":"worker-ui","batchId":"batch-demo","snapshotAt":12000,"startedAt":1000,"total":2,"completed":1,"tasks":[{"index":0,"mode":"implement","objective":"Improve worker cards","status":"completed","requestedPreset":"normal","modelId":"provider/requested","sessionMode":"fork","startedAt":1000,"finishedAt":11000,"usage":{"input":1200,"output":300,"turns":2},"activities":[{"id":"read-1","type":"tool","status":"completed","label":"read","detail":"render.go"}],"result":{"status":"completed","summary":["Implemented task cards"],"changed_files":[{"path":"worker.go","kind":"added"}],"validation":[{"command":"go test ./internal/render","result":"passed","details":"12 checks"}],"execution":{"actual_model_id":"provider/actual","route_debug":"HIDDEN ROUTING"}}},{"index":1,"mode":"test","objective":"Verify widths 中文","status":"blocked","requestedPreset":"fast","startedAt":10000,"usage":{"input":0,"output":0,"turns":0},"result":{"status":"blocked","summary":["Missing fixture"],"error":{"message":"Fixture unavailable"}}}]}`)}
 }
-func TestWorkerToolActivityUsesNormalToolColors(t *testing.T) {
-	theme := testTheme()
-	theme.Text, theme.Dim, theme.Success, theme.Error, theme.Warning = "#abcdef", "#778899", "#11aa22", "#dd2233", "#eeaa11"
-	for _, status := range []string{"completed", "failed", "running"} {
-		item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true}
-		item.Details = json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"status":"running","mode":"scout","activities":[{"type":"tool","status":"` + status + `","label":"read","detail":"src/main.go"}]}]}`)
-		rows, _ := workerDetailRows(item, theme, Options{}, 100)
-		var row string
-		for _, candidate := range rows {
-			if strings.Contains(ansi.Strip(candidate), "src/main.go") {
-				row = candidate
-				break
+func TestWorkerDurationWholeSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		elapsed float64
+		want    string
+	}{
+		{0, "0s"}, {400, "0s"}, {900, "1s"}, {10400, "10s"}, {11900, "12s"}, {59900, "1m0s"}, {62300, "1m2s"},
+	} {
+		if got := workerDuration(workerCard{started: 1000, finished: 1000 + tc.elapsed}, 0); got != tc.want {
+			t.Fatalf("duration %v = %q, want %q", tc.elapsed, got, tc.want)
+		}
+	}
+	if workerDuration(workerCard{}, 12000) != "" {
+		t.Fatal("missing timestamps fabricated duration")
+	}
+}
+
+func TestWorkerTaskSectionIndentation(t *testing.T) {
+	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"mode":"scout","status":"completed","objective":"Read directory only","result":{"summary":["Directory checked","No changes"]}},{"index":1,"mode":"scout","status":"completed","objective":"Check status","result":{"summary":["Clean"]}}]}`)}
+	rows, blocks := workerDetailRows(item, testTheme(), Options{}, 80)
+	want := []string{"✓ scout", "  ◦ Read directory only", "  • Directory checked", "  • No changes", strings.Repeat("─", 23), "✓ scout", "  ◦ Check status", "  • Clean"}
+	if len(rows) != len(want) {
+		t.Fatalf("unexpected rows: %v", rows)
+	}
+	for i := range rows {
+		if got := ansi.Strip(rows[i]); got != want[i] {
+			t.Fatalf("row %d: %q, want %q", i, got, want[i])
+		}
+	}
+	if len(blocks) != 2 || blocks[0].End != 4 || blocks[1].Start != 5 || blocks[0].Foldable || blocks[1].Foldable {
+		t.Fatalf("task ranges changed: %+v", blocks)
+	}
+	for _, preset := range []string{"", "catppuccin", "tokyo-night", "nord", "rose-pine"} {
+		theme := testTheme()
+		theme.FramePreset = preset
+		for _, width := range []int{80, 160} {
+			card, _ := workerLayout(item, theme, Options{ExpandTools: true}, width)
+			if ansi.StringWidth(card[1]) != 27 {
+				t.Fatalf("card stretched to terminal width %d: %q", width, card[1])
+			}
+			corners, _ := frameGradient(preset, "worker")
+			c := corners[0]
+			separator := paint(strings.Repeat("─", 23), fmt.Sprintf("#%02x%02x%02x", c[0], c[1], c[2]))
+			if !strings.Contains(card[6], separator) {
+				t.Fatal("separator does not use worker border color")
 			}
 		}
-		icon, color := workerStatus(status, theme)
-		if status == "running" {
-			icon = "→"
+	}
+}
+
+func TestWorkerToolsPrecedeOrderedExplanations(t *testing.T) {
+	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"status":"running","mode":"scout","objective":"Inspect source","modelId":"hidden/model","sessionMode":"fork","activities":[{"type":"thinking","label":"思考","detail":"First explanation"},{"type":"tool","status":"running","label":"read","detail":"secret.go"},{"type":"thinking","label":"思考","detail":"Second explanation"},{"type":"phase","label":"等待槽位"},{"type":"phase","label":"已获得槽位"}]}]}`)}
+	opts := Options{Expanded: map[string]bool{workerTaskID(item, 0, 0): false}}
+	rows, blocks := workerDetailRows(item, testTheme(), opts, 100)
+	text := ansi.Strip(strings.Join(rows, "\n"))
+	for _, want := range []string{"Inspect source", "≡ 1 calls", "⋯ read secret.go (运行中…)", "First explanation", "Second explanation"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q: %s", want, text)
 		}
-		for _, want := range []string{paint(icon, color), paint("read", theme.Text), paint("src/main.go", visualDim(theme))} {
-			if !strings.Contains(row, want) {
-				t.Fatalf("%s: unexpected activity styling: %q, missing %q", status, row, want)
-			}
+	}
+	if strings.Index(text, "First explanation") > strings.Index(text, "Second explanation") || strings.Index(text, "secret.go") > strings.Index(text, "First explanation") {
+		t.Fatal("reordered progress")
+	}
+	for _, hidden := range []string{"hidden/model", "fork", "等待槽位", "已获得槽位"} {
+		if strings.Contains(text, hidden) {
+			t.Fatalf("unexpected %q: %s", hidden, text)
 		}
+	}
+	if len(blocks) != 1 || blocks[0].Foldable || !blocks[0].Expanded {
+		t.Fatalf("task can fold: %+v", blocks)
 	}
 }
 
@@ -45,28 +92,28 @@ func TestWorkerDetailsAuthoritativeAndTaskFolds(t *testing.T) {
 	opts := Options{Width: 120, Expanded: map[string]bool{"tool-group:" + item.ID: true, item.ID: true}}
 	doc := Transcript([]session.Item{item}, testTheme(), opts)
 	plain := ansi.Strip(doc.Text)
-	for _, want := range []string{"worker · 2 tasks · blocked", "implement · normal · provider/actual · fork · Turn 2", "test · fast", "结果:", "Implemented task cards", "Missing fixture", "↑1.2k ↓300", "10.0s", "2.0s", "Improve worker cards"} {
+	for _, want := range []string{"worker · 2 tasks · blocked", "implement · normal · Turn 2", "test · fast", "• Implemented task cards", "Implemented task cards", "Missing fixture", "↑1.2k ↓300", "10s", "2s", "Improve worker cards"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q:\n%s", want, plain)
 		}
 	}
-	for _, hidden := range []string{"CONTENT MUST NOT", "HIDDEN ROUTING", "Fixture unavailable"} {
+	for _, hidden := range []string{"CONTENT MUST NOT", "HIDDEN ROUTING", "Fixture unavailable", "provider/actual", "fixture/model", "fork", "new"} {
 		if strings.Contains(plain, hidden) {
 			t.Fatalf("fold/detail leak: %s", hidden)
 		}
 	}
-	for _, hidden := range []string{"read · render.go", "worker.go", "go test ./internal/render", "12 checks"} {
+	for _, hidden := range []string{"worker.go", "go test ./internal/render", "12 checks"} {
 		if strings.Contains(plain, hidden) {
 			t.Fatalf("detailed result leaked: %s", hidden)
 		}
 	}
 	parent := blockByID(t, doc, item.ID)
-	if parent.End <= parent.Start+1 || !parent.Expanded {
-		t.Fatalf("card must be one expanded click target: %+v", parent)
+	if parent.End != parent.Start+1 || !parent.Expanded {
+		t.Fatalf("only batch header should toggle: %+v", parent)
 	}
 	for _, b := range doc.Blocks {
-		if b.Role == "workerTask" {
-			t.Fatal("completed card has a secondary fold")
+		if b.Role == "workerTask" && (b.Foldable || !b.Expanded) {
+			t.Fatal("task must always be expanded and non-foldable")
 		}
 	}
 	opts.Expanded[item.ID] = false
@@ -75,14 +122,37 @@ func TestWorkerDetailsAuthoritativeAndTaskFolds(t *testing.T) {
 		t.Fatal("card did not collapse")
 	}
 }
+func TestCollapsedWorkerShowsOnlyHeader(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		item := workerFixture()
+		item.Running = running
+		opts := Options{Width: 120, Expanded: map[string]bool{"tool-group:" + item.ID: true, item.ID: false}}
+		rows, blocks := workerLayout(item, testTheme(), opts, 100)
+		if len(rows) != 1 || len(blocks) != 1 || blocks[0].Expanded {
+			t.Fatalf("collapsed Worker leaked task previews: %v, %+v", rows, blocks)
+		}
+		doc := Transcript([]session.Item{item}, testTheme(), opts)
+		plain := ansi.Strip(doc.Text)
+		for _, hidden := range []string{"implement", "Improve worker cards", "Implemented task cards", "Verify widths"} {
+			if strings.Contains(plain, hidden) {
+				t.Fatalf("collapsed task detail leaked: %s", hidden)
+			}
+		}
+		opts.Expanded[item.ID] = true
+		if !strings.Contains(ansi.Strip(Transcript([]session.Item{item}, testTheme(), opts).Text), "Implemented task cards") {
+			t.Fatal("expanded Worker lost task details")
+		}
+	}
+}
+
 func TestWorkerPartialSnapshotAndCompactPreview(t *testing.T) {
 	item := workerFixture()
 	item.Running = true
 	item.Details = json.RawMessage(`{"kind":"worker-ui","snapshotAt":5000,"controlErrors":[{"message":"Cancel was rejected"}],"tasks":[{"index":4,"status":"running","mode":"scout","objective":"Inspect source","requestedPreset":"fast","startedAt":1000,"phase":"Reading source","activities":[{"type":"tool","status":"running","label":"read","detail":"src/main.go"}]}]}`)
 	opts := Options{Width: 100}
 	compact := Transcript([]session.Item{item}, testTheme(), opts)
-	if !strings.Contains(ansi.Strip(compact.Text), "Inspect source") || !strings.Contains(ansi.Strip(compact.Text), "4.0s") {
-		t.Fatal("collapsed running task lost preview")
+	if len(compact.Blocks) != 1 || compact.Blocks[0].Expanded || strings.Contains(ansi.Strip(compact.Text), "Inspect source") || strings.Contains(ansi.Strip(compact.Text), "╭─ worker ") {
+		t.Fatal("collapsed running task leaked preview")
 	}
 	opts.ExpandTools = true
 	first := Transcript([]session.Item{item}, testTheme(), opts)
@@ -90,49 +160,64 @@ func TestWorkerPartialSnapshotAndCompactPreview(t *testing.T) {
 	if first.Text != second.Text {
 		t.Fatal("history snapshot duration drifted")
 	}
-	for _, s := range []string{"scout · fast · 4.0s", "Cancel was rejected", "→ read · src/main.go"} {
+	for _, s := range []string{"scout · fast · 4s", "Cancel was rejected", "Reading source"} {
 		if !strings.Contains(ansi.Strip(first.Text), s) {
 			t.Fatal(s)
 		}
 	}
 }
-func TestRunningWorkerOpensOutsideGroupsThenRejoins(t *testing.T) {
+func TestRunningWorkerStaysInCallsGroup(t *testing.T) {
 	worker := workerFixture()
 	worker.Running = true
-	worker.Details = json.RawMessage(`{"kind":"worker-ui","snapshotAt":5000,"tasks":[{"index":0,"status":"running","mode":"scout","objective":"Inspect source","requestedPreset":"fast","startedAt":1000,"activities":[{"type":"tool","status":"completed","label":"read","detail":"src/main.go","contextSizeEstimate":1200}]}]}`)
-	items := []session.Item{{ID: "a", Role: "tool", ToolName: "read"}, {ID: "b", Role: "tool", ToolName: "bash"}, worker, {ID: "c", Role: "tool", ToolName: "read"}, {ID: "d", Role: "tool", ToolName: "read"}}
-	opts := Options{Width: 100, Expanded: map[string]bool{}}
+	items := []session.Item{{ID: "a", Role: "tool", ToolName: "read"}, worker, {ID: "b", Role: "tool", ToolName: "bash"}}
+	opts := Options{Width: 120, Expanded: map[string]bool{}}
 	doc := Transcript(items, testTheme(), opts)
-	if !blockByID(t, doc, "w").Expanded || !blockByID(t, doc, workerTaskID(worker, 0, 0)).Expanded {
-		t.Fatal("live Worker/task did not open by default")
-	}
-	for _, id := range []string{"tool-group:a", "tool-group:c"} {
-		b := blockByID(t, doc, id)
-		if !b.Expanded || b.End-b.Start != 3 {
-			t.Fatal("pending groups must retain their automatic previews")
+	groups := 0
+	for _, b := range doc.Blocks {
+		if b.Role == "toolGroup" {
+			groups++
 		}
 	}
-	if len(opts.Expanded) != 0 {
-		t.Fatal("automatic expansion must not become explicit fold state")
+	if groups != 1 || !strings.Contains(ansi.Strip(doc.Text), "3 calls") {
+		t.Fatalf("worker outside group: %+v", doc.Blocks)
 	}
-	if !strings.Contains(ansi.Strip(doc.Text), "read · ≈1.2k tok · src/main.go") {
-		t.Fatal(doc.Text)
-	}
-	opts.Expanded["w"] = false
-	if blockByID(t, Transcript(items, testTheme(), opts), "w").Expanded {
-		t.Fatal("manual collapse ignored")
-	}
-	delete(opts.Expanded, "w")
-	items[2].Running = false
-	// Stale running task details alone must not auto-open a saved invocation.
-	done := Transcript(items, testTheme(), opts)
-	if len(done.Blocks) != 1 || done.Blocks[0].ID != "tool-group:a" || !done.Blocks[0].Expanded || !strings.Contains(ansi.Strip(done.Text), "5 calls") {
-		t.Fatalf("finished Worker did not rejoin: %+v\n%s", done.Blocks, done.Text)
+	if len(doc.Blocks) != 1 || blockByID(t, doc, "tool-group:a").Expanded {
+		t.Fatal("live worker must not auto-open its group")
 	}
 	opts.Expanded["tool-group:a"] = true
+	doc = Transcript(items, testTheme(), opts)
+	if blockByID(t, doc, "w").Expanded || strings.Contains(ansi.Strip(doc.Text), "Implemented task cards") {
+		t.Fatal("opening outer group must not auto-open Worker")
+	}
+	opts.Expanded["w"] = true
+	doc = Transcript(items, testTheme(), opts)
+	task := blockByID(t, doc, workerTaskID(worker, 0, 0))
+	if task.Foldable || !task.Expanded {
+		t.Fatal("task has fold state")
+	}
+	opts.Expanded[task.ID] = false
+	if !strings.Contains(ansi.Strip(Transcript(items, testTheme(), opts).Text), "Implemented task cards") {
+		t.Fatal("obsolete task fold still hides conclusion")
+	}
+	opts.Expanded["tool-group:a"] = false
+	for _, global := range []bool{false, true} {
+		opts.ExpandTools = global
+		collapsed := Transcript(items, testTheme(), opts)
+		if len(collapsed.Blocks) != 1 || collapsed.Blocks[0].Expanded || strings.Contains(ansi.Strip(collapsed.Text), "╭─ worker ") || strings.Contains(ansi.Strip(collapsed.Text), "Implemented task cards") {
+			t.Fatal("outer fold must hide every child even with global expansion")
+		}
+	}
+	opts.ExpandTools = false
+	delete(opts.Expanded, "tool-group:a")
+	items[1].Running = false
+	done := Transcript(items, testTheme(), opts)
+	if len(done.Blocks) != 1 || done.Blocks[0].ID != "tool-group:a" {
+		t.Fatal("completion changed group identity")
+	}
+	opts.ExpandTools = true
 	done = Transcript(items, testTheme(), opts)
-	if blockByID(t, done, "w").Expanded {
-		t.Fatal("automatic live expansion leaked into completed state")
+	if blockByID(t, done, workerTaskID(worker, 0, 0)).Foldable {
+		t.Fatal("completed task can fold")
 	}
 }
 
@@ -140,7 +225,7 @@ func TestWorkerFallbackEnvelopesAndUnavailableMetrics(t *testing.T) {
 	item := session.Item{ID: "legacy", Role: "tool", ToolName: "worker", HasResult: true, Arguments: json.RawMessage(`{"batchId":"saved-batch"}`), Text: `{"batchId":"saved-batch","status":"completed","tasks":[{"taskId":"a","status":"blocked"}],"result":{"results":[{"status":"blocked","summary":["Need authorization"],"execution":{"resolved_preset":"deep","actual_model_id":"fixture/model","usage":{"input":42,"output":17,"turns":1}}}]}}`}
 	doc := Transcript([]session.Item{item}, testTheme(), Options{Width: 100, ExpandTools: true})
 	plain := ansi.Strip(doc.Text)
-	for _, s := range []string{"blocked", "saved-batch", "deep", "fixture/model", "↑42 ↓17", "Need authorization"} {
+	for _, s := range []string{"blocked", "saved-batch", "deep", "↑42 ↓17", "Need authorization"} {
 		if !strings.Contains(plain, s) {
 			t.Fatalf("missing %q:\n%s", s, plain)
 		}

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"pi-goui/internal/config"
 	"pi-goui/internal/session"
 )
@@ -18,6 +20,7 @@ type workerCard struct {
 	started, finished                                          float64
 	usage, result                                              map[string]any
 	activities                                                 []any
+	toolCalls                                                  int
 }
 type workerView struct {
 	cards               []workerCard
@@ -49,7 +52,7 @@ func workerFirst(values ...string) string {
 	return ""
 }
 func workerCardFrom(m map[string]any, position int) workerCard {
-	c := workerCard{index: position, mode: visualString(m, "mode"), objective: visualString(m, "objective"), status: visualString(m, "status"), preset: visualString(m, "resolvedPreset", "requestedPreset", "preset"), model: visualString(m, "modelId"), sessionMode: visualString(m, "sessionMode"), phase: visualString(m, "phase"), started: workerNumber(m, "startedAt"), finished: workerNumber(m, "finishedAt"), usage: workerMap(m["usage"]), result: workerMap(m["result"]), activities: workerArray(m["activities"])}
+	c := workerCard{toolCalls: int(workerNumber(m, "toolCalls")), index: position, mode: visualString(m, "mode"), objective: visualString(m, "objective"), status: visualString(m, "status"), preset: visualString(m, "resolvedPreset", "requestedPreset", "preset"), model: visualString(m, "modelId"), sessionMode: visualString(m, "sessionMode"), phase: visualString(m, "phase"), started: workerNumber(m, "startedAt"), finished: workerNumber(m, "finishedAt"), usage: workerMap(m["usage"]), result: workerMap(m["result"]), activities: workerArray(m["activities"])}
 	if _, ok := m["index"]; ok {
 		c.index = int(workerNumber(m, "index"))
 	}
@@ -215,14 +218,11 @@ func workerDuration(c workerCard, now float64) string {
 	if c.started <= 0 || end < c.started || end <= 0 {
 		return ""
 	}
-	ms := end - c.started
-	if ms < 1000 {
-		return fmt.Sprintf("%.0fms", ms)
+	seconds := int(math.Round((end - c.started) / 1000))
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
 	}
-	if ms < 60000 {
-		return fmt.Sprintf("%.1fs", ms/1000)
-	}
-	return fmt.Sprintf("%dm%ds", int(ms/60000), int(ms/1000)%60)
+	return fmt.Sprintf("%dm%ds", seconds/60, seconds%60)
 }
 func workerTokens(n float64) string {
 	if n >= 1e6 {
@@ -237,12 +237,6 @@ func workerRuntime(c workerCard, now float64) string {
 	var parts []string
 	if c.preset != "" {
 		parts = append(parts, c.preset)
-	}
-	if c.model != "" {
-		parts = append(parts, c.model)
-	}
-	if c.sessionMode != "" {
-		parts = append(parts, c.sessionMode)
 	}
 	if n := workerNumber(c.usage, "turns"); n > 0 {
 		parts = append(parts, fmt.Sprintf("Turn %.0f", n))
@@ -263,133 +257,109 @@ func workerRuntime(c workerCard, now float64) string {
 	return oneLine(strings.Join(parts, " · "))
 }
 
-// Only the live invocation flag enables automatic expansion. Historical task
-// snapshots may still say running; they must not keep old calls open forever.
-func runningWorker(item session.Item) bool {
-	return item.Running && visualName(item.ToolName) == "worker"
-}
-
-func workerExpanded(id string, item session.Item, opts Options) bool {
-	if expanded, ok := opts.Expanded[id]; ok {
-		return expanded
-	}
-	return runningWorker(item) || opts.ExpandTools
-}
-
 func workerTaskID(item session.Item, index int, position int) string {
 	// Native indices are stable; position disambiguates malformed duplicate indices.
 	return fmt.Sprintf("worker-task:%s:%d:%d", item.ID, index, position)
 }
-func workerDetailRows(item session.Item, theme config.Theme, opts Options, width int) ([]string, []Block) {
+func workerDetailRows(item session.Item, theme config.Theme, _ Options, width int) ([]string, []Block) {
 	width = max(1, width)
 	v := workerData(item)
 	var rows []string
 	var blocks []Block
+	var separators []int
 	line := func(s, color string) { rows = append(rows, visualWrap(paint(Clean(s), color), width)...) }
 	for _, err := range v.errors {
 		line("Control error: "+err, theme.Error)
 	}
 	for i, c := range v.cards {
-		id := workerTaskID(item, c.index, i)
-		expanded := !runningWorker(item) || workerExpanded(id, item, opts)
-		arrow := "›"
-		if expanded {
-			arrow = "⌄"
-		}
-		icon, color := workerStatus(c.status, theme)
-		mode := c.mode
-		if mode == "" {
-			mode = "task"
+		if i > 0 {
+			separators = append(separators, len(rows))
+			rows = append(rows, "")
 		}
 		start := len(rows)
-		header := oneLine(mode)
+		icon, color := workerStatus(c.status, theme)
+		header := oneLine(workerFirst(c.mode, "task"))
 		if info := workerRuntime(c, v.now); info != "" {
 			header += " · " + info
 		}
-		prefix := ""
-		if runningWorker(item) {
-			prefix = paint(arrow, theme.Muted) + " "
-			blocks = append(blocks, Block{ID: id, Role: "workerTask", MessageIndex: item.MessageIndex, Start: start, End: start + 1, Foldable: true, Expanded: expanded})
-		}
-		rows = append(rows, fit(prefix+paint(icon, color)+" "+paint(header, theme.Text), width))
-		indent := min(2, max(0, width-1))
-		inset := strings.Repeat(" ", indent)
-		available := max(1, width-indent)
-		detail := func(s, color string) {
-			for _, r := range visualWrap(paint(Clean(s), color), available) {
-				rows = append(rows, inset+r)
+		rows = append(rows, fit(paint(icon, color)+" "+paint(header, theme.Text), width))
+		section := func(marker, shade string, lines []string) {
+			if len(lines) == 0 {
+				return
+			}
+			first := true
+			for _, text := range lines {
+				// On tiny terminals omit decoration rather than losing content width.
+				prefixWidth := 2
+				if marker != "" {
+					prefixWidth = 4
+				}
+				if width <= prefixWidth {
+					prefixWidth = 0
+				}
+				for _, row := range visualWrap(paint(Clean(text), theme.Text), width-prefixWidth) {
+					prefix := ""
+					if prefixWidth > 0 {
+						prefix = strings.Repeat(" ", prefixWidth)
+						if first && marker != "" {
+							prefix = "  " + paint(marker, shade) + " "
+						}
+					}
+					rows = append(rows, prefix+row)
+					first = false
+				}
 			}
 		}
 		if c.objective != "" {
-			if expanded {
-				detail(c.objective, theme.Text)
-			} else {
-				rows = append(rows, inset+fit(paint(oneLine(c.objective), theme.Text), available))
-			}
+			section("◦", theme.Accent, []string{c.objective})
 		}
-		hasSummary := len(workerArray(c.result["summary"])) > 0 || visualString(c.result, "summary") != ""
-		if !expanded {
-			if hasSummary {
-				workerResult(map[string]any{"summary": c.result["summary"]}, detail, theme)
-			} else if c.phase != "" {
-				rows = append(rows, inset+fit(paint(oneLine(c.phase), theme.Muted), available))
+		rows = append(rows, workerToolRows(c, theme, width)...)
+		var conclusion []string
+		workerResult(map[string]any{"summary": c.result["summary"]}, func(s, _ string) {
+			if s != "结果:" {
+				conclusion = append(conclusion, s)
 			}
-			continue
-		}
-		if !runningWorker(item) {
-			workerResult(map[string]any{"summary": c.result["summary"]}, detail, theme)
-			continue
-		}
-		// Activities are bounded natively; show recent real actions, not routing internals.
-		activities := make([]any, 0, len(c.activities))
-		for _, value := range c.activities {
-			a := workerMap(value)
-			kind, label := visualString(a, "type"), visualString(a, "label")
-			if kind == "thinking" || label == "" || (kind == "phase" && visualString(a, "status") != "failed" && (label == "等待槽位" || label == "已获得槽位")) {
-				continue
-			}
-			activities = append(activities, value)
-		}
-		if len(activities) > 10 {
-			activities = activities[len(activities)-10:]
-		}
-		shown := 0
-		for _, a := range activities {
-			activity := workerMap(a)
-			label := visualString(activity, "label")
-			status := visualString(activity, "status")
-			glyph, shade := workerStatus(status, theme)
-			if status == "running" {
-				glyph = "→"
-			}
-			tool := visualString(activity, "type") == "tool"
-			nameColor, detailColor := shade, shade
-			if tool {
-				nameColor, detailColor = theme.Text, visualDim(theme)
-			}
-			text := paint(glyph, shade) + " " + paint(oneLine(label), nameColor)
-			if tool && status != "running" && activity["contextSizeEstimate"] != nil {
-				tokens := workerNumber(activity, "contextSizeEstimate")
-				color := visualDim(theme)
-				if tokens >= 10000 {
-					color = theme.Error
-				} else if tokens >= 5000 {
-					color = "#ffa500"
+		}, theme)
+		if len(conclusion) > 0 {
+			section("", theme.Text, conclusion)
+		} else {
+			// Preserve ordered explanatory text, never tool operations.
+			var progress []string
+			for _, value := range c.activities {
+				a := workerMap(value)
+				kind := visualString(a, "type")
+				if kind != "thinking" && kind != "text" && kind != "message" && kind != "phase" {
+					continue
 				}
-				text += paint(" · ", detailColor) + paint("≈"+workerTokens(tokens)+" tok", color)
+				text := visualString(a, "detail")
+				if kind == "phase" {
+					label := visualString(a, "label")
+					if label == "等待槽位" || label == "已获得槽位" {
+						continue
+					}
+					text = workerFirst(text, label)
+				}
+				if strings.TrimSpace(text) != "" {
+					progress = append(progress, text)
+				}
 			}
-			if extra := visualString(activity, "detail"); extra != "" {
-				text += paint(" · ", detailColor) + paint(oneLine(extra), detailColor)
+			if len(progress) == 0 {
+				switch c.status {
+				case "running", "cancelling":
+					progress = append(progress, workerFirst(c.phase, "正在执行中..."))
+				case "queued":
+					progress = append(progress, workerFirst(c.phase, "等待执行..."))
+				}
 			}
-			rows = append(rows, inset+fit(text, available))
-			shown++
+			workerResult(map[string]any{"error": c.result["error"]}, func(s, _ string) {
+				if s != "Error" {
+					progress = append(progress, s)
+				}
+			}, theme)
+			section("", theme.Muted, progress)
 		}
-		if shown == 0 && runningWorker(item) {
-			detail("等待执行...", theme.Muted)
-		}
-		workerResult(map[string]any{"summary": c.result["summary"]}, detail, theme)
+		blocks = append(blocks, Block{ID: workerTaskID(item, c.index, i), Role: "workerTask", MessageIndex: item.MessageIndex, Start: start, End: len(rows), Expanded: true})
 	}
-	// Global control/admission errors can live in the native payload as well.
 	if len(v.cards) == 0 || v.result["summary"] != nil || v.result["error"] != nil || v.result["validation_errors"] != nil {
 		workerResult(v.result, line, theme)
 	}
@@ -398,6 +368,17 @@ func workerDetailRows(item session.Item, theme config.Theme, opts Options, width
 	}
 	if len(rows) == 0 {
 		line("No task details available", theme.Muted)
+	}
+	// Size separators from real content, so they never stretch the card.
+	contentWidth := 1
+	for _, row := range rows {
+		contentWidth = max(contentWidth, ansi.StringWidth(strings.TrimRight(ansi.Strip(row), " \t")))
+	}
+	corners, _ := frameGradient(theme.FramePreset, "worker")
+	c := corners[0]
+	separatorColor := fmt.Sprintf("#%02x%02x%02x", c[0], c[1], c[2])
+	for _, index := range separators {
+		rows[index] = paint(strings.Repeat("─", min(width, contentWidth)), separatorColor)
 	}
 	return rows, blocks
 }
@@ -441,25 +422,11 @@ func workerResult(result map[string]any, line func(string, string), theme config
 }
 func workerLayout(item session.Item, theme config.Theme, opts Options, width int) ([]string, []Block) {
 	width = max(1, width)
-	expanded := workerExpanded(item.ID, item, opts)
+	expanded := isExpanded(item.ID, opts)
 	v := workerData(item)
 	rows := []string{workerHeader(item, v, expanded, theme, width)}
 	blocks := []Block{{ID: item.ID, Role: item.Role, MessageIndex: item.MessageIndex, Start: 0, End: 1, Foldable: true, Expanded: expanded}}
 	if !expanded {
-		// Compact task previews remain visible; clicking one opens the parent.
-		indent := min(2, max(0, width-1))
-		for _, c := range v.cards {
-			icon, color := workerStatus(c.status, theme)
-			label := paint(icon, color) + " " + paint(oneLine(workerFirst(c.mode, "task")), theme.Text)
-			if runtime := workerRuntime(c, v.now); runtime != "" {
-				label += paint(" · "+runtime, visualDim(theme))
-			}
-			if c.objective != "" {
-				label += paint(" · "+oneLine(c.objective), visualDim(theme))
-			}
-			rows = append(rows, strings.Repeat(" ", indent)+fit(label, width-indent))
-		}
-		blocks[0].End = len(rows)
 		return rows, blocks
 	}
 	contentWidth := width
@@ -470,16 +437,12 @@ func workerLayout(item session.Item, theme config.Theme, opts Options, width int
 	}
 	detail, children := workerDetailRows(item, theme, opts, contentWidth)
 	if width >= 8 {
-		title := "worker · result"
-		if runningWorker(item) {
-			title = "worker · running"
-		}
-		detail = frame(detail, title, width, "worker", false, width, theme)
+		title := "worker"
+		var cardWidth int
+		detail, cardWidth = compactBubble(detail, title, width)
+		detail = frame(detail, title, cardWidth, "worker", false, width, theme)
 	}
 	rows = append(rows, detail...)
-	if !runningWorker(item) {
-		blocks[0].End = len(rows)
-	}
 	for _, b := range children {
 		b.Start += offset
 		b.End += offset

@@ -31,7 +31,7 @@ func TestNativeToolHistoryReachesSemanticViews(t *testing.T) {
 	tab.expanded = true
 	m.document(tab)
 	text := ansi.Strip(tab.doc.Text)
-	for _, want := range []string{"4 calls", "Read preview · lines 7–8", "7 │ package main", "Reported diff", "+1 added", "−1 removed", "const after = 2;", "Written content", "export const saved = 42;", "Enabled: yes", "record-one", "tok"} {
+	for _, want := range []string{"4 calls", "main.go (Offset: 7)", "7 │ package main", "-10 const before = 1;", "+10 const after = 2;", "Write preview · original content unavailable", "export const saved = 42;", "Enabled: yes", "record-one", "tok"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in semantic history:\n%s", want, text)
 		}

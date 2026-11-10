@@ -20,10 +20,9 @@ type TranscriptCache struct {
 }
 
 type cachedSection struct {
-	followingProse bool
-	items          []transcriptItemKey
-	doc            Document
-	markdown       map[markdownKey][]string
+	items    []transcriptItemKey
+	doc      Document
+	markdown map[markdownKey][]string
 }
 
 type markdownKey struct {
@@ -104,19 +103,12 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 				end++
 			}
 		}
-		sectionOpts := opts
-		for _, following := range items[end:] {
-			if following.Role != "tool" && following.Role != "toolResult" && following.Role != "thinking" && strings.TrimSpace(following.Text) != "" {
-				sectionOpts.followingProse = true
-				break
-			}
-		}
 		keys := itemKeys(items[start:end])
 		var section cachedSection
 		if len(next) < len(c.sections) {
 			section = c.sections[len(next)]
 		}
-		if !slices.Equal(section.items, keys) || section.followingProse != sectionOpts.followingProse {
+		if !slices.Equal(section.items, keys) {
 			used := make(map[markdownKey][]string)
 			cachedMarkdown := func(body string, width int, theme config.Theme) []string {
 				key := markdownKey{body, width}
@@ -130,8 +122,7 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 				used[key] = rows
 				return rows
 			}
-			section.doc = transcript(items[start:end], theme, sectionOpts, cachedMarkdown)
-			section.followingProse = sectionOpts.followingProse
+			section.doc = transcript(items[start:end], theme, opts, cachedMarkdown)
 			section.items, section.markdown = keys, used
 		}
 		next = append(next, section)

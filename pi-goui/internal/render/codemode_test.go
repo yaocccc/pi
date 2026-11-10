@@ -43,7 +43,7 @@ func TestCodemodeScreenshotTraceAndTitle(t *testing.T) {
 	ordinary := item
 	ordinary.ToolName = "read"
 	ordinary.Text = "hello"
-	if !strings.Contains(ansi.Strip(strings.Join(toolBody(ordinary, theme, Options{ExpandTools: true}, 100), "\n")), "read · result") {
+	if !strings.Contains(ansi.Strip(strings.Join(toolBody(ordinary, theme, Options{ExpandTools: true}, 100), "\n")), "╭─ read ") {
 		t.Fatal("non-codemode frame changed")
 	}
 }

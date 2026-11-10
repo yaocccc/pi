@@ -46,7 +46,7 @@ func TestToolGroupsIgnoreOnlyInvisibleRecords(t *testing.T) {
 							if b.Expanded != expanded {
 								t.Fatalf("lost group state: %+v", b)
 							}
-						} else if tc.grouped || b.ID != "tool-group:t2" || !b.Expanded {
+						} else if tc.grouped || b.ID != "tool-group:t2" || b.Expanded {
 							t.Fatalf("unexpected group: %+v", b)
 						}
 					}

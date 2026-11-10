@@ -78,7 +78,7 @@ func toolGroupHeader(items []session.Item, expanded bool, theme config.Theme, wi
 	}
 	counts := map[string]int{}
 	var names []string
-	running, failed, tokens := 0, 0, 0
+	failed, tokens := 0, 0
 	for _, item := range items {
 		name := oneLine(item.ToolName)
 		if name == "" {
@@ -88,36 +88,23 @@ func toolGroupHeader(items []session.Item, expanded bool, theme config.Theme, wi
 			names = append(names, name)
 		}
 		counts[name]++
-		if item.Running {
-			running++
-		}
 		if item.Error {
 			failed++
+
 		}
 		tokens += item.EstimatedTokens
 	}
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
-		parts = append(parts, fmt.Sprintf("%s×%d", name, counts[name]))
+		parts = append(parts, fmt.Sprintf("%d%s", counts[name], name))
 	}
 	header := paint(arrow, theme.Muted) + " " + paint(fmt.Sprintf("%d calls", len(items)), theme.Text)
 	header += paint(" · ", theme.Muted) + paint(strings.Join(parts, "  "), visualDim(theme))
-	var status string
-	if running > 0 {
-		label := fmt.Sprintf(" ⋯ %d running", running)
-		if width < 60 {
-			label = fmt.Sprintf(" ⋯%d", running)
-		}
-		status += paint(label, theme.Warning)
-	}
+	status := ""
 	if failed > 0 {
-		label := fmt.Sprintf(" ✗ %d failed", failed)
-		if width < 60 {
-			label = fmt.Sprintf(" ✗%d", failed)
-		}
-		status += paint(label, theme.Error)
+		status = paint(fmt.Sprintf(" %d❌", failed), theme.Error)
 	}
-	badge := tokenBadge(tokens, theme)
+	badge := strings.Replace(tokenBadge(tokens, theme), " tok", "", 1)
 	available := width
 	if badge != "" && width >= 24 {
 		available -= ansi.StringWidth(badge) + 1

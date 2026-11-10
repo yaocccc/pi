@@ -301,83 +301,25 @@ func toolDetailRows(item session.Item, theme config.Theme, width int) []string {
 	if width <= 0 {
 		return nil
 	}
+	if visualName(item.ToolName) == "read" {
+		return readDetailRows(item, theme, width)
+	}
+	if visualName(item.ToolName) == "bash" {
+		return bashDetailRows(item, theme, width)
+	}
 	if visualName(item.ToolName) == "codemode" {
 		return codemodeRows(item, theme, width)
 	}
+	if name := visualName(item.ToolName); name == "edit" || name == "write" {
+		return changeDiffRows(item, theme, width)
+	}
+	if genericTool(item.ToolName) {
+		return genericToolRows(item, theme, width)
+	}
 	v := &toolVisual{theme: theme, width: width}
 	args := visualMap(item.Arguments)
-	details := visualMap(item.Details)
-	path := visualString(args, "path", "file_path", "filePath", "filename")
 	name := visualName(item.ToolName)
-	if path != "" {
-		v.line("File  "+path, theme.Accent)
-	}
 	switch name {
-	case "read":
-		v.arguments(item.Arguments, "path", "file_path", "filePath", "filename", "offset", "limit")
-		if item.Error || item.Text == "" {
-			v.result(item)
-			break
-		}
-		if strings.TrimSpace(item.Text) == "[image]" || strings.HasPrefix(item.Text, "Read image file") {
-			v.heading("Image attachment")
-			v.literal(item.Text)
-			break
-		}
-		source, note := readSource(item.Text, details)
-		if source != "" {
-			start := visualInt(args, "offset", 1)
-			v.heading(fmt.Sprintf("Read preview · lines %d–%d", start, start+max(1, sourceLineCount(source))-1))
-			v.source(source, path, "", start)
-		}
-		if note != "" {
-			v.heading("Read notice")
-			v.literal(note)
-		}
-	case "write":
-		state := "Requested content · completion not confirmed"
-		if item.Error {
-			state = "Write failed · requested content"
-		} else if item.Running {
-			state = "Writing · requested content"
-		} else if item.HasResult {
-			state = "Written content"
-		}
-		v.arguments(item.Arguments, "path", "file_path", "filePath", "filename", "content")
-		if content, ok := args["content"].(string); ok {
-			v.heading(fmt.Sprintf("%s · %d lines · %d bytes", state, sourceLineCount(content), len(content)))
-			v.source(content, path, "", 1)
-		} else {
-			v.heading("Write content unavailable")
-		}
-		v.result(item)
-	case "edit":
-		v.arguments(item.Arguments, "path", "file_path", "filePath", "filename", "edits", "oldText", "newText")
-		diff := visualString(details, "diff", "patch")
-		if diff != "" {
-			added, removed := diffCounts(diff)
-			label := "Reported diff"
-			if item.Error || item.Running || !item.HasResult {
-				label += " · completion not confirmed"
-			}
-			v.heading(label)
-			v.rows = append(v.rows, visualWrap(paint(fmt.Sprintf("+%d added", added), theme.Success)+"  "+paint(fmt.Sprintf("−%d removed", removed), theme.Error), width)...)
-			v.rows = append(v.rows, diffRows(diff, width, theme)...)
-		} else {
-			edits := visualEdits(args)
-			if len(edits) == 0 {
-				v.heading("No recorded diff or replacement preview")
-				v.arguments(item.Arguments, "path", "file_path", "filePath", "filename")
-			}
-			for i, edit := range edits {
-				v.heading(fmt.Sprintf("Requested replacement %d · relative lines, not a recorded file diff", i+1))
-				v.line("− Before", theme.Error)
-				v.source(visualString(edit, "oldText"), path, "", 1)
-				v.line("+ After", theme.Success)
-				v.source(visualString(edit, "newText"), path, "", 1)
-			}
-		}
-		v.result(item)
 	case "bash", "shell", "powershell":
 		command := visualString(args, "command", "cmd", "script")
 		if command != "" {
@@ -390,29 +332,6 @@ func toolDetailRows(item session.Item, theme config.Theme, width int) []string {
 		}
 		v.arguments(item.Arguments, "command", "cmd", "script")
 		v.result(item)
-	case "grep", "find", "ls":
-		target := path
-		if target == "" {
-			target = visualString(args, "directory", "cwd")
-		}
-		if target != "" && path == "" {
-			v.line("Target  "+target, theme.Accent)
-		}
-		pattern := visualString(args, "pattern", "query", "glob")
-		if pattern != "" {
-			v.line("Match  "+pattern, theme.Accent)
-		}
-		v.arguments(item.Arguments, "path", "file_path", "filePath", "filename", "directory", "cwd", "pattern", "query", "glob")
-		v.heading("Matches")
-		if item.Error || item.Text == "" {
-			v.result(item)
-		} else if obj, ok := visualJSON([]byte(item.Text)); ok {
-			v.structured(obj, 0, "")
-		} else {
-			for _, line := range strings.Split(cleanCode(item.Text), "\n") {
-				v.rows = append(v.rows, visualWrap(paint(line, theme.Text), width)...)
-			}
-		}
 	case "worker":
 		rows, _ := workerDetailRows(item, theme, Options{ExpandTools: true}, width)
 		return rows
@@ -420,15 +339,8 @@ func toolDetailRows(item session.Item, theme config.Theme, width int) []string {
 		v.heading("Questions and choices")
 		v.arguments(item.Arguments)
 		v.result(item)
-	default:
-		v.arguments(item.Arguments)
-		v.result(item)
 	}
-	if name == "edit" {
-		v.metadata(item.Details, "diff", "patch")
-	} else {
-		v.metadata(item.Details)
-	}
+	v.metadata(item.Details)
 	if len(v.rows) == 0 {
 		v.line("No displayable result", visualDim(theme))
 	}

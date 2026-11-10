@@ -9,7 +9,7 @@ import (
 )
 
 func TestResultTablesAndNarrowFallback(t *testing.T) {
-	for _, name := range []string{"unknown", "mcp.inventory.list", "bash"} {
+	for _, name := range []string{"unknown", "mcp.inventory.list"} {
 		item := visualItem(name, nil, nil, `[{"name":"東京","count":2},{"name":"Paris","count":3}]`)
 		wide := ansi.Strip(visualText(item, 80))
 		mustContainVisual(t, wide, "Count", "Name", "東京", "Paris", "─┼─")

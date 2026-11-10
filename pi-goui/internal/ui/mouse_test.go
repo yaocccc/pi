@@ -86,14 +86,8 @@ func TestMouseSelectionDoesNotFoldAndClickUsesEffectiveState(t *testing.T) {
 		return render.Block{}
 	}
 	group := find("tool-group:tool:1")
-	if !group.Expanded {
-		t.Fatal("pending group must be effectively expanded")
-	}
-	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 2, Y: transcriptTop + group.Start})
-	m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: 2, Y: transcriptTop + group.Start})
-	group = find(group.ID)
-	if value, ok := tab.folds[group.ID]; !ok || value || group.Expanded || group.End-group.Start != 1 {
-		t.Fatal("clicking the automatically expanded group must hide all children")
+	if group.Expanded || group.End-group.Start != 1 {
+		t.Fatal("group must start as a collapsed single-line header")
 	}
 	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 2, Y: transcriptTop + group.Start})
 	if tab.folds[group.ID] {

@@ -40,7 +40,7 @@ func TestTranscriptBubblesMarkdownAndWidths(t *testing.T) {
 		})
 	}
 }
-func TestToolsFoldOffsetsAndCompleteExpansion(t *testing.T) {
+func TestToolsFoldOffsetsAndBashPreview(t *testing.T) {
 	output := strings.Repeat("line 中文 long output\n", 1200) + "FINAL_RESULT_MARKER"
 	items := []session.Item{{ID: "a", Role: "assistant", Text: "Before tool"}, {ID: "tool1", Role: "tool", ToolName: "bash", Arguments: json.RawMessage(`{"command":"ls -l"}`), Text: output}, {ID: "b", Role: "assistant", Text: "After tool"}}
 	collapsed := Transcript(items, testTheme(), Options{Width: 70})
@@ -62,8 +62,11 @@ func TestToolsFoldOffsetsAndCompleteExpansion(t *testing.T) {
 		t.Fatal("assistant turn was not grouped")
 	}
 	expanded := Transcript(items, testTheme(), Options{Width: 70, Expanded: map[string]bool{"tool-group:tool1": true, "tool1": true}})
-	if !strings.Contains(ansi.Strip(expanded.Text), "FINAL_RESULT_MARKER") || len(strings.Split(expanded.Text, "\n")) < 1200 {
-		t.Fatal("expanded output truncated")
+	if strings.Contains(ansi.Strip(expanded.Text), "FINAL_RESULT_MARKER") || !strings.Contains(ansi.Strip(expanded.Text), "(truncated)") {
+		t.Fatal("expanded bash must show only the output head")
+	}
+	if items[1].Text != output {
+		t.Fatal("preview changed saved output")
 	}
 	checkWidth(t, expanded.Text, 70)
 	global := Transcript(items, testTheme(), Options{Width: 70, ExpandTools: true, Expanded: map[string]bool{"tool1": false}})

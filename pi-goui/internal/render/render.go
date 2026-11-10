@@ -22,8 +22,7 @@ type Options struct {
 	AssistantStats            map[string]string // Frozen working metrics keyed by a block in the bubble.
 	ExpandTools, ShowThinking bool
 	// An explicit entry overrides ExpandTools, permitting individual collapse.
-	Expanded       map[string]bool
-	followingProse bool // Internal section-cache context.
+	Expanded map[string]bool
 }
 
 // ContentSpan identifies selectable content cells on a rendered line. A false
@@ -219,7 +218,11 @@ func toolBody(item session.Item, theme config.Theme, opts Options, width int) []
 			frameItem.Error = false
 			detail = codemodeFrame(detail, frameItem, frameTheme, width)
 		} else {
-			detail = frame(detail, name+" · result", width, "tool", false, width, theme)
+			cardWidth := width
+			if tool := visualName(item.ToolName); tool == "read" || tool == "bash" || tool == "edit" || tool == "write" || genericTool(tool) {
+				detail, cardWidth = compactBubble(detail, name, width)
+			}
+			detail = frame(detail, name, cardWidth, "tool", false, width, theme)
 		}
 	}
 	return append(out, detail...)
@@ -322,50 +325,26 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 				var rows []string
 				tool := it.Role == "tool" || it.Role == "toolResult"
 				if tool {
-					// Keep live Worker cards visible outside collapsed tool groups.
-					// Once the invocation settles, normal grouping takes over again.
-					if runningWorker(it) {
-						afterToolGroup = false
-						appendTool(it, inner, 0)
-						continue
-					}
 					end := i
-					for end < len(items) && (items[end].Role == "tool" || items[end].Role == "toolResult") && !runningWorker(items[end]) {
+					for end < len(items) && (items[end].Role == "tool" || items[end].Role == "toolResult") {
 						end++
 					}
 					run := items[i-1 : end]
 					id := "tool-group:" + it.ID
-					// Until prose arrives, show the last three calls as an automatic
-					// expansion. Explicit user folds always override this default.
-					pending := !opts.followingProse
-					for _, following := range items[end:] {
-						if following.Role != "tool" && following.Role != "toolResult" && following.Role != "thinking" && strings.TrimSpace(following.Text) != "" {
-							pending = false
-							break
-						}
+					expanded := isExpanded(id, opts)
+					if len(body) > 0 && strings.TrimSpace(ansi.Strip(body[len(body)-1])) != "" {
+						body = append(body, "")
 					}
-					_, explicit := opts.Expanded[id]
-					preview := pending && !explicit && !opts.ExpandTools
-					expanded := isExpanded(id, opts) || preview
 					start := len(body)
 					body = append(body, toolGroupHeader(run, expanded, theme, inner))
 					index := 0
-					if !expanded || preview {
+					if !expanded {
 						for _, child := range run {
 							index = max(index, child.MessageIndex)
 						}
 					}
 					group = append(group, Block{ID: id, Role: "toolGroup", MessageIndex: index, Start: start, End: start + 1, Foldable: true, Expanded: expanded})
-					if preview {
-						indent := min(2, max(0, inner-1))
-						if len(run) > 3 {
-							body = append(body, strings.Repeat(" ", indent)+fit(paint("……", theme.Muted), inner-indent))
-						}
-						for _, child := range run[max(0, len(run)-3):] {
-							body = append(body, strings.Repeat(" ", indent)+toolCallHeader(child, false, theme, inner-indent))
-						}
-						group[len(group)-1].End = len(body)
-					} else if expanded {
+					if expanded {
 						for _, child := range run {
 							indent := min(2, max(0, inner-1))
 							appendTool(child, inner-indent, indent)
@@ -399,7 +378,7 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 					continue
 				}
 				// Separate the whole tool group from following prose, never its
-				// header from its children or preceding prose from the group.
+				// header from its children.
 				if afterToolGroup {
 					body = append(body, "")
 				}

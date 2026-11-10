@@ -47,7 +47,7 @@ func TestGroupedExpandedToolFrameHitRange(t *testing.T) {
 		t.Fatal("group/child hit areas overlap")
 	}
 	body := strings.Join(rows[child.Start:child.End], "\n")
-	if !strings.Contains(body, "╭─ read · result") || !strings.Contains(body, "SECOND_OUTPUT") || !strings.Contains(rows[child.End-1], "╰") {
+	if !strings.Contains(body, "╭─ read ") || !strings.Contains(body, "SECOND_OUTPUT") || !strings.Contains(rows[child.End-1], "╰") {
 		t.Fatalf("child hit area must include complete result frame: %q", body)
 	}
 	checkWidth(t, doc.Text, 60)

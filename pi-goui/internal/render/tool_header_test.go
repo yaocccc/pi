@@ -37,7 +37,7 @@ func TestToolHeadersUseFoldingPaletteAndTokenThresholds(t *testing.T) {
 	failed.Error = true
 	failed.EstimatedTokens = 7000
 	group := toolGroupHeader([]session.Item{item, failed}, true, theme, 100)
-	for _, fragment := range []string{"2 calls", "read×2", "1 failed", "≈12.0k tok", paint(" ✗ 1 failed", theme.Error)} {
+	for _, fragment := range []string{"2 calls", "2read", "1❌", "≈12.0k", paint(" 1❌", theme.Error)} {
 		if !strings.Contains(group, fragment) {
 			t.Fatalf("missing summary %q: %s", fragment, group)
 		}
@@ -52,7 +52,30 @@ func TestToolHeadersUseFoldingPaletteAndTokenThresholds(t *testing.T) {
 		checkWidth(t, toolGroupHeader([]session.Item{item, failed}, false, theme, width), width)
 	}
 }
-func TestToolGroupSpacingOnlyBeforeFollowingProse(t *testing.T) {
+func TestCompactToolGroupSummary(t *testing.T) {
+	items := []session.Item{
+		{ToolName: "edit", HasResult: true, EstimatedTokens: 5000},
+		{ToolName: "edit", HasResult: true, EstimatedTokens: 5000},
+		{ToolName: "bash", HasResult: true, Error: true, EstimatedTokens: 1200},
+	}
+	got := ansi.Strip(toolGroupHeader(items, false, testTheme(), 120))
+	if got != "› 3 calls · 2edit  1bash 1❌ ≈11.2k" {
+		t.Fatal(got)
+	}
+	items[0].Running = true
+	items[1].HasResult = false
+	got = ansi.Strip(toolGroupHeader(items, false, testTheme(), 120))
+	if strings.Contains(got, "✓") || !strings.Contains(got, "1❌") {
+		t.Fatal("unexpected outcome counts: " + got)
+	}
+	items[2].Error = false
+	got = ansi.Strip(toolGroupHeader(items, false, testTheme(), 120))
+	if got != "› 3 calls · 2edit  1bash ≈11.2k" {
+		t.Fatal(got)
+	}
+}
+
+func TestToolGroupSpacingAroundProse(t *testing.T) {
 	items := []session.Item{{ID: "before", Role: "assistant", Text: "Before"}, {ID: "a", Role: "tool", ToolName: "read", Text: "source"}, {ID: "b", Role: "tool", ToolName: "bash", Text: "result"}, {ID: "reply", Role: "assistant", Text: "Done"}}
 	for _, expanded := range []bool{false, true} {
 		for _, results := range []bool{false, true} {
@@ -62,8 +85,8 @@ func TestToolGroupSpacingOnlyBeforeFollowingProse(t *testing.T) {
 			before := blockByID(t, doc, "before")
 			reply := blockByID(t, doc, "reply")
 			rows := strings.Split(ansi.Strip(doc.Text), "\n")
-			if group.End != group.Start+1 || group.Start != before.End {
-				t.Fatal("prose → group must be adjacent, with a one-row header hit range")
+			if group.End != group.Start+1 || group.Start != before.End+1 || strings.Trim(rows[before.End], " │") != "" {
+				t.Fatal("prose → group must have one blank row, with a one-row header hit range")
 			}
 			end := group.End
 			if expanded {

@@ -33,7 +33,7 @@ func TestSemanticReadNumberingAndSavedCode(t *testing.T) {
 	item := visualItem("read", map[string]any{"path": "/does/not/exist/source.go", "offset": 12, "limit": 3}, nil, "package demo\n\tfunc main() { println(42) }\n// saved")
 	before := item.Text
 	rendered := visualText(item, 80)
-	mustContainVisual(t, rendered, "/does/not/exist/source.go", "lines 12–14", "12 │ package demo", "13 │     func main()", "14 │ // saved")
+	mustContainVisual(t, rendered, "/does/not/exist/source.go", "Offset: 12, Limit: 3", "12 │ package demo", "13 │     func main()", "14 │ // saved")
 	if !strings.Contains(rendered, "\x1b[") {
 		t.Fatal("code was not styled")
 	}
@@ -47,7 +47,7 @@ func TestSemanticReadNumberingAndSavedCode(t *testing.T) {
 	item.Text = source + "\n\n[Showing lines 12-13 of 400. Use offset=14 to continue.]"
 	item.Details = json.RawMessage(`{"truncation":{"content":"alpha\nbeta","truncated":true,"outputLines":2,"totalLines":400}}`)
 	rendered = visualText(item, 100)
-	mustContainVisual(t, rendered, "12 │ alpha", "13 │ beta", "Read notice", "Use offset=14", "Truncated: yes", "Total lines: 400")
+	mustContainVisual(t, rendered, "12 │ alpha", "13 │ beta", "Use offset=14")
 	if strings.Count(ansi.Strip(rendered), "alpha") != 1 {
 		t.Fatal("truncation metadata duplicated source")
 	}
@@ -66,7 +66,7 @@ func TestSemanticEditNativeAndUnifiedDiff(t *testing.T) {
 	for _, diff := range []string{" 10 before\n-11 old()\n+11 new()\n 12 after", "--- a/a.go\n+++ b/a.go\n@@ -10,3 +10,3 @@\n before\n-old()\n+new()\n after"} {
 		item := visualItem("edit", map[string]any{"path": "a.go", "oldText": "wrong guessed old", "newText": "wrong guessed new"}, map[string]any{"diff": diff, "firstChangedLine": 11}, "Successfully replaced text")
 		text := visualText(item, 100)
-		mustContainVisual(t, text, "Reported diff", "+1 added", "−1 removed", "old()", "new()", "First changed line: 11")
+		mustContainVisual(t, text, "old()", "new()")
 		if strings.Contains(text, "wrong guessed") {
 			t.Fatal("ignored authoritative diff")
 		}
@@ -75,52 +75,52 @@ func TestSemanticEditNativeAndUnifiedDiff(t *testing.T) {
 		}
 		item.Error = true
 		text = visualText(item, 100)
-		mustContainVisual(t, text, "completion not confirmed", "Error")
+		mustContainVisual(t, text, "Change failed")
 	}
 	if added, removed := diffCounts("--- a/test\n+++ b/test\n@@ -1 +1 @@\n--- removed code\n+++ added code"); added != 1 || removed != 1 {
 		t.Fatalf("hunk text confused with file headers: +%d -%d", added, removed)
 	}
 	patch := visualItem("edit", map[string]any{"path": "a.go"}, map[string]any{"patch": "@@ -1 +1 @@\n-old\n+new"}, "changed")
-	mustContainVisual(t, visualText(patch, 80), "+1 added", "−1 removed")
+	mustContainVisual(t, visualText(patch, 80), "-old", "+new")
 }
 func TestSemanticMultipleReplacementFallback(t *testing.T) {
 	item := visualItem("edit", map[string]any{"path": "a.ts", "edits": []any{map[string]any{"oldText": "const a = 1;", "newText": "const a = 2;"}, map[string]any{"oldText": "old\nlast", "newText": "new\nlast"}}}, nil, "Done")
 	text := visualText(item, 120)
-	mustContainVisual(t, text, "Requested replacement 1", "Requested replacement 2", "relative lines, not a recorded file diff", "− Before", "+ After", "const a = 1;", "const a = 2;")
+	mustContainVisual(t, text, "Replacement preview · not a recorded diff", "-const a = 1;", "+const a = 2;", "-old", "+new")
 	item.Error = true
 	item.Text = "No unique match"
 	text = visualText(item, 120)
-	mustContainVisual(t, text, "Requested replacement", "No unique match")
+	mustContainVisual(t, text, "Change failed", "No unique match")
 	if strings.Contains(text, "Applied") {
 		t.Fatal("failed operation presented as applied")
 	}
 	legacy := visualItem("edit", map[string]any{"path": "a.py", "oldText": "old", "newText": "new"}, nil, "done")
-	mustContainVisual(t, visualText(legacy, 120), "Requested replacement 1", "Before", "After")
+	mustContainVisual(t, visualText(legacy, 120), "Replacement preview · not a recorded diff", "-old", "+new")
 }
 func TestSemanticWriteOutcomeAndContent(t *testing.T) {
 	item := visualItem("write", map[string]any{"path": "file.ts", "content": "const n = 42;\nconsole.log(n);"}, nil, "Successfully wrote to file.ts")
-	mustContainVisual(t, visualText(item, 80), "Written content · 2 lines", "1 │ const n = 42;", "2 │ console.log(n);")
+	mustContainVisual(t, visualText(item, 80), "Write preview · original content unavailable", "+const n = 42;", "+console.log(n);")
 	item.Error = true
-	mustContainVisual(t, visualText(item, 80), "Write failed · requested content")
+	mustContainVisual(t, visualText(item, 80), "Change failed")
 	item.Error = false
 	item.HasResult = false
-	mustContainVisual(t, visualText(item, 80), "Requested content · completion not confirmed")
+	mustContainVisual(t, visualText(item, 80), "Write preview · original content unavailable")
 	item.Running = true
-	mustContainVisual(t, visualText(item, 80), "Writing · requested content", "Partial result")
+	mustContainVisual(t, visualText(item, 80), "Write preview · original content unavailable")
 }
 func TestSemanticCommonAndUnknownTools(t *testing.T) {
 	fixtures := []struct {
 		item   session.Item
 		wanted []string
 	}{
-		{visualItem("bash", map[string]any{"command": "printf hello", "timeout": 10}, map[string]any{"exitCode": 0}, "hello"), []string{"Command", "printf hello", "Timeout: 10", "Exit code: 0", "hello"}},
-		{visualItem("grep", map[string]any{"pattern": "needle", "path": "src"}, nil, "src/a.go:4: needle"), []string{"File  src", "Match  needle", "Matches", "src/a.go:4: needle"}},
-		{visualItem("find", map[string]any{"pattern": "*.go", "path": "src"}, nil, "a.go\nb.go"), []string{"Matches", "a.go", "b.go"}},
-		{visualItem("ls", map[string]any{"path": "src"}, nil, "a.go\nsubdir/"), []string{"Matches", "subdir/"}},
+		{visualItem("bash", map[string]any{"command": "printf hello", "timeout": 10}, map[string]any{"exitCode": 0}, "hello"), []string{"printf hello", "Timeout: 10", "Exit code: 0", "hello"}},
+		{visualItem("grep", map[string]any{"pattern": "needle", "path": "src"}, nil, "src/a.go:4: needle"), []string{"Path: src", "Pattern: needle", "src/a.go:4: needle"}},
+		{visualItem("find", map[string]any{"pattern": "*.go", "path": "src"}, nil, "a.go\nb.go"), []string{"Pattern: *.go", "a.go", "b.go"}},
+		{visualItem("ls", map[string]any{"path": "src"}, nil, "a.go\nsubdir/"), []string{"Path: src", "subdir/"}},
 		{visualItem("codemode", map[string]any{"code": "const result = await tools.read({path: 'a.go'});"}, nil, "done"), []string{"const result", "done"}},
 		{visualItem("worker", map[string]any{"tasks": []any{map[string]any{"objective": "Run unit tests", "mode": "test"}}}, nil, `{"status":"completed","results":[{"task":"Unit tests","status":"passed"}]}`), []string{"✓ test", "Run unit tests"}},
 		{visualItem("ask_question", map[string]any{"question": "Pick one", "options": []string{"Alpha", "Beta"}}, nil, `{"value":"Beta"}`), []string{"Questions and choices", "Question: Pick one", "1: Alpha", "2: Beta", "Value: Beta"}},
-		{visualItem("custom_extension", map[string]any{"enabled": true, "rules": []any{map[string]any{"scope": "src", "checks": []string{"lint", "test"}}}, "nullable": nil}, map[string]any{"durationMs": 12}, `{"matches":[{"path":"src/main.go","line":3}],"message":"Found one"}`), []string{"Enabled: yes", "Nullable: —", "Scope: src", "1: lint", "2: test", "Path: src/main.go", "Line: 3", "Message: Found one", "Duration ms: 12"}},
+		{visualItem("custom_extension", map[string]any{"enabled": true, "rules": []any{map[string]any{"scope": "src", "checks": []string{"lint", "test"}}}, "nullable": nil}, map[string]any{"durationMs": 12}, `{"matches":[{"path":"src/main.go","line":3}],"message":"Found one"}`), []string{"Enabled: yes", "Nullable: —", "Scope: src", "1: lint", "2: test", "Path: src/main.go", "Line: 3", "Message: Found one"}},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.item.ToolName, func(t *testing.T) {

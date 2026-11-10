@@ -61,11 +61,11 @@ func TestConsecutiveToolGroupsAndEffectiveState(t *testing.T) {
 	items := toolFixture()
 	id := "tool-group:t1"
 	closed := Transcript(items, testTheme(), Options{Width: 80})
-	if len(closed.Blocks) != 1 || !strings.Contains(ansi.Strip(closed.Text), "3 calls · read×2  bash×1") {
+	if len(closed.Blocks) != 1 || !strings.Contains(ansi.Strip(closed.Text), "3 calls · 2read  1bash") {
 		t.Fatalf("not grouped: %+v %s", closed.Blocks, closed.Text)
 	}
 	b := blockByID(t, closed, id)
-	if b.Role != "toolGroup" || !b.Foldable || !b.Expanded || b.End-b.Start != 4 {
+	if b.Role != "toolGroup" || !b.Foldable || b.Expanded || b.End-b.Start != 1 {
 		t.Fatalf("header contract: %+v", b)
 	}
 	opened := Transcript(items, testTheme(), Options{Width: 80, Expanded: map[string]bool{id: true, "t2": true}})
@@ -94,13 +94,13 @@ func TestConsecutiveToolGroupsAndEffectiveState(t *testing.T) {
 	}
 	more := append(items, session.Item{ID: "t4", Role: "tool", ToolName: "bash", Running: true})
 	streaming := Transcript(more, testTheme(), Options{Width: 80, Expanded: map[string]bool{id: true}})
-	if !blockByID(t, streaming, id).Expanded || !strings.Contains(ansi.Strip(streaming.Text), "4 calls") || !strings.Contains(ansi.Strip(streaming.Text), "1 running") {
+	if !blockByID(t, streaming, id).Expanded || !strings.Contains(ansi.Strip(streaming.Text), "4 calls") || strings.Contains(ansi.Strip(streaming.Text), "1 running") {
 		t.Fatal("appended tool lost group state")
 	}
 	more[1].Error = true
 	failed := Transcript(more, testTheme(), Options{Width: 80})
-	if !strings.Contains(ansi.Strip(failed.Text), "4 calls") || !strings.Contains(ansi.Strip(failed.Text), "1 running") || !strings.Contains(ansi.Strip(failed.Text), "1 failed") {
-		t.Fatal("group hides running/error summary")
+	if !strings.Contains(ansi.Strip(failed.Text), "4 calls") || strings.Contains(ansi.Strip(failed.Text), "1 running") || !strings.Contains(ansi.Strip(failed.Text), "1❌") {
+		t.Fatal("group must hide running count and retain error summary")
 	}
 }
 func TestGroupsRespectVisibleBoundaries(t *testing.T) {
