@@ -1,4 +1,4 @@
-import { estimateToolTokens } from '../ui/tool-tokens.ts';
+import { estimateToolTokens } from '../shared/tool-tokens.ts';
 import { spawn, type ChildProcess } from "node:child_process";
 import { present } from "./presentation.ts";
 import { captureWorkerSession, workerSessionArgs, type WorkerSessionSnapshot } from "./session.ts";

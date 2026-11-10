@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { CURSOR_MARKER, Editor, type EditorTheme, Key, matchesKey, sliceByColumn, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { QuestionInteractions } from './interaction.ts';
-import { frameBorder } from '../ui/utils.ts';
+import { frameBorder } from '../shared/frame.ts';
 
 interface AskQuestionDetails {
     question: string;
@@ -422,6 +422,13 @@ const askRpcQuestion = async (question: AskQuestionInput, ctx: ExtensionContext,
 
 const askQuestions = async (questions: AskQuestionInput[], review: boolean, ctx: ExtensionContext, interactions: QuestionInteractions, signal?: AbortSignal) => {
     if (ctx.mode === 'tui') return showQuestions(questions, review, ctx, interactions, signal);
+    if (process.env.PI_GOUI_ASK_QUESTION === '1') {
+        const value = await ctx.ui.input(
+            'pi-goui:ask-question:v1', JSON.stringify({ questions, review }), signal ? { signal } : undefined,
+        );
+        if (!value) return null;
+        return JSON.parse(value) as { answers: QuestionnaireAnswer[]; cancelled: boolean };
+    }
     const answers: QuestionnaireAnswer[] = [];
     for (const question of questions) {
         const answer = await askRpcQuestion(question, ctx, signal);

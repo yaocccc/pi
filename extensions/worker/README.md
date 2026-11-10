@@ -68,8 +68,10 @@ Detached sanitized snapshots are persisted to session history. Only the active b
 
 ## Verification
 
+The legacy UI is archived unchanged at the repository root `ui/`, outside extension discovery. Active extensions use `extensions/shared/` instead. The optional full legacy UI patch-stack test is skipped while `extensions/ui/index.ts` is absent; other Worker and question tests still run.
+
 ```sh
-node --experimental-transform-types --test extensions/worker/*.test.ts extensions/ui/*.test.ts extensions/ask-question/*.test.ts
+node --experimental-transform-types --test extensions/worker/*.test.ts extensions/shared/*.test.ts extensions/ask-question/*.test.ts
 extensions/node_modules/.bin/tsc --noEmit -p extensions/tsconfig.json
 git diff --check
 ```

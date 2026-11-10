@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CURSOR_MARKER, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
 import askQuestion from './index.ts';
-import { frameBorder } from '../ui/utils.ts';
+import { frameBorder } from '../shared/frame.ts';
 
 const piRoot = dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')));
 const { initTheme, theme } = await import(pathToFileURL(join(piRoot, 'modes/interactive/theme/theme.js')).href);

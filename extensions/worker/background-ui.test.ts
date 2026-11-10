@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Text, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
@@ -10,7 +11,8 @@ import { start, task, until } from "./fixtures/helpers.ts";
 import { DEFAULT_OPTIONS } from "./config.ts";
 import type { executeTask } from "./process.ts";
 import { renderWorkerDetails } from "./ui.ts";
-import { patchToolDisplay, patchFinalResponseSeparator, patchFullscreenScrollbar, patchMergeConsecutiveTools, patchUserMessageFrame } from "../ui/index.ts";
+// Optional legacy UI compatibility; the archived root ui/ is never loaded here.
+const legacyUiEntry = new URL("../ui/index.ts", import.meta.url);
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text } as Theme;
 const secret = (name: string) => `${name}=${name}-fixture-hidden`;
@@ -150,7 +152,10 @@ test("static historical cards freeze elapsed time and rebuild with the current t
 });
 
 
-test("installed Pi and complete UI patch stack frame only visible Worker rows like ordinary tools", async () => {
+test("installed Pi and complete UI patch stack frame only visible Worker rows like ordinary tools", {
+	skip: existsSync(legacyUiEntry) ? false : "legacy UI extension is archived",
+}, async () => {
+	const { patchToolDisplay, patchFinalResponseSeparator, patchFullscreenScrollbar, patchMergeConsecutiveTools, patchUserMessageFrame } = await import(legacyUiEntry.href);
 	const Component = await piToolComponent();
 	// Same installation order as extensions/ui/index.ts; no mocked render/updateDisplay.
 	patchFinalResponseSeparator();

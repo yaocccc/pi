@@ -1,4 +1,4 @@
-import { colorToolTokens, formatToolTokens } from '../ui/tool-tokens.ts';
+import { colorToolTokens, formatToolTokens } from '../shared/tool-tokens.ts';
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkerUiActivity, WorkerUiDetails, WorkerUiStatus, WorkerUiTask, WorkerUsage } from "./types";
