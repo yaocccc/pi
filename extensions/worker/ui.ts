@@ -73,8 +73,9 @@ export function renderWorkerDetails(details: WorkerUiDetails, theme: Theme, opti
 		const sessionIcon = task.sessionMode === "fork" ? "" : task.sessionMode === "new" ? "󰐖" : undefined;
 		const runtime = [preset, usage, duration].filter(Boolean).join(" · ");
 		text += `${uiStatusIcon(task.status, theme)} ${theme.fg("accent", task.mode)}${sessionIcon ? ` ${theme.fg("muted", sessionIcon)}` : ""}${runtime ? theme.fg("muted", ` · ${runtime}`) : ""}`;
-		const objective = sanitizeUiText(task.objective).replace(/\s+/g, " ").trim();
-		text += `\n  ${theme.fg("toolOutput", objective)}`;
+		const title = sanitizeUiText(task.title ?? "").replace(/\s+/g, " ").trim();
+		const description = title || sanitizeUiText(task.objective).replace(/\s+/g, " ").trim();
+		text += `\n  ${theme.fg("toolOutput", description)}`;
 		const conclusions = workerConclusions(task);
 		for (const activity of task.activities.slice(-UI_RECENT_ACTIVITY_LIMIT)) {
 			if (activity.type === "thinking") continue;

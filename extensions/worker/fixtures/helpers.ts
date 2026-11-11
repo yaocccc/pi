@@ -7,7 +7,7 @@ export const task = (path: string): WorkerTask => ({ mode: "implement", preset: 
 export function start(runtime: WorkerRuntime, tasks: WorkerTask[], execute: Batch["execute"], limit = 2, timeoutMs = 2_000): Batch {
 	return runtime.start({
 		limit, timeoutMs, maxOutputBytes: 65536, execute,
-		ui: { kind: "worker-ui", startedAt: Date.now(), limit, total: tasks.length, completed: 0, tasks: tasks.map((t, index) => ({ index, mode: t.mode, objective: t.objective, status: "queued", requestedPreset: t.preset, sessionMode: t.sessionMode, attempt: 0, phase: "等待执行", activities: [], toolCalls: 0, usage: emptyWorkerUsage() })) },
+		ui: { kind: "worker-ui", startedAt: Date.now(), limit, total: tasks.length, completed: 0, tasks: tasks.map((t, index) => ({ index, mode: t.mode, title: t.title, objective: t.objective, status: "queued", requestedPreset: t.preset, sessionMode: t.sessionMode, attempt: 0, phase: "等待执行", activities: [], toolCalls: 0, usage: emptyWorkerUsage() })) },
 	}, tasks, process.cwd());
 }
 export async function until(check: () => boolean, ms = 2_000) {

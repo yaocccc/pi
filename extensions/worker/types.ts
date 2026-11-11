@@ -8,6 +8,7 @@ export type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" |
 
 export interface WorkerTask {
 	mode: WorkerMode;
+	title?: string;
 	objective: string;
 	preset: WorkerPreset;
 	/** Explicit fork snapshots the parent's active branch at batch admission. */
@@ -96,6 +97,7 @@ export interface ChildProgress {
 export interface WorkerUiTask {
 	index: number;
 	mode: WorkerMode;
+	title?: string;
 	objective: string;
 	status: WorkerUiStatus;
 	requestedPreset: WorkerPreset;

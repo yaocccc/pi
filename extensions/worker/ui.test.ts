@@ -144,7 +144,7 @@ test("worker details retain status icons and render session icons in the preset 
 	}
 });
 
-test("worker details display the complete objective", () => {
+test("worker details prefer title and fall back to the complete objective", () => {
 	const objective = `检查并修复 Worker 工具目标显示。${"完整目标内容".repeat(30)}目标结束`;
 	const details: WorkerUiDetails = {
 		kind: "worker-ui",
@@ -170,6 +170,13 @@ test("worker details display the complete objective", () => {
 
 	assert.match(rendered, /目标结束/);
 	assert.ok(rendered.includes(`<toolOutput>${objective}</toolOutput>`));
+	for (const title of ["修复任务卡片显示", "", " \n\t "]) {
+		details.tasks[0].title = title;
+		const output = renderWorkerDetails(details, theme).render(1_000).join("\n");
+		assert.ok(output.includes(`<toolOutput>${title.trim() || objective}</toolOutput>`));
+		if (title.trim()) assert.ok(!output.includes(objective));
+		assert.equal(details.tasks[0].objective, objective);
+	}
 });
 
 test("result compaction preserves every field's standard and minimal limits", () => {

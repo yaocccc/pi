@@ -29,7 +29,7 @@ description: Use for Worker delegation, Fast/Normal/Deep routing, parallel task 
 - `implement`：按契约实现；`test`：运行或补充测试，不擅改生产逻辑；`fix`：只修已确认的问题。
 - implement/test/fix 均要求非空 `allowedPaths`，即使 test 只打算运行测试。
 
-写清 `objective`；按需提供 `context`、`relevantFiles`、`acceptanceCriteria`、`verificationCommands`、`outputRequirements`，确保目标可验收。Worker 不自动加载 skills 或项目上下文文件；必要规范和命令须在契约中给出或指向具体文件，尤其是 new 会话。
+用可选 `title` 写一句简短任务描述（建议 10–30 字，不机械截断）；UI 优先展示它，缺省或空白时回退 `objective`。完整执行目标仍写入 `objective`；按需提供 `context`、`relevantFiles`、`acceptanceCriteria`、`verificationCommands`、`outputRequirements`，确保目标可验收。Worker 不自动加载 skills 或项目上下文文件；必要规范和命令须在契约中给出或指向具体文件，尤其是 new 会话。
 
 - `cwd` 只能是主工作区内已存在的相对子目录，不可指向工作区外的独立 worktree。
 - `allowedPaths`/`forbiddenPaths` 均相对 task.cwd：文件用精确路径（可为新文件），目录后代用 `dir/**`；裸目录和 `dir/` 会被拒绝，不存在的裸路径按精确文件处理。

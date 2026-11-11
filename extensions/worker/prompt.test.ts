@@ -9,7 +9,7 @@ import type { WorkerTask } from "./types.ts";
 const contract = (prompt: string) => JSON.parse(prompt.split("\n")[1]);
 
 test("minimal task prompts omit empty context and host-owned route metadata", () => {
-	const prompt = buildTaskPrompt({ mode: "review", preset: "normal", sessionMode: "fork", objective: "  review output  ", relevantFiles: [], context: "" }, null);
+	const prompt = buildTaskPrompt({ mode: "review", preset: "normal", sessionMode: "fork", title: "Short UI label", objective: "  review output  ", relevantFiles: [], context: "" }, null);
 	assert.deepEqual(contract(prompt), { mode: "review", objective: "review output", sessionMode: "fork", allowedPaths: [] });
 	assert.ok(Buffer.byteLength(prompt) <= 750, "bound repeated task boilerplate");
 	assert.match(prompt, /2-4 条具体结论/);

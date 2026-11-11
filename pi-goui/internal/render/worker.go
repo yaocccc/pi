@@ -15,12 +15,12 @@ import (
 // Worker cards consume saved WorkerUiDetails, never the extension's live registry.
 // A captured snapshot time freezes historical durations; missing metrics stay absent.
 type workerCard struct {
-	index                                                      int
-	mode, objective, status, preset, model, sessionMode, phase string
-	started, finished                                          float64
-	usage, result                                              map[string]any
-	activities                                                 []any
-	toolCalls                                                  int
+	index                                                             int
+	mode, title, objective, status, preset, model, sessionMode, phase string
+	started, finished                                                 float64
+	usage, result                                                     map[string]any
+	activities                                                        []any
+	toolCalls                                                         int
 }
 type workerView struct {
 	cards               []workerCard
@@ -52,7 +52,7 @@ func workerFirst(values ...string) string {
 	return ""
 }
 func workerCardFrom(m map[string]any, position int) workerCard {
-	c := workerCard{toolCalls: int(workerNumber(m, "toolCalls")), index: position, mode: visualString(m, "mode"), objective: visualString(m, "objective"), status: visualString(m, "status"), preset: visualString(m, "resolvedPreset", "requestedPreset", "preset"), model: visualString(m, "modelId"), sessionMode: visualString(m, "sessionMode"), phase: visualString(m, "phase"), started: workerNumber(m, "startedAt"), finished: workerNumber(m, "finishedAt"), usage: workerMap(m["usage"]), result: workerMap(m["result"]), activities: workerArray(m["activities"])}
+	c := workerCard{toolCalls: int(workerNumber(m, "toolCalls")), index: position, mode: visualString(m, "mode"), title: visualString(m, "title"), objective: visualString(m, "objective"), status: visualString(m, "status"), preset: visualString(m, "resolvedPreset", "requestedPreset", "preset"), model: visualString(m, "modelId"), sessionMode: visualString(m, "sessionMode"), phase: visualString(m, "phase"), started: workerNumber(m, "startedAt"), finished: workerNumber(m, "finishedAt"), usage: workerMap(m["usage"]), result: workerMap(m["result"]), activities: workerArray(m["activities"])}
 	if _, ok := m["index"]; ok {
 		c.index = int(workerNumber(m, "index"))
 	}
@@ -318,8 +318,8 @@ func workerDetailRows(item session.Item, theme config.Theme, _ Options, width in
 				}
 			}
 		}
-		if c.objective != "" {
-			section("◦", theme.Accent, []string{c.objective})
+		if description := workerFirst(strings.TrimSpace(Clean(c.title)), c.objective); description != "" {
+			section("◦", theme.Accent, []string{description})
 		}
 		steps := workerToolRows(c, theme, width)
 		rows = append(rows, steps...)

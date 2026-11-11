@@ -15,6 +15,38 @@ func workerFixture() session.Item {
 		Text:    `{"status":"failed","summary":["CONTENT MUST NOT OVERRIDE DETAILS"]}`,
 		Details: json.RawMessage(`{"kind":"worker-ui","batchId":"batch-demo","snapshotAt":12000,"startedAt":1000,"total":2,"completed":1,"tasks":[{"index":0,"mode":"implement","objective":"Improve worker cards","status":"completed","requestedPreset":"normal","modelId":"provider/requested","sessionMode":"fork","startedAt":1000,"finishedAt":11000,"usage":{"input":1200,"output":300,"turns":2},"activities":[{"id":"read-1","type":"tool","status":"completed","label":"read","detail":"render.go"}],"result":{"status":"completed","summary":["Implemented task cards"],"changed_files":[{"path":"worker.go","kind":"added"}],"validation":[{"command":"go test ./internal/render","result":"passed","details":"12 checks"}],"execution":{"actual_model_id":"provider/actual","route_debug":"HIDDEN ROUTING"}}},{"index":1,"mode":"test","objective":"Verify widths 中文","status":"blocked","requestedPreset":"fast","startedAt":10000,"usage":{"input":0,"output":0,"turns":0},"result":{"status":"blocked","summary":["Missing fixture"],"error":{"message":"Fixture unavailable"}}}]}`)}
 }
+func TestWorkerTitleAndObjectiveFallback(t *testing.T) {
+	for _, title := range []any{nil, "", " \t ", "修复任务卡片"} {
+		task := map[string]any{"mode": "scout", "objective": "Complete execution goal"}
+		if title != nil {
+			task["title"] = title
+		}
+		for _, authoritative := range []bool{true, false} {
+			item := session.Item{ID: "title", Role: "tool", ToolName: "worker"}
+			if authoritative {
+				item.Details, _ = json.Marshal(map[string]any{"kind": "worker-ui", "tasks": []any{task}})
+			} else {
+				item.Arguments, _ = json.Marshal(map[string]any{"tasks": []any{task}})
+			}
+			rows, _ := workerDetailRows(item, testTheme(), Options{}, 80)
+			output := ansi.Strip(strings.Join(rows, "\n"))
+			want := "Complete execution goal"
+			if title == "修复任务卡片" {
+				want = title.(string)
+				if strings.Contains(output, "Complete execution goal") {
+					t.Fatal("objective shown instead of title")
+				}
+			}
+			if !strings.Contains(output, want) {
+				t.Fatalf("title=%v authoritative=%v: %q", title, authoritative, output)
+			}
+			if workerData(item).cards[0].objective != "Complete execution goal" {
+				t.Fatal("objective changed")
+			}
+		}
+	}
+}
+
 func TestWorkerHeaderDoesNotStretchViewport(t *testing.T) {
 	item := workerFixture()
 	view := workerData(item)

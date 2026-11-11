@@ -25,6 +25,7 @@ Start/continue waits for completion; no polling. Finish or cancel all batches be
 
 export const TaskSchema = Type.Object({
 	mode: StringEnum(MODES),
+	title: Type.Optional(Type.String({ description: "One-sentence UI task label; aim for 10–30 characters. Write it yourself, not by truncating objective." })),
 	objective: Type.String({ minLength: 1 }),
 	preset: StringEnum(PRESETS),
 	sessionMode: StringEnum(SESSION_MODES, { description: "Choose explicitly: fork snapshots the current branch at batch start; new is for minimal context handoff." }),
@@ -222,7 +223,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 			let toolActive = true;
 			const uiDetails: WorkerUiDetails = {
 				kind: "worker-ui", originToolCallId: toolCallId, startedAt: Date.now(), limit: loaded.config.maxConcurrentWorkers, total: tasks.length, completed: 0,
-				tasks: tasks.map((task, index) => ({ index, mode: task.mode, objective: task.objective, status: "queued", requestedPreset: task.preset, sessionMode: task.sessionMode, attempt: 0, phase: "等待执行", activities: [], toolCalls: 0, usage: emptyWorkerUsage() })),
+				tasks: tasks.map((task, index) => ({ index, mode: task.mode, title: task.title, objective: task.objective, status: "queued", requestedPreset: task.preset, sessionMode: task.sessionMode, attempt: 0, phase: "等待执行", activities: [], toolCalls: 0, usage: emptyWorkerUsage() })),
 			};
 			const emitTaskUsage = (task: WorkerUiDetails["tasks"][number]) => {
 				const snapshot: WorkerUsageSnapshot = { taskId: `${toolCallId}:${task.index}`, input: task.usage.input, output: task.usage.output };

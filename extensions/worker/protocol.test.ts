@@ -43,6 +43,25 @@ function harness(execute: typeof executeTask, maxConcurrentWorkers = DEFAULT_OPT
 }
 
 
+test("title survives schema, execution and UI snapshots without replacing objective", async () => {
+	const titled = { ...task, title: "Inspect task cards" };
+	const h = harness(async (received) => {
+		assert.equal(received.title, titled.title);
+		assert.equal(received.objective, task.objective);
+		return structuredClone(complete);
+	});
+	try {
+		for (const title of [undefined, "", " \t ", titled.title]) {
+			assert.doesNotThrow(() => validateWorkerInput({ tasks: [{ ...task, title }] }));
+		}
+		assert.throws(() => validateWorkerInput({ tasks: [{ ...task, title: 42 }] }));
+		const response = await h.call({ tasks: [titled] });
+		assert.equal(response.details.tasks[0].status, "completed");
+		assert.equal(response.details.tasks[0].title, titled.title);
+		assert.equal(response.details.tasks[0].objective, task.objective);
+	} finally { await h.close(); }
+});
+
 test("only tasks-array starts, continuations and cancellations are accepted", () => {
 	for (const input of [{ tasks: [task] }, { tasks: [task, task] }, { tasks: Array(12).fill(task) }, { batchId: "batch" }, { batchId: "batch", cancel: true }]) {
 		assert.doesNotThrow(() => validateWorkerInput(input));
