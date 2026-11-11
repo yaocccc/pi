@@ -1,6 +1,8 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAgentDir, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { emitFrontendEvent, isGoUI } from '../shared/frontend.ts';
+import { notifyNativeError, notifyNativeSaved, notifyNativeUnavailable, selectNativeLevel } from './native-ui.ts';
 
 type FastLevel = 'normal' | 'fast' | 'ultrafast';
 interface FastConfig {
@@ -40,28 +42,29 @@ export default function (pi: ExtensionAPI) {
         description: '设置 Codex 档位：normal / fast / ultrafast',
         handler: async (_args, ctx) => {
             if (!ctx.hasUI) {
-                ctx.ui.notify('Codex Fast 设置需要交互式 UI', 'warning');
+                if (!isGoUI(ctx)) notifyNativeUnavailable(ctx);
                 return;
             }
 
             config = loadConfig(config);
-            const items = levels.map((level) => ({
-                level,
-                label: `${level}${level === config.level ? ' · 当前' : ''}`,
-            }));
-            const selected = await ctx.ui.select(
-                `Codex 档位 · 当前 ${config.level} · 回车选择并保存 · Esc 退出`,
-                items.map((item) => item.label),
-            );
-            const item = items.find((item) => item.label === selected);
-            if (!item) return;
-            const nextConfig: FastConfig = { level: item.level };
+            const goUI = isGoUI(ctx);
+            const selected = goUI
+                ? await ctx.ui.input('pi-goui:codex-fast:v1', JSON.stringify({ level: config.level }))
+                : await selectNativeLevel(ctx, config.level);
+            if (selected === undefined) return;
+            if (!levels.includes(selected as FastLevel)) {
+                if (goUI) emitFrontendEvent(ctx, 'codex.settings-error', { code: 'invalid-level', message: selected });
+                return;
+            }
+            const nextConfig: FastConfig = { level: selected as FastLevel };
             try {
                 saveConfig(nextConfig);
                 config = nextConfig;
-                ctx.ui.notify(`Codex 档位已设为 ${config.level}`, 'info');
+                if (goUI) emitFrontendEvent(ctx, 'codex.settings-saved', { level: config.level });
+                else notifyNativeSaved(ctx, config.level);
             } catch (error) {
-                ctx.ui.notify(`保存 Fast 配置失败: ${error}`, 'error');
+                if (goUI) emitFrontendEvent(ctx, 'codex.settings-error', { message: error instanceof Error ? error.message : String(error) });
+                else notifyNativeError(ctx, error);
             }
         },
     });

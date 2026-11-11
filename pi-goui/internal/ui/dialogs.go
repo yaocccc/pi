@@ -111,6 +111,9 @@ func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 		return d.editor.Update("", k)
 	}
 	if match("tui.select.cancel") {
+		if d.workerSettings != nil {
+			return m.cancelWorkerSettings(t, d)
+		}
 		m.restoreTheme(d)
 		t.dialogs = t.dialogs[1:]
 		return tea.Batch(respond(t, d, map[string]any{"cancelled": true}), m.focus(t))
@@ -221,6 +224,9 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 		value = selected.Value
 	} else if d.kind != "input" && d.kind != "editor" && d.kind != "name" && d.kind != "session-rename" && d.kind != "cwd" {
 		return nil
+	}
+	if d.workerSettings != nil {
+		return m.submitWorkerSettings(t, d, value)
 	}
 	if d.kind == "session-rename" || d.kind == "session-delete" {
 		return m.beginSessionAction(t, d, value)
@@ -358,7 +364,9 @@ func (m *Model) extension(t *tab, raw json.RawMessage) tea.Cmd {
 	}
 	switch e.Method {
 	case "notify":
-		t.notify(e.Message)
+		if !t.extensionEvent(e.Message) {
+			t.notify(e.Message)
+		}
 	case "setStatus":
 		if e.StatusText == "" {
 			delete(t.statuses, e.StatusKey)
@@ -410,6 +418,18 @@ func (m *Model) extension(t *tab, raw json.RawMessage) tea.Cmd {
 			d.editor.Area.Placeholder = e.Placeholder
 		} else {
 			d.editor.Area.Placeholder = "请输入你的答案"
+		}
+		if e.Method == "input" && e.Title == "pi-goui:worker-settings:v1" {
+			if !m.openWorkerSettings(d, e.Placeholder) {
+				t.notify("无法打开 Worker 设置：无效数据")
+				return respond(t, d, map[string]any{"cancelled": true})
+			}
+		}
+		if e.Method == "input" && e.Title == "pi-goui:codex-fast:v1" {
+			if !m.openCodexFastSettings(d, e.Placeholder) {
+				t.notify("无法打开 Codex 设置：无效数据")
+				return respond(t, d, map[string]any{"cancelled": true})
+			}
 		}
 		t.dialogs = append(t.dialogs, d)
 		if t == m.current() {

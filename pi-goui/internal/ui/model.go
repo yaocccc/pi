@@ -66,6 +66,7 @@ type dialog struct {
 	themeBefore                      *config.Theme
 	cwd                              *cwdCompletion
 	questionnaire                    *questionnaire
+	workerSettings                   *workerSettingsDialog
 	hideCurrent                      bool
 	action                           *sessionAction
 	kind, title, message, requestID  string

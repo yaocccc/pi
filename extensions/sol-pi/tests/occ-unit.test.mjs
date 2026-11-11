@@ -36,7 +36,7 @@ function harness({ summaryResult = () => fauxAssistantMessage("Checkpoint"), ...
   const ctx = {
     sessionManager: { getSessionFile: () => "persistent-test.jsonl", getSessionId: () => manager.getSessionId(), getBranch: () => manager.getBranch(), getLeafId: () => manager.getLeafId() },
     get model() { return model; }, signal: parent.signal, getSystemPrompt: () => "test", thinkingLevel: "off",
-    hasUI: true, ui: { notify: (...args) => notices.push(args) },
+    mode: "tui", hasUI: true, ui: { notify: (...args) => notices.push(args) },
     modelRegistry: { streamSimple(_model, _context, options) {
       nestedSignal = options.signal;
       requests.push({ model: _model, options });

@@ -14,6 +14,32 @@ import (
 
 var codexFastLevels = []string{"normal", "fast", "ultrafast"}
 
+// The extension transports only the current value; labels and selection live here.
+// Confirmation returns the level to the extension, which validates and saves it.
+func (m *Model) openCodexFastSettings(d *dialog, payload string) bool {
+	var request struct {
+		Level string `json:"level"`
+	}
+	if json.Unmarshal([]byte(payload), &request) != nil || (request.Level != "normal" && request.Level != "fast" && request.Level != "ultrafast") {
+		return false
+	}
+	d.kind = "select"
+	d.title = "Codex 档位 · 当前 " + request.Level
+	d.message = "回车选择并保存 · Esc 退出"
+	d.editor.SetValue("")
+	d.editor.Area.Placeholder = "搜索档位"
+	d.options = nil
+	for _, level := range codexFastLevels {
+		label := level
+		if level == request.Level {
+			label += " · 当前"
+		}
+		d.options = append(d.options, option{Label: label, Value: level})
+	}
+	m.resizeDialog(d)
+	return true
+}
+
 func (m *Model) codexFastMode() string {
 	if m.codexFastLabel == "fast" || m.codexFastLabel == "ultrafast" {
 		return m.codexFastLabel

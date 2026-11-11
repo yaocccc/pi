@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadAutonameConfig } from "./config.ts";
+import { notifyFrontendEvent } from "../shared/frontend.ts";
 import {
     AUTONAME_ENTRY_TYPE,
     extractNamingMessages,
@@ -39,12 +40,6 @@ const logFailure = (message: string, error?: unknown): void => {
     const detail = error instanceof Error ? `: ${error.message}` : "";
     console.warn(`[autoname] ${message}${detail}`);
 };
-
-const formatCompactTokens = (tokens: number): string => tokens >= 1_000_000
-    ? `${(tokens / 1_000_000).toFixed(1)}m`
-    : tokens >= 1_000
-        ? `${(tokens / 1_000).toFixed(1)}k`
-        : Math.round(tokens).toString();
 
 const extractNamingContext = (branch: readonly unknown[], currentName: string | undefined, cooldownSeconds: number) => {
     const messages = extractNamingMessages(branch);
@@ -140,10 +135,7 @@ export default function autoname(pi: ExtensionAPI): void {
             pi.setSessionName(proposed.name);
             pi.appendEntry(AUTONAME_ENTRY_TYPE, { version: 1, kind: "set-name", name: proposed.name });
             if (config.notify) {
-                ctx.ui.notify(
-                    `会话已自动命名：${proposed.name} [${formatCompactTokens(proposed.contextTokens)} ${(proposed.durationMs / 1_000).toFixed(1)}s]`,
-                    "info",
-                );
+                notifyFrontendEvent(ctx, { name: "autoname.renamed", data: proposed });
             }
         } catch (error) {
             if (!controller.signal.aborted) logFailure("naming request failed", error);

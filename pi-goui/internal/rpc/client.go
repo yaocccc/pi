@@ -130,14 +130,14 @@ func Start(cfg Config) (*Client, error) {
 
 // Runtime-local terminal/session markers must not make a child attach to its parent.
 func childEnvironment(agentDir string) []string {
-	env := []string{"PI_GOUI_ASK_QUESTION=1"}
+	env := []string{"PI_GOUI_PROTOCOL=1", "PI_GOUI_ASK_QUESTION=1"}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		if strings.HasPrefix(key, "PI_WORKBENCH_") || strings.HasPrefix(key, "PI_SURFACE_") || strings.HasPrefix(key, "CMUX_") || strings.HasPrefix(key, "HERDR_") || strings.HasPrefix(key, "KITTY_") || strings.HasPrefix(key, "WEZTERM_") {
 			continue
 		}
 		switch key {
-		case "TMUX", "TMUX_PANE", "STY", "WINDOWID", "PI_SESSION_ID", "PI_SESSION_FILE", "PI_GOUI_ASK_QUESTION":
+		case "TMUX", "TMUX_PANE", "STY", "WINDOWID", "PI_SESSION_ID", "PI_SESSION_FILE", "PI_GOUI_ASK_QUESTION", "PI_GOUI_PROTOCOL":
 			continue
 		case "PI_CODING_AGENT_DIR":
 			if agentDir != "" {

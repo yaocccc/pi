@@ -223,3 +223,64 @@ test('new level precedence, strict legacy booleans, malformed values, and missin
         });
     }
 });
+
+for (const answer of [undefined, 'fast', 'invalid']) {
+    test(`Go settings protocol: ${answer ?? 'cancel'}`, async (t) => {
+        const fixture = await setup(t, { level: 'normal' });
+        const previous = process.env.PI_GOUI_PROTOCOL;
+        process.env.PI_GOUI_PROTOCOL = '1';
+        t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
+        const events: any[] = [];
+        const counts = trackSaves(t, fixture.file);
+        await fixture.commands.get('codex-fast').handler('', {
+            mode: 'rpc', hasUI: true,
+            ui: {
+                select: () => assert.fail('Go owns the settings menu'),
+                input: async (title: string, payload: string) => {
+                    assert.equal(title, 'pi-goui:codex-fast:v1');
+                    assert.deepEqual(JSON.parse(payload), { level: 'normal' });
+                    assert.deepEqual(counts, { writes: 0, renames: 0 });
+                    return answer;
+                },
+                notify: (message: string) => {
+                    assert.ok(message.startsWith('pi-goui:event:v1:'));
+                    events.push(JSON.parse(message.slice('pi-goui:event:v1:'.length)));
+                },
+            },
+        });
+        assert.deepEqual(fixture.saved(), { level: answer === 'fast' ? 'fast' : 'normal' });
+        assert.deepEqual(counts, answer === 'fast' ? { writes: 1, renames: 1 } : { writes: 0, renames: 0 });
+        assert.deepEqual(events, answer === undefined ? [] : answer === 'fast'
+            ? [{ name: 'codex.settings-saved', data: { level: 'fast' } }]
+            : [{ name: 'codex.settings-error', data: { code: 'invalid-level', message: 'invalid' } }]);
+    });
+}
+
+test('native mode does not select Go protocol even with capability environment', async (t) => {
+    const fixture = await setup(t, { level: 'normal' });
+    const previous = process.env.PI_GOUI_PROTOCOL;
+    process.env.PI_GOUI_PROTOCOL = '1';
+    t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
+    await fixture.commands.get('codex-fast').handler('', {
+        mode: 'tui', hasUI: true,
+        ui: { select: async (_title: string, options: string[]) => options[1], input: () => assert.fail('native must not use Go protocol'), notify: () => {} },
+    });
+    assert.deepEqual(fixture.saved(), { level: 'fast' });
+});
+
+test('Go save failure emits data error and retains persisted configuration', async (t) => {
+    const fixture = await setup(t, { level: 'normal' });
+    const previous = process.env.PI_GOUI_PROTOCOL;
+    process.env.PI_GOUI_PROTOCOL = '1';
+    t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
+    mkdirSync(`${fixture.file}.${process.pid}.tmp`);
+    const events: any[] = [];
+    await fixture.commands.get('codex-fast').handler('', {
+        mode: 'rpc', hasUI: true,
+        ui: { input: async () => 'fast', notify: (message: string) => events.push(JSON.parse(message.slice('pi-goui:event:v1:'.length))) },
+    });
+    assert.deepEqual(fixture.saved(), { level: 'normal' });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].name, 'codex.settings-error');
+    assert.match(events[0].data.message, /EISDIR/);
+});

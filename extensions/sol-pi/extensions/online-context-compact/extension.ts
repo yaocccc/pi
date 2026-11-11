@@ -4,6 +4,7 @@
  * Pi 1.0.4 background generation and boundary-draft lifecycle adapter. No abort/settled-message continuation.
  */
 import { createHash } from "node:crypto";
+import { notifyFrontendEvent } from "../../../shared/frontend.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
@@ -96,9 +97,6 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 		let controller: AbortController | undefined;
 		let takeReady: ((ctx: ExtensionContext, entries: SessionBoundaryDraft[]) => BoundaryResult | undefined) | undefined;
 		let submittedSummary: { summary: string; leafId: string | null; startedAt: number; generationMs: number } | undefined;
-		const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" = "info"): void => {
-			if (ctx.hasUI) ctx.ui.notify(message, level);
-		};
 		const notifyApplied = (ctx: ExtensionContext): void => {
 			if (!submittedSummary) return;
 			const branch = ctx.sessionManager.getBranch();
@@ -116,9 +114,10 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				// Use one content estimator on both sides; provider usage can be stale after compaction.
 				const estimate = (entries: typeof branch) => buildSessionProjection(entries).messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 				const before = estimate(branch.slice(0, index)), after = estimate(branch.slice(0, end));
-				const delta = before - after;
-				const change = delta === 0 ? "不变" : `${delta > 0 ? "减少" : "增加"} ${Math.abs(delta).toLocaleString("en-US")}${before > 0 ? `，${(Math.abs(delta) / before * 100).toFixed(1)}%` : ""}`;
-				notify(ctx, `上下文已压缩：约 ${before.toLocaleString("en-US")} → ${after.toLocaleString("en-US")} tokens（${change}）；生成 ${(submittedSummary.generationMs / 1000).toFixed(1)}s，总耗时 ${((performance.now() - submittedSummary.startedAt) / 1000).toFixed(1)}s（含等待安全边界）。新增消息已保留。`);
+				notifyFrontendEvent(ctx, { name: "context.applied", data: {
+					beforeTokens: before, afterTokens: after, generationMs: submittedSummary.generationMs,
+					durationMs: performance.now() - submittedSummary.startedAt,
+				} });
 			}
 			submittedSummary = undefined;
 		};
@@ -416,10 +415,10 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 							continue: remaining.length > 0,
 						};
 					};
-					notify(ctx, `上下文摘要已就绪，生成耗时 ${(generationMs / 1000).toFixed(1)}s；将在下一个安全边界应用。`);
+					notifyFrontendEvent(ctx, { name: "context.ready", data: { generationMs } });
 				} catch (error) {
 					// Optional optimization: no ghost turn and no notification for obsolete jobs.
-					if (valid()) notify(ctx, `后台上下文压缩未完成（耗时 ${((performance.now() - startedAt) / 1000).toFixed(1)}s），当前对话不受影响。原因：${summaryFailureReason(error)}`, "warning");
+					if (valid()) notifyFrontendEvent(ctx, { name: "context.failed", data: { durationMs: performance.now() - startedAt, reason: summaryFailureReason(error) } });
 				} finally {
 					if (controller === local && !takeReady) controller = undefined;
 				}

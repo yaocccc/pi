@@ -43,7 +43,7 @@ func TestRPCChild(t *testing.T) {
 				emit(map[string]any{"id": c["id"], "type": "response", "command": "failure", "success": false, "error": "expected failure"})
 				return
 			case "env":
-				c["value"] = map[string]string{"agentDir": os.Getenv("PI_CODING_AGENT_DIR"), "session": os.Getenv("PI_SESSION_ID"), "kitty": os.Getenv("KITTY_WINDOW_ID"), "config": os.Getenv("GOUI_KEEP")}
+				c["value"] = map[string]string{"agentDir": os.Getenv("PI_CODING_AGENT_DIR"), "session": os.Getenv("PI_SESSION_ID"), "kitty": os.Getenv("KITTY_WINDOW_ID"), "config": os.Getenv("GOUI_KEEP"), "protocol": os.Getenv("PI_GOUI_PROTOCOL")}
 			}
 			emit(map[string]any{"type": "response", "id": c["id"], "success": true, "data": map[string]any{"value": c["value"]}})
 			if os.Getenv("GOUI_RPC_TEST_CHILD") == "once" {
@@ -118,6 +118,7 @@ func TestEnvironmentIsolation(t *testing.T) {
 	t.Setenv("PI_SESSION_ID", "parent")
 	t.Setenv("KITTY_WINDOW_ID", "parent-pane")
 	t.Setenv("GOUI_KEEP", "preserved")
+	t.Setenv("PI_GOUI_PROTOCOL", "stale")
 	c := testClient(t, "normal")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -127,7 +128,7 @@ func TestEnvironmentIsolation(t *testing.T) {
 	}
 	var v struct{ Value map[string]string }
 	json.Unmarshal(raw, &v)
-	if v.Value["session"] != "" || v.Value["kitty"] != "" || v.Value["config"] != "preserved" || v.Value["agentDir"] == "" {
+	if v.Value["session"] != "" || v.Value["kitty"] != "" || v.Value["config"] != "preserved" || v.Value["agentDir"] == "" || v.Value["protocol"] != "1" {
 		t.Fatalf("environment: %s", raw)
 	}
 }

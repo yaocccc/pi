@@ -164,3 +164,43 @@ func TestCodexFastPopupSelection(t *testing.T) {
 		t.Fatal("popup visible behind modal")
 	}
 }
+
+func TestCodexSettingsRequestUsesLocalMenuAndBackendSave(t *testing.T) {
+	m := testModel(t, "")
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 35})
+	tab := m.current()
+	client, wire := fakeClient(t)
+	tab.client = client
+	raw := json.RawMessage(`{"type":"extension_ui_request","id":"codex-1","method":"input","title":"pi-goui:codex-fast:v1","placeholder":"{\"level\":\"normal\"}"}`)
+	m.extension(tab, raw)
+	if len(tab.dialogs) != 1 {
+		t.Fatal("missing settings dialog")
+	}
+	d := tab.dialogs[0]
+	if d.kind != "select" || !strings.Contains(d.title, "Codex 档位") || len(d.options) != 3 {
+		t.Fatal("Go menu not initialized")
+	}
+	d.selected = 1
+	commandResult(m.confirmDialog(tab, d))
+	records := wireRecords(t, wire, 1)
+	if records[0]["id"] != "codex-1" || records[0]["value"] != "fast" {
+		t.Fatal("incorrect settings response")
+	}
+	if _, err := os.Stat(filepath.Join(m.cfg.AgentDir, "codex-fast.json")); !os.IsNotExist(err) {
+		t.Fatal("RPC dialog must leave persistence to backend")
+	}
+}
+
+func TestCodexSettingsCancellationAndMalformedPayload(t *testing.T) {
+	m := testModel(t, "")
+	tab := m.current()
+	m.extension(tab, json.RawMessage(`{"method":"input","title":"pi-goui:codex-fast:v1","placeholder":"{\"level\":\"fast\"}"}`))
+	m.dialogKey(tab, tea.KeyPressMsg{Code: tea.KeyEsc}, "esc")
+	if len(tab.dialogs) != 0 {
+		t.Fatal("cancel kept settings open")
+	}
+	m.extension(tab, json.RawMessage(`{"method":"input","title":"pi-goui:codex-fast:v1","placeholder":"{\"level\":\"invalid\"}"}`))
+	if len(tab.dialogs) != 0 {
+		t.Fatal("invalid protocol became editable raw JSON")
+	}
+}

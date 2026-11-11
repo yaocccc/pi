@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { notifyFrontendEvent } from '../shared/frontend.ts';
 
 type SensitivePattern = {
     pattern: RegExp;
@@ -94,7 +95,7 @@ export default (pi: ExtensionAPI) => {
             }
             for (const pattern of sensitiveFiles) {
                 if (pattern.test(filePath)) {
-                    if (ctx.hasUI) ctx.ui.notify(`Redacted contents of sensitive file: ${filePath}`, 'info');
+                    notifyFrontendEvent(ctx, { name: 'filter.redacted', data: { path: filePath } });
                     return {
                         content: [{ type: 'text', text: `[Contents of ${filePath} redacted for security]` }],
                     };
