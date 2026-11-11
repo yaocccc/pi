@@ -1,13 +1,6 @@
-import { estimateTokens, type Theme } from '@earendil-works/pi-coding-agent';
-
-type ToolResult = Pick<Extract<Parameters<typeof estimateTokens>[0], { role: 'toolResult' }>, 'content'> & { isError?: boolean };
-
-// Historical payload size, not live retained context or provider billing usage.
-export const estimateToolTokens = (args: unknown, result: ToolResult): number =>
-    Math.ceil((JSON.stringify(args ?? {})?.length ?? 0) / 4) + estimateTokens({
-        role: 'toolResult', toolCallId: '', toolName: '', content: result.content,
-        isError: result.isError ?? false, timestamp: 0,
-    });
+/** Native Pi token labels and colors; accounting lives in token-estimate.ts. */
+import type { Theme } from "@earendil-works/pi-coding-agent";
+export { estimateToolTokens } from "./token-estimate.ts";
 
 // Reset only foreground so the enclosing tool/card background remains intact.
 export const colorToolTokens = (tokens: number, text: string, theme: Pick<Theme, 'fg'>): string =>
