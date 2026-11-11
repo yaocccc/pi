@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { PRESETS, THINKING_LEVELS, atomicWriteJson, supportedThinking, validateConfig } from "./config.ts";
+import { PRESETS, THINKING_LEVELS, supportedThinking, validateConfig } from "./config.ts";
+import { saveWorkerSettings } from "./settings.ts";
 import type { WorkerPreset, RoutingConfig } from "./types";
 
 type MenuKey = WorkerPreset | "maxConcurrentWorkers" | "defaultTimeoutMs" | "maxOutputBytes" | "save" | "cancel";
@@ -135,8 +136,7 @@ export const configureWorkerSettings = async (
 				ctx.ui.notify(modelError, "warning");
 				continue;
 			}
-			atomicWriteJson(configPath, validated);
-			return validated;
+			return saveWorkerSettings(ctx, validated, configPath);
 		}
 		if (key && PRESETS.includes(key as WorkerPreset)) {
 			await configurePreset(ctx, draft, key as WorkerPreset);

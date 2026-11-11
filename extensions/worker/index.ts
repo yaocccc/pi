@@ -1,7 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
 import { MODES, PRESETS, SESSION_MODES, loadRoutingConfig, validateTask } from "./config.ts";
@@ -10,11 +9,15 @@ import { registerWorkerWriteGuard } from "./guard.ts";
 import { captureWorkerSession, type WorkerSessionSnapshot } from "./session.ts";
 import { beginWorkerShutdown, createWorkerOwner, executeTask } from "./process.ts";
 import { workerTaskScopesConflict } from "./security.ts";
-import { configureWorkerSettings } from "./settings-ui.ts";
+import { configureWorkerSettings } from "./settings.ts";
+import { isGoUI, notifyFrontendEvent } from "../shared/frontend.ts";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
-import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, renderWorkerDetails, sanitizeStructuredValue, serializePayload } from "./ui.ts";
+import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, sanitizeStructuredValue, serializePayload } from "./data.ts";
 import { WorkerRuntime, type Batch } from "./runtime.ts";
-import { present, emptyWorkerComponent, workerBranchSnapshots, WORKER_SNAPSHOT_ENTRY, WorkerRenderRefresh } from "./presentation.ts";
+import { present } from "./callbacks.ts";
+import { workerBranchSnapshots, WORKER_SNAPSHOT_ENTRY } from "./history.ts";
+import { WorkerRenderRefresh } from "./presentation.ts";
+import { nativeWorkerRenderers } from "./native-ui.ts";
 
 export const TOOL_DESCRIPTION = `Autonomously delegate bounded, verifiable tasks: fast for clear local work, normal for ordinary work, deep for difficult work. Every task requires explicit preset and sessionMode. Read worker-orchestration for non-trivial delegation. Choose each task's sessionMode yourself: prefer fork; use new only when little context handoff is needed; do not ask the user. Workers cannot delegate. Handle failures without automatic retries; verify diffs and acceptance evidence yourself.
 ONE unfinished batch per session; parallel tasks go in ONE tasks array. Start: tasks array, even for one task. Continue: {batchId}. Cancel: {batchId,cancel:true}. Do not mix modes. A second start returns activeBatchId; finish or cancel it first.
@@ -152,10 +155,10 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 			try {
 				const loaded = services.loadRoutingConfig();
 				const updated = await configureWorkerSettings(ctx, loaded.config, loaded.path);
-				if (updated) ctx.ui.notify("Worker 设置已保存，后续任务立即生效", "info");
+				if (updated && !isGoUI(ctx)) notifyFrontendEvent(ctx, { name: "worker.settings-saved", data: {} });
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(`Worker 设置保存失败：${message}`, "error");
+				notifyFrontendEvent(ctx, { name: "worker.settings-error", data: { message } });
 			}
 		},
 	});
@@ -164,7 +167,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 		label: "Worker",
 		description: TOOL_DESCRIPTION,
 		parameters: InputSchema,
-		renderShell: "self",
+		...nativeWorkerRenderers(() => session),
 		async execute(toolCallId, input: WorkerToolInput, signal, onUpdate, ctx) {
 			const invocationSession = session;
 			const fail = (error: unknown): never => {
@@ -271,27 +274,6 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 				// Runtime detaches the invocation's signal on return; the session owns background work.
 				toolActive = false;
 			}
-		},
-		renderCall(args, theme) {
-			// Empty partial args and ALL continuations have no title, shell, padding or spinner.
-			if (!Array.isArray(args.tasks)) return emptyWorkerComponent();
-			const count = args.tasks.length;
-			const title = count > 1 ? `Workers ×${count}` : "Worker";
-			return new Text(theme.fg("toolTitle", theme.bold(title)), 0, 0);
-		},
-		renderResult(result, options, theme, context) {
-			const details = result.details as WorkerUiDetails | undefined;
-			const batchId = details?.batchId ?? context?.args?.batchId;
-			const known = batchId ? session.runtime.batches.get(batchId)?.ui ?? session.history.get(batchId) : undefined;
-			const origin = known?.originToolCallId ?? details?.originToolCallId;
-			if (context?.toolCallId && origin && context.toolCallId !== origin && known &&
-				(details?.kind === "worker-ui" || known.controlErrors?.some((error) => error.toolCallId === context.toolCallId))) return emptyWorkerComponent();
-			if (details?.kind === "worker-ui" && details.tasks.length) {
-				const view = session.refresh.resolve(details, context);
-				return renderWorkerDetails(view.details, theme, { expanded: options.expanded, snapshot: view.snapshot });
-			}
-			const text = result.content.find((item) => item.type === "text");
-			return new Text(text?.type === "text" ? text.text : "Worker 无输出", 0, 0);
 		},
 	});
 }

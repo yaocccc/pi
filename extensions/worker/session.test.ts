@@ -12,7 +12,8 @@ import { acquireSlot, baseExecution, createWorkerOwner, runPiWorker } from "./pr
 import { buildTaskPrompt } from "./prompt.ts";
 import { captureWorkerSession, workerSessionArgs, type WorkerSessionSnapshot } from "./session.ts";
 import type { Route, WorkerTask } from "./types.ts";
-import { compactWorkerResult, emptyWorkerUsage, renderWorkerDetails } from "./ui.ts";
+import { compactWorkerResult, emptyWorkerUsage } from "./data.ts";
+import { renderWorkerDetails } from "./ui.ts";
 
 const task: WorkerTask = { mode: "scout", preset: "normal", sessionMode: "fork", objective: "fixture" };
 const route: Route = { requestedPreset: "normal", resolvedPreset: "normal", modelId: "fixture/local", provider: "fixture", thinking: "high", routeReason: [] };

@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { WorkerRuntime, Batch } from "../runtime.ts";
-import { emptyWorkerUsage } from "../ui.ts";
+import { emptyWorkerUsage } from "../data.ts";
 import type { WorkerTask } from "../types.ts";
 
 export const task = (path: string): WorkerTask => ({ mode: "implement", preset: "normal", sessionMode: "fork", objective: path, allowedPaths: [path] });

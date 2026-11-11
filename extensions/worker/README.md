@@ -60,7 +60,7 @@ Routes are explicitly selected as `fast/normal/deep`; no keyword or file-count i
 
 ## Progress and history
 
-`presentation.ts` owns history snapshots, refresh registrations and best-effort UI callbacks; `ui.ts` handles rendering and result formatting. Their unit tests stay separate from `background-ui.test.ts`, which exercises real Pi tool-card integration.
+`data.ts` owns frontend-neutral sanitization, bounded result/activity data and usage accounting; `history.ts` restores active-branch snapshots, and `callbacks.ts` isolates best-effort telemetry callbacks. Process/runtime code does not depend on rendering. `native-ui.ts` adapts tool callbacks to native Pi, `ui.ts` formats native cards, and `presentation.ts` owns native row refresh registrations. The latter two retain compatibility re-exports; backend code imports the data modules directly. RPC/Go consumes the same `worker-ui` details and renders independently; refresh timers start only when native tool rows render, so RPC work does not create clocks. Initial native history rendering remains supported before `session_start`. Their unit tests stay separate from `background-ui.test.ts`, which exercises real Pi tool-card integration.
 
 The original tool card shows progress, recent tools/thinking, usage, duration and conclusions. Continue/cancel cards render zero lines; valid batch control errors appear on the original card and remain real model-facing errors. Unknown-batch errors remain visible separately. Rendering exceptions cannot strand work.
 

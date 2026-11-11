@@ -3,7 +3,8 @@ import test from "node:test";
 import { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkerUiActivity, WorkerUiDetails } from "./types.ts";
-import { compactWorkerResult, serializePayload, createThinkingActivityRecorder, renderWorkerDetails, sanitizeStructuredValue, uiActivityLine, workerUsageText } from "./ui.ts";
+import { compactWorkerResult, serializePayload, createThinkingActivityRecorder, sanitizeStructuredValue } from "./data.ts";
+import { renderWorkerDetails, uiActivityLine, workerUsageText } from "./ui.ts";
 
 test("worker usage groups input and output without a dot separator", () => {
 	assert.equal(

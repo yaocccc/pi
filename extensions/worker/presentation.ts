@@ -1,47 +1,9 @@
 import type { WorkerUiDetails } from "./types.ts";
 
-/** Best-effort display/telemetry callbacks only; never wrap task execution or process cleanup. */
-export function present(callback: () => unknown): void {
-	try {
-		const result = callback();
-		if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-			void Promise.resolve(result).catch(() => {});
-		}
-	} catch { /* A detached/broken UI must not interrupt lifecycle cleanup. */ }
-}
-
-export const WORKER_SNAPSHOT_ENTRY = "worker-snapshot-v1";
-
-/** Only feed getBranch(), never getEntries(): abandoned branches are not history. */
-export function workerBranchSnapshots(branch: readonly any[]): Map<string, WorkerUiDetails> {
-	const starts = new Set<string>();
-	const calls = new Map<string, any>();
-	for (const entry of branch) {
-		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-		for (const part of entry.message.content ?? []) {
-			if (part.type !== "toolCall" || part.name !== "worker") continue;
-			calls.set(part.id, part.arguments);
-			// Legacy task input is recognized only when restoring historical cards.
-			if (part.arguments && !part.arguments.batchId && (part.arguments.task || part.arguments.tasks)) starts.add(part.id);
-		}
-	}
-	const snapshots = new Map<string, WorkerUiDetails>();
-	for (const entry of branch) {
-		const message = entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolName === "worker" ? entry.message : undefined;
-		const details = message?.details ?? (entry.type === "custom" && entry.customType === WORKER_SNAPSHOT_ENTRY ? entry.data : undefined);
-		if (details?.kind !== "worker-ui" || typeof details.batchId !== "string" || !Array.isArray(details.tasks)) continue;
-		const previous = snapshots.get(details.batchId);
-		const origin = details.originToolCallId ?? (starts.has(message?.toolCallId) ? message.toolCallId : previous?.originToolCallId);
-		if (!origin || !starts.has(origin) || (previous && previous.originToolCallId !== origin)) continue;
-		// Results may only update their own start or the exact continuation's batch.
-		if (message && message.toolCallId !== origin && calls.get(message.toolCallId)?.batchId !== details.batchId) continue;
-		if (previous && (details.revision !== undefined && previous.revision !== undefined
-			? details.revision < previous.revision
-			: (details.snapshotAt ?? 0) < (previous.snapshotAt ?? 0))) continue;
-		snapshots.set(details.batchId, { ...details, originToolCallId: origin });
-	}
-	return snapshots;
-}
+/** Native Pi tool-row refresh. Timers start only when a live row is rendered. */
+// Compatibility exports; backend consumers import these UI-independent modules directly.
+export { present } from "./callbacks.ts";
+export { WORKER_SNAPSHOT_ENTRY, workerBranchSnapshots } from "./history.ts";
 
 export const emptyWorkerComponent = () => ({ render: (_width: number): string[] => [], invalidate() {} });
 

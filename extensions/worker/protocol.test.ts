@@ -3,7 +3,7 @@ import test from "node:test";
 import workerExtension, { validateWorkerInput, batchResponse, batchUiSnapshot } from "./index.ts";
 import { WorkerRuntime } from "./runtime.ts";
 import { DEFAULT_OPTIONS } from "./config.ts";
-import { compactWorkerResult } from "./ui.ts";
+import { compactWorkerResult } from "./data.ts";
 import type { executeTask } from "./process.ts";
 import { until, start, task as writeTask } from "./fixtures/helpers.ts";
 

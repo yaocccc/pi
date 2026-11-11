@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { present, workerBranchSnapshots, WORKER_SNAPSHOT_ENTRY, WorkerRenderRefresh, type RenderRefreshContext, type RenderRefreshTimerApi } from "./presentation.ts";
+import { present } from "./callbacks.ts";
+import { workerBranchSnapshots, WORKER_SNAPSHOT_ENTRY } from "./history.ts";
+import { WorkerRenderRefresh, type RenderRefreshContext, type RenderRefreshTimerApi } from "./presentation.ts";
 import type { WorkerUiDetails } from "./types.ts";
 
 test("presentation boundary isolates synchronous throws and rejected async callbacks", async () => {
