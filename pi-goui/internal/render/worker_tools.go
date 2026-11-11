@@ -2,39 +2,87 @@ package render
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"pi-goui/internal/config"
 )
 
-// Worker snapshots retain only a bounded activity history; task usage is not tool usage.
+var workerThinkingHeading = regexp.MustCompile(`\*\*[^*]+\*\*`)
+
+// Native snapshots flatten whitespace, so consecutive bold thinking headings
+// can arrive in one activity. Recover those boundaries before removing markup.
+func workerThinkingSteps(text string) []string {
+	text = Clean(text)
+	headings := workerThinkingHeading.FindAllStringIndex(text, -1)
+	var chunks []string
+	if len(headings) == 0 {
+		chunks = []string{text}
+	} else {
+		chunks = append(chunks, text[:headings[0][0]])
+		for i, heading := range headings {
+			end := len(text)
+			if i+1 < len(headings) {
+				end = headings[i+1][0]
+			}
+			chunks = append(chunks, text[heading[0]:end])
+		}
+	}
+	var steps []string
+	for _, chunk := range chunks {
+		for _, line := range strings.Split(strings.ReplaceAll(chunk, "**", ""), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				steps = append(steps, line)
+			}
+		}
+	}
+	return steps
+}
+
+// Tool totals are supplied by Worker. Thinking counts include only retained
+// snapshot text; discarded historical thinking is never guessed.
 func workerToolRows(card workerCard, theme config.Theme, width int) []string {
-	var tools []map[string]any
+	type step struct {
+		activity map[string]any
+		thinking string
+	}
+	var steps []step
+	tools, thoughts := 0, 0
 	for _, value := range card.activities {
 		activity := workerMap(value)
-		if visualString(activity, "type") != "tool" {
-			continue
+		switch visualString(activity, "type") {
+		case "tool":
+			steps = append(steps, step{activity: activity})
+			tools++
+		case "thinking":
+			for _, text := range workerThinkingSteps(visualString(activity, "detail")) {
+				steps = append(steps, step{thinking: text})
+				thoughts++
+			}
 		}
-		tools = append(tools, activity)
 	}
-	total := max(card.toolCalls, len(tools))
+	total := max(card.toolCalls, tools) + thoughts
 	if total == 0 {
 		return nil
 	}
 	indent := min(2, max(0, width-1))
 	prefix := strings.Repeat(" ", indent)
 	available := max(1, width-indent)
-	header := paint("≡", theme.Muted) + " " + paint(fmt.Sprintf("%d calls", total), theme.Text)
+	header := paint("≡", theme.Muted) + " " + paint("Activity", theme.Text)
 	rows := []string{prefix + fit(header, available)}
 	indent = min(4, max(0, width-1))
 	prefix = strings.Repeat(" ", indent)
 	available = max(1, width-indent)
-	shown := min(3, len(tools))
-	// No fold control: only the most recent three recorded calls are displayed.
+	shown := min(3, len(steps))
 	if hidden := total - shown; hidden > 0 {
-		rows = append(rows, prefix+fit(paint(fmt.Sprintf("… %d 次调用 (已折叠)", hidden), theme.Muted), available))
+		rows = append(rows, prefix+fit(paint(fmt.Sprintf("… %d items (已折叠)", hidden), theme.Muted), available))
 	}
-	for _, activity := range tools[len(tools)-shown:] {
+	for _, step := range steps[len(steps)-shown:] {
+		if step.thinking != "" {
+			rows = append(rows, prefix+fit(paint("!", theme.Thinking)+" "+paint(oneLine(step.thinking), theme.Muted), available))
+			continue
+		}
+		activity := step.activity
 		icon, color := workerStatus(visualString(activity, "status"), theme)
 		text := paint(icon, color) + " " + paint(oneLine(workerFirst(visualString(activity, "label"), "tool")), theme.Text)
 		if detail := visualString(activity, "detail"); detail != "" {

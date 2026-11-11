@@ -8,6 +8,54 @@ import (
 	"pi-goui/internal/session"
 )
 
+func TestSidebarModeGeometry(t *testing.T) {
+	for _, mode := range []string{"normal", "fast", "ultrafast"} {
+		ctx := SidebarContext{Mode: mode, Quota: &SidebarQuota{}, History: []string{"recent"}}
+		layout := SidebarGeometry(40, ctx)
+		rows := strings.Split(ansi.Strip(Sidebar(session.State{}, nil, testTheme(), 36, 40, ctx)), "\n")
+		if layout.ModeRow != layout.QuotaRow+3 || !strings.Contains(rows[layout.ModeRow], "Mode") || !strings.Contains(rows[layout.ModeRow], CodexModeLabel(mode)) {
+			t.Fatal("Mode row not aligned")
+		}
+		if layout.QuotaRow != 10 || !strings.Contains(rows[layout.QuotaRow], "Weekly limit") {
+			t.Fatal("Mode must not shift quota geometry")
+		}
+		if !strings.Contains(rows[layout.HistoryRow], "RECENTS") || !strings.Contains(rows[layout.NewRow], "+ New") {
+			t.Fatal("Mode shifted history/action geometry incorrectly")
+		}
+	}
+}
+
+func TestSidebarModeBelowCredits(t *testing.T) {
+	ctx := SidebarContext{Mode: "ultrafast", Quota: &SidebarQuota{}, History: []string{"first", "second", "third", "fourth", "fifth"}}
+	sessions := make([]SessionRow, 30)
+	for i := range sessions {
+		sessions[i] = SessionRow{ID: "1", Name: "Open session", Active: true}
+	}
+	for _, height := range []int{1, 2, 3, 8, 16, 24, 40, 60} {
+		for _, width := range []int{8, 16, 24, 36} {
+			layout := SidebarGeometry(height, ctx)
+			raw := Sidebar(session.State{}, sessions, testTheme(), width, height, ctx)
+			rows := strings.Split(ansi.Strip(raw), "\n")
+			if len(rows) != height {
+				t.Fatalf("height %d: got %d rows", height, len(rows))
+			}
+			checkWidth(t, raw, width)
+			if layout.ModeRow >= 0 && layout.ModeRow < height-1 {
+				if layout.ModeRow != layout.QuotaRow+3 || (width >= 9 && !strings.Contains(rows[layout.ModeRow], "Mode")) {
+					t.Fatalf("missing Mode below Credits at %dx%d", width, height)
+				}
+				if layout.SessionsStart <= layout.ModeRow {
+					t.Fatal("session cards overlap Mode")
+				}
+				value, offset := SidebarModeValue(ctx.Mode, width-4)
+				if value != "" && ansi.Cut(rows[layout.ModeRow], 2+offset, 2+offset+ansi.StringWidth(value)) != value {
+					t.Fatal("mode value geometry differs from rendered row")
+				}
+			}
+		}
+	}
+}
+
 func TestSidebarInformationGeometryAndAlignment(t *testing.T) {
 	tokens, percent := 124200, 12.4
 	state := session.State{Name: "Current session", Cwd: "/work/project", Thinking: "high", Model: session.ModelInfo{ID: "gpt-6-astra", ContextWindow: 1000000}, Stats: session.Stats{Input: 13200000, Output: 123000, Total: 99999999, CacheRead: 96800000, Cost: 12.2, HasCost: true, ContextTokens: &tokens, ContextPercent: &percent}}

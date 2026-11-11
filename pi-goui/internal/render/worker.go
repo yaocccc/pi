@@ -321,7 +321,8 @@ func workerDetailRows(item session.Item, theme config.Theme, _ Options, width in
 		if c.objective != "" {
 			section("◦", theme.Accent, []string{c.objective})
 		}
-		rows = append(rows, workerToolRows(c, theme, width)...)
+		steps := workerToolRows(c, theme, width)
+		rows = append(rows, steps...)
 		var conclusion []string
 		workerResult(map[string]any{"summary": c.result["summary"]}, func(s, _ string) {
 			if s != "结果:" {
@@ -331,12 +332,12 @@ func workerDetailRows(item session.Item, theme config.Theme, _ Options, width in
 		if len(conclusion) > 0 {
 			section("", theme.Text, conclusion)
 		} else {
-			// Preserve ordered explanatory text, never tool operations.
+			// Tool and thinking activities already appear in the steps list.
 			var progress []string
 			for _, value := range c.activities {
 				a := workerMap(value)
 				kind := visualString(a, "type")
-				if kind != "thinking" && kind != "text" && kind != "message" && kind != "phase" {
+				if kind != "text" && kind != "message" && kind != "phase" {
 					continue
 				}
 				text := visualString(a, "detail")
@@ -351,7 +352,7 @@ func workerDetailRows(item session.Item, theme config.Theme, _ Options, width in
 					progress = append(progress, text)
 				}
 			}
-			if len(progress) == 0 && !workerSlotNotice(c.phase) {
+			if len(progress) == 0 && len(steps) == 0 && !workerSlotNotice(c.phase) {
 				switch c.status {
 				case "running", "cancelling":
 					progress = append(progress, workerFirst(c.phase, "正在执行中..."))

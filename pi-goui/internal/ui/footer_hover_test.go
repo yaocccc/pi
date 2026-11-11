@@ -74,6 +74,9 @@ func TestFooterHoverClickSelection(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("option not clickable")
 	}
+	if m.footerHoverKind(tab) != "" {
+		t.Fatal("popup remained open after selection")
+	}
 	reply := commandResult(cmd).(footerReplyMsg)
 	if reply.reply.op != "set_thinking_level" || reply.selected.Value != "low" {
 		t.Fatalf("wrong selection: %+v", reply)

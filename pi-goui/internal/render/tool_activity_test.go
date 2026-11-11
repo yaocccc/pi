@@ -172,7 +172,7 @@ func TestRunningActivityIncludesFullActiveWorker(t *testing.T) {
 	opts := Options{Width: 120, ShowToolActivity: true, Expanded: map[string]bool{"tool-group:old": false}}
 	doc := Transcript(items, testTheme(), opts)
 	plain := ansi.Strip(doc.Text)
-	for _, want := range []string{"╭─ worker ", "Improve worker cards", "Implemented task cards", "Verify widths 中文", "Missing fixture", "≡ 1 calls"} {
+	for _, want := range []string{"╭─ worker ", "Improve worker cards", "Implemented task cards", "Verify widths 中文", "Missing fixture", "≡ Activity"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing Worker detail %q: %s", want, plain)
 		}

@@ -2,22 +2,28 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAgentDir, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
+type FastLevel = 'normal' | 'fast' | 'ultrafast';
 interface FastConfig {
-    fast: boolean;
-    ultrafast: boolean;
+    level: FastLevel;
 }
+const levels: FastLevel[] = ['normal', 'fast', 'ultrafast'];
 
 const configPath = join(getAgentDir(), 'codex-fast.json');
 
-const loadConfig = (): FastConfig => {
+const loadConfig = (fallback: FastConfig = { level: 'normal' }): FastConfig => {
     try {
-        const config = JSON.parse(readFileSync(configPath, 'utf8')) as Partial<FastConfig>;
-        return { fast: config.fast === true, ultrafast: config.ultrafast === true };
+        const config = JSON.parse(readFileSync(configPath, 'utf8'));
+        if (!config || typeof config !== 'object' || Array.isArray(config)) return { level: 'normal' };
+        if (Object.hasOwn(config, 'level')) {
+            return { level: levels.includes(config.level) ? config.level : 'normal' };
+        }
+        return { level: config.ultrafast === true ? 'ultrafast' : config.fast === true ? 'fast' : 'normal' };
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
             console.error(`读取 Fast 配置失败: ${error}`);
+            return fallback;
         }
-        return { fast: false, ultrafast: false };
+        return { level: 'normal' };
     }
 };
 
@@ -31,34 +37,31 @@ export default function (pi: ExtensionAPI) {
     let config = loadConfig();
 
     pi.registerCommand('codex-fast', {
-        description: '设置 Codex Fast / Ultrafast 模式',
+        description: '设置 Codex 档位：normal / fast / ultrafast',
         handler: async (_args, ctx) => {
             if (!ctx.hasUI) {
                 ctx.ui.notify('Codex Fast 设置需要交互式 UI', 'warning');
                 return;
             }
 
-            while (true) {
-                const items = [
-                    { key: 'fast', name: 'Fast', label: `Fast · ${config.fast ? '开启' : '关闭'}` },
-                    { key: 'ultrafast', name: 'Ultrafast', label: `Ultrafast · ${config.ultrafast ? '开启' : '关闭'}（仅 gpt-6-astra）` },
-                ] as const;
-                const selected = await ctx.ui.select(
-                    'Codex Fast 设置 · 回车切换并保存 · Esc 退出',
-                    items.map((item) => item.label),
-                );
-                if (selected === undefined) return;
-                const item = items.find((item) => item.label === selected);
-                if (!item) continue;
-                const nextConfig = { ...config, [item.key]: !config[item.key] };
-
-                try {
-                    saveConfig(nextConfig);
-                    config = nextConfig;
-                    ctx.ui.notify(`${item.name} 模式已${config[item.key] ? '开启' : '关闭'}`, 'info');
-                } catch (error) {
-                    ctx.ui.notify(`保存 Fast 配置失败: ${error}`, 'error');
-                }
+            config = loadConfig(config);
+            const items = levels.map((level) => ({
+                level,
+                label: `${level}${level === config.level ? ' · 当前' : ''}`,
+            }));
+            const selected = await ctx.ui.select(
+                `Codex 档位 · 当前 ${config.level} · 回车选择并保存 · Esc 退出`,
+                items.map((item) => item.label),
+            );
+            const item = items.find((item) => item.label === selected);
+            if (!item) return;
+            const nextConfig: FastConfig = { level: item.level };
+            try {
+                saveConfig(nextConfig);
+                config = nextConfig;
+                ctx.ui.notify(`Codex 档位已设为 ${config.level}`, 'info');
+            } catch (error) {
+                ctx.ui.notify(`保存 Fast 配置失败: ${error}`, 'error');
             }
         },
     });
@@ -75,9 +78,12 @@ export default function (pi: ExtensionAPI) {
             return;
         }
 
-        const serviceTier = config.ultrafast && model.id === 'gpt-6-astra'
+        // GUI and other sessions atomically replace the shared level file.
+        // Reload for each eligible request; transient read failures retain the last level.
+        config = loadConfig(config);
+        const serviceTier = config.level === 'ultrafast' && model.id === 'gpt-6-astra'
             ? 'ultrafast'
-            : config.fast ? 'priority' : undefined;
+            : config.level !== 'normal' ? 'priority' : undefined;
 
         if (!serviceTier) {
             return;

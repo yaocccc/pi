@@ -127,6 +127,9 @@ func (m *Model) clickFooterPopup(t *tab, x, y int) (tea.Cmd, bool) {
 	}
 	cmd := footerCall(t, kind, op, data, true, o)
 	h.setting = cmd != nil
+	if cmd != nil {
+		h.active = ""
+	}
 	return cmd, true
 }
 

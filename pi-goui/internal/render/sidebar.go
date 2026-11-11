@@ -42,6 +42,7 @@ type SidebarQuota struct {
 type SidebarContext struct {
 	Directory      string
 	Git            *GitStatus
+	Mode           string
 	Quota          *SidebarQuota
 	History        []string
 	HistoryHovered []bool
@@ -50,14 +51,23 @@ type SidebarContext struct {
 type SidebarLayout struct {
 	DirectoryRow, ContextRow, StatsRow, QuotaRow, NewRow, SessionsStart, Capacity int
 	HistoryRow, HistoryStart, HistoryCount, HistoryOffset                         int
+	ModeRow                                                                       int
 }
 
 func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 	extra := 0
 	quotaRow := -1
+	modeRow := -1
 	if context.Quota != nil {
-		quotaRow = 10 + extra
+		quotaRow = 10
 		extra += 4
+	}
+	if context.Mode != "" {
+		modeRow = 10 + extra
+		if context.Quota != nil {
+			modeRow-- // Insert directly after Credits, before the separator.
+		}
+		extra++
 	}
 	historyRow := 10 + extra
 	// Keep only complete history entries and room for New session and one open-session card.
@@ -70,7 +80,7 @@ func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 		directoryRow = 3
 	}
 	return SidebarLayout{
-		DirectoryRow: directoryRow, ContextRow: 4, StatsRow: 6, QuotaRow: quotaRow,
+		DirectoryRow: directoryRow, ContextRow: 4, StatsRow: 6, QuotaRow: quotaRow, ModeRow: modeRow,
 		HistoryRow: historyRow, HistoryStart: historyRow + 2, HistoryCount: historyCount,
 		HistoryOffset: min(max(0, context.HistoryOffset), max(0, len(context.History)-historyCount)),
 		NewRow:        newRow, SessionsStart: start,
@@ -159,6 +169,29 @@ func gitRow(g *GitStatus, theme config.Theme, width int) string {
 	}
 	suffix := " · " + status
 	return fit(paint(fit(branch, max(1, width-ansi.StringWidth(suffix))), theme.Muted)+paint(suffix, color), width)
+}
+
+// CodexModeLabel is presentation-only; persisted mode values remain unchanged.
+func CodexModeLabel(mode string) string {
+	switch mode {
+	case "fast":
+		return "fast(x2.5)"
+	case "ultrafast":
+		return "ultrafast(x8)"
+	default:
+		return "normal x1"
+	}
+}
+
+// SidebarModeValue shares the displayed value and its offset within the inner
+// sidebar row with pointer hit testing. The label and separating space are not
+// part of the target, even when the value needs truncation.
+func SidebarModeValue(mode string, inner int) (value string, offset int) {
+	if inner <= 5 {
+		return "", max(0, inner)
+	}
+	value = ansi.Truncate(CodexModeLabel(mode), inner-5, "…")
+	return value, inner - ansi.StringWidth(value)
 }
 
 func sidebarPair(label, value string, width int, theme config.Theme) string {
@@ -266,7 +299,14 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 	if q := ctx.Quota; q != nil {
 		rows = append(rows, cell(sidebarPair("Weekly limit", quotaPercent(q.RemainingPercent), inner, theme)),
 			cell(sidebarPair("Resets in", quotaCountdown(q), inner, theme)),
-			cell(sidebarPair("Credits", quotaCredits(q), inner, theme)), separator())
+			cell(sidebarPair("Credits", quotaCredits(q), inner, theme)))
+	}
+	if ctx.Mode != "" {
+		value, _ := SidebarModeValue(ctx.Mode, inner)
+		rows = append(rows, cell(sidebarPair("Mode", value, inner, theme)))
+	}
+	if ctx.Quota != nil {
+		rows = append(rows, separator())
 	}
 	layout := SidebarGeometry(height, ctx)
 	rows = append(rows, cell(title("RECENTS")), cell(""))
@@ -296,14 +336,15 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 		rows = append(rows, cell(line))
 	}
 	rows = append(rows, cell(""), cell(NewSessionLabel()), cell(""))
-	for _, card := range sidebarSessionCards(sessions, inner, max(0, height-layout.SessionsStart-1)) {
+	contentBottom := max(0, height-1)
+	for _, card := range sidebarSessionCards(sessions, inner, max(0, contentBottom-layout.SessionsStart)) {
 		rows = append(rows, cell(card))
 	}
-	for len(rows) < height-1 {
+	for len(rows) < contentBottom {
 		rows = append(rows, cell(""))
 	}
-	if len(rows) > height-1 {
-		rows = rows[:max(0, height-1)]
+	if len(rows) > contentBottom {
+		rows = rows[:contentBottom]
 	}
 	rows = append(rows, border("└", "┘"))
 	return strings.Join(gradientFrame("sidebar", rows, width, theme), "\n")

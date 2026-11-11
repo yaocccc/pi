@@ -198,6 +198,7 @@ func (m *Model) View() tea.View {
 		main = strings.Join(mainLines, "\n")
 	}
 	main = m.overlaySidebarHistoryTooltip(t, main)
+	main = m.overlayCodexFast(main)
 	view := tea.NewView(main)
 	view.Cursor = m.inputCursor(t)
 	view.AltScreen = true
@@ -255,6 +256,9 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 	}
 	t := m.current()
 	if t == nil {
+		return nil
+	}
+	if m.clickCodexFast(v.X, v.Y) {
 		return nil
 	}
 	if cmd, handled := m.clickFooterPopup(t, v.X, v.Y); handled {

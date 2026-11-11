@@ -10,7 +10,7 @@ import (
 
 func (m *Model) sidebarContext() render.SidebarContext {
 	directory := m.tabDirectory(m.current())
-	context := render.SidebarContext{Directory: directory, Quota: &render.SidebarQuota{Now: time.Now()}}
+	context := render.SidebarContext{Directory: directory, Mode: m.codexFastMode(), Quota: &render.SidebarQuota{Now: time.Now()}}
 	if m.sidebarHistory.cwd == directory {
 		context.HistoryOffset = m.sidebarHistory.offset
 		for _, saved := range m.sidebarHistory.sessions {

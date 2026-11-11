@@ -25,7 +25,7 @@ type Options struct {
 	PiArgs                []string
 }
 type tab struct {
-	footerHover footerHoverState
+	footerHover                                                                    footerHoverState
 	newSession                                                                     bool
 	mutation                                                                       *sessionAction
 	awaitingStart, interruptRequested                                              bool
@@ -104,6 +104,9 @@ type Model struct {
 	imagePreviews                  imagePreviewStore
 	lastEscape, lastClear          time.Time
 	frame                          int
+	codexFastLabel                 string
+	codexFastChecked               time.Time
+	codexFastHover                 bool
 }
 
 // The pool also owns clients created by a tea.Cmd that finishes during shutdown.
@@ -161,6 +164,7 @@ func (p *clientPool) close() error {
 func New(opts Options, cfg config.Config) *Model {
 	m := &Model{opts: opts, cfg: cfg, width: 100, height: 30, pool: &clientPool{clients: map[*rpc.Client]bool{}}}
 	m.quota = codex.New(cfg.AgentDir)
+	m.refreshCodexFast(time.Now())
 	m.updates.reader = newUpdateReader()
 	m.addTab(opts.SessionFile)
 	return m
@@ -641,6 +645,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.mouse(v.Mouse()))
 	case tea.MouseMotionMsg:
 		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
+		m.codexFastHover = m.codexFastPopupVisible()
 		m.mouseMotion(v.Mouse())
 		cmds = append(cmds, m.hoverFooter())
 	case tea.MouseReleaseMsg:
@@ -648,10 +653,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.mouseRelease(v.Mouse()))
 	case tea.MouseWheelMsg:
 		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
+		if m.codexFastPopupVisible() {
+			break
+		}
 		if m.footerHoverKind(m.current()) != "" {
 			delta := 0
-			if v.Button == tea.MouseWheelUp { delta = -1 }
-			if v.Button == tea.MouseWheelDown { delta = 1 }
+			if v.Button == tea.MouseWheelUp {
+				delta = -1
+			}
+			if v.Button == tea.MouseWheelDown {
+				delta = 1
+			}
 			m.scrollFooterPopup(m.current(), delta)
 			break
 		}
@@ -683,6 +695,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tickMsg:
+		m.refreshCodexFast(time.Time(v))
 		m.frame++
 		now := time.Time(v)
 		for _, t := range m.tabs {

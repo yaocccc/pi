@@ -101,18 +101,21 @@ func TestWorkerSlotNoticesHidden(t *testing.T) {
 	}
 }
 
-func TestWorkerToolsPrecedeOrderedExplanations(t *testing.T) {
+func TestWorkerStepsInterleaveToolsAndThinking(t *testing.T) {
 	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"status":"running","mode":"scout","objective":"Inspect source","modelId":"hidden/model","sessionMode":"fork","activities":[{"type":"thinking","label":"思考","detail":"First explanation"},{"type":"tool","status":"running","label":"read","detail":"secret.go"},{"type":"thinking","label":"思考","detail":"Second explanation"},{"type":"phase","label":"等待槽位"},{"type":"phase","label":"已获得槽位"}]}]}`)}
 	opts := Options{Expanded: map[string]bool{workerTaskID(item, 0, 0): false}}
 	rows, blocks := workerDetailRows(item, testTheme(), opts, 100)
 	text := ansi.Strip(strings.Join(rows, "\n"))
-	for _, want := range []string{"Inspect source", "≡ 1 calls", "⋯ read secret.go (运行中…)", "First explanation", "Second explanation"} {
+	for _, want := range []string{"Inspect source", "≡ Activity", "⋯ read secret.go (运行中…)", "First explanation", "Second explanation"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q: %s", want, text)
 		}
 	}
-	if strings.Index(text, "First explanation") > strings.Index(text, "Second explanation") || strings.Index(text, "secret.go") > strings.Index(text, "First explanation") {
+	if strings.Index(text, "First explanation") > strings.Index(text, "secret.go") || strings.Index(text, "secret.go") > strings.Index(text, "Second explanation") {
 		t.Fatal("reordered progress")
+	}
+	if strings.Count(text, "First explanation") != 1 || strings.Count(text, "Second explanation") != 1 || strings.Contains(text, "正在执行中") {
+		t.Fatal("thinking duplicated below steps")
 	}
 	for _, hidden := range []string{"hidden/model", "fork", "等待槽位", "已获得槽位"} {
 		if strings.Contains(text, hidden) {
@@ -197,7 +200,7 @@ func TestWorkerPartialSnapshotAndCompactPreview(t *testing.T) {
 	if first.Text != second.Text {
 		t.Fatal("history snapshot duration drifted")
 	}
-	for _, s := range []string{"scout · fast · 4s", "Cancel was rejected", "Reading source"} {
+	for _, s := range []string{"scout · fast · 4s", "Cancel was rejected", "≡ Activity"} {
 		if !strings.Contains(ansi.Strip(first.Text), s) {
 			t.Fatal(s)
 		}
