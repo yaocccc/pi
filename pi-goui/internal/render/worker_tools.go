@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"pi-goui/internal/config"
 )
 
@@ -72,7 +74,7 @@ func workerToolRows(card workerCard, theme config.Theme, width int) []string {
 	rows := []string{prefix + fit(header, available)}
 	indent = min(4, max(0, width-1))
 	prefix = strings.Repeat(" ", indent)
-	available = max(1, width-indent)
+	available = min(60, max(1, width-indent))
 	shown := min(3, len(steps))
 	if hidden := total - shown; hidden > 0 {
 		rows = append(rows, prefix+fit(paint(fmt.Sprintf("… %d items (已折叠)", hidden), theme.Muted), available))
@@ -88,11 +90,17 @@ func workerToolRows(card workerCard, theme config.Theme, width int) []string {
 		if detail := visualString(activity, "detail"); detail != "" {
 			text += paint(" "+oneLine(detail), theme.Muted)
 		}
+		var status string
 		switch visualString(activity, "status") {
 		case "running":
-			text += paint(" (运行中…)", theme.Warning)
+			status = paint(" (运行中…)", theme.Warning)
 		case "failed":
-			text += paint(" (失败)", theme.Error)
+			status = paint(" (失败)", theme.Error)
+		}
+		if contentWidth := available - ansi.StringWidth(status); contentWidth > 0 {
+			text = fit(text, contentWidth) + status
+		} else {
+			text += status
 		}
 		rows = append(rows, prefix+fit(text, available))
 	}

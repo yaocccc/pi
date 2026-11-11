@@ -67,7 +67,13 @@ func (r *record) project() *recordProjection {
 		switch c.Type {
 		case "toolCall":
 			args := c.Arguments
-			if len(args) == 0 && json.Valid([]byte(c.Data)) {
+			if c.Data != "" && c.Name == "write" {
+				// A start snapshot may contain {} while deltas carry the live
+				// arguments. toolcall_end replaces the block authoritatively.
+				if preview := partialWriteArguments(c.Data); len(preview) > 0 {
+					args = preview
+				}
+			} else if len(args) == 0 && json.Valid([]byte(c.Data)) {
 				args = json.RawMessage(c.Data)
 			}
 			addTool(Item{ID: "tool:" + c.ID, Role: "tool", ToolID: c.ID, ToolName: c.Name, Arguments: args}, true)

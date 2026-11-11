@@ -33,19 +33,18 @@ func toolActivityGroup(items []session.Item, opts Options) string {
 	return ""
 }
 
+func toolActivityDefaultExpanded(item session.Item) bool {
+	switch visualName(item.ToolName) {
+	case "worker", "write", "edit":
+		return true
+	default:
+		return false
+	}
+}
+
 func toolActivityLayout(items []session.Item, theme config.Theme, opts Options, width int) ([]string, []Block) {
-	workerCard := func(item session.Item) bool {
-		return visualName(item.ToolName) == "worker"
-	}
 	start := max(0, len(items)-3)
-	limit := 80
-	for _, item := range items[start:] {
-		if workerCard(item) {
-			limit = width
-			break
-		}
-	}
-	width = max(1, min(width, limit))
+	width = max(1, width)
 	indent := min(2, max(0, width-1))
 	inner := max(1, width-indent)
 	var rows []string
@@ -55,9 +54,9 @@ func toolActivityLayout(items []session.Item, theme config.Theme, opts Options, 
 	}
 	for _, item := range items[start:] {
 		// Share ordinary tool rendering and fold IDs with the full list.
-		// Only recent Workers default open; explicit per-tool folds always win.
+		// Recent workers and file changes default open; explicit folds always win.
 		childOpts := opts
-		childOpts.ExpandTools = workerCard(item)
+		childOpts.ExpandTools = toolActivityDefaultExpanded(item)
 		childRows, childBlocks := toolLayout(item, theme, childOpts, inner)
 		for _, block := range childBlocks {
 			block.Start += len(rows)

@@ -77,6 +77,7 @@ type dialog struct {
 	namedOnly, showPath, reverseSort bool
 }
 type Model struct {
+	pointerShape                   string
 	sidebarHistory                 sidebarHistoryState
 	updates                        updateState
 	sessionActions                 map[string]*sessionAction
@@ -721,7 +722,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if t := m.current(); renderNow && t != nil && t.dirty {
 		m.document(t)
 	}
-	cmds = append(cmds, m.markReleaseNotesDisplayed())
+	cmds = append(cmds, m.markReleaseNotesDisplayed(), m.updatePointer())
 	return m, tea.Batch(cmds...)
 }
 func (m *Model) document(t *tab) {

@@ -81,12 +81,12 @@ func TestSemanticEditNativeAndUnifiedDiff(t *testing.T) {
 		t.Fatalf("hunk text confused with file headers: +%d -%d", added, removed)
 	}
 	patch := visualItem("edit", map[string]any{"path": "a.go"}, map[string]any{"patch": "@@ -1 +1 @@\n-old\n+new"}, "changed")
-	mustContainVisual(t, visualText(patch, 80), "-old", "+new")
+	mustContainVisual(t, visualText(patch, 80), "split", "1 │ old", "1 │ new")
 }
 func TestSemanticMultipleReplacementFallback(t *testing.T) {
 	item := visualItem("edit", map[string]any{"path": "a.ts", "edits": []any{map[string]any{"oldText": "const a = 1;", "newText": "const a = 2;"}, map[string]any{"oldText": "old\nlast", "newText": "new\nlast"}}}, nil, "Done")
 	text := visualText(item, 120)
-	mustContainVisual(t, text, "Replacement preview · not a recorded diff", "-const a = 1;", "+const a = 2;", "-old", "+new")
+	mustContainVisual(t, text, "Replacement preview · not a recorded diff", "│ const a = 1;", "│ const a = 2;", "│ old", "│ new")
 	item.Error = true
 	item.Text = "No unique match"
 	text = visualText(item, 120)
@@ -95,18 +95,18 @@ func TestSemanticMultipleReplacementFallback(t *testing.T) {
 		t.Fatal("failed operation presented as applied")
 	}
 	legacy := visualItem("edit", map[string]any{"path": "a.py", "oldText": "old", "newText": "new"}, nil, "done")
-	mustContainVisual(t, visualText(legacy, 120), "Replacement preview · not a recorded diff", "-old", "+new")
+	mustContainVisual(t, visualText(legacy, 120), "Replacement preview · not a recorded diff", "│ old", "│ new")
 }
 func TestSemanticWriteOutcomeAndContent(t *testing.T) {
 	item := visualItem("write", map[string]any{"path": "file.ts", "content": "const n = 42;\nconsole.log(n);"}, nil, "Successfully wrote to file.ts")
-	mustContainVisual(t, visualText(item, 80), "Write preview · original content unavailable", "+const n = 42;", "+console.log(n);")
+	mustContainVisual(t, visualText(item, 80), "↳ written file.ts", "1 │ const n = 42;", "2 │ console.log(n);")
 	item.Error = true
 	mustContainVisual(t, visualText(item, 80), "Change failed")
 	item.Error = false
 	item.HasResult = false
-	mustContainVisual(t, visualText(item, 80), "Write preview · original content unavailable")
+	mustContainVisual(t, visualText(item, 80), "↳ writing file.ts")
 	item.Running = true
-	mustContainVisual(t, visualText(item, 80), "Write preview · original content unavailable")
+	mustContainVisual(t, visualText(item, 80), "↳ writing file.ts")
 }
 func TestSemanticCommonAndUnknownTools(t *testing.T) {
 	fixtures := []struct {
@@ -206,9 +206,9 @@ func TestSemanticWidthsControlSafetyAndTransparency(t *testing.T) {
 func TestSemanticConcurrentHighlightAndCompleteLargeOutput(t *testing.T) {
 	source := strings.Repeat("const retained = '中文';\n", 12000) + "FINAL_CONTENT_MARKER"
 	item := visualItem("write", map[string]any{"path": "large.ts", "content": source}, nil, "done")
-	text := ansi.Strip(visualText(item, 80))
-	if strings.Count(text, "const retained") != 12000 || !strings.Contains(text, "FINAL_CONTENT_MARKER") {
-		t.Fatal("large saved output was truncated")
+	text := ansi.Strip(strings.Join(toolBody(item, testTheme(), Options{ExpandTools: true}, 80), "\n"))
+	if strings.Count(text, "const retained") != 9 || !strings.Contains(text, "FINAL_CONTENT_MARKER") || !strings.Contains(text, "11991 earlier lines hidden") {
+		t.Fatal("large saved output tail was not rendered correctly")
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

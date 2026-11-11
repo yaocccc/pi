@@ -199,6 +199,9 @@ func toolBody(item session.Item, theme config.Theme, opts Options, width int) []
 		rows, _ := workerLayout(item, theme, opts, width)
 		return rows
 	}
+	if name := visualName(item.ToolName); name == "write" || name == "edit" {
+		width = min(width, changeContentWidth+4) // Preserve the existing frame padding.
+	}
 	expanded := isExpanded(item.ID, opts)
 	out := []string{toolCallHeader(item, expanded, theme, width)}
 	if !expanded {
@@ -355,7 +358,7 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 					if expanded {
 						for position, child := range run {
 							childOpts := opts
-							if _, explicit := opts.Expanded[child.ID]; activity && visualName(child.ToolName) == "worker" && !explicit {
+							if _, explicit := opts.Expanded[child.ID]; activity && toolActivityDefaultExpanded(child) && !explicit {
 								childOpts.Expanded = maps.Clone(opts.Expanded)
 								if childOpts.Expanded == nil {
 									childOpts.Expanded = map[string]bool{}

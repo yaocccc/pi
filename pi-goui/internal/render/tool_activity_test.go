@@ -140,6 +140,61 @@ func TestExpandedLiveGroupOnlyDefaultsRecentWorkersOpen(t *testing.T) {
 	}
 }
 
+func TestToolActivityDefaultsFileChangesOpen(t *testing.T) {
+	for _, name := range []string{"write", "edit"} {
+		for _, groupOpen := range []bool{false, true} {
+			items := []session.Item{
+				{ID: "old", Role: "tool", ToolName: name},
+				{ID: "read", Role: "tool", ToolName: "read"},
+				{ID: "bash", Role: "tool", ToolName: "bash"},
+				{ID: "recent", Role: "tool", ToolName: name, Running: true},
+			}
+			opts := Options{Width: 100, ShowToolActivity: true, Expanded: map[string]bool{"tool-group:old": groupOpen}}
+			doc := Transcript(items, testTheme(), opts)
+			if !blockByID(t, doc, "recent").Expanded {
+				t.Fatalf("%s should default open (group open=%v)", name, groupOpen)
+			}
+			if groupOpen && blockByID(t, doc, "old").Expanded {
+				t.Fatalf("older %s should not default open", name)
+			}
+			if blockByID(t, doc, "read").Expanded || blockByID(t, doc, "bash").Expanded {
+				t.Fatal("unrelated tools should remain collapsed")
+			}
+			opts.Expanded["recent"] = false
+			if blockByID(t, Transcript(items, testTheme(), opts), "recent").Expanded {
+				t.Fatalf("%s ignored manual collapse", name)
+			}
+			delete(opts.Expanded, "recent")
+			opts.ShowToolActivity = false
+			opts.Expanded["tool-group:old"] = true
+			items[3].Running = false
+			if blockByID(t, Transcript(items, testTheme(), opts), "recent").Expanded {
+				t.Fatalf("%s remained auto-expanded after activity ended", name)
+			}
+		}
+	}
+}
+
+func TestToolActivityUsesAvailableWidth(t *testing.T) {
+	for _, name := range []string{"edit", "write", "read"} {
+		item := session.Item{ID: "tool", Role: "tool", ToolName: name, Running: true}
+		for _, width := range []int{1, 20, 80, 120, 180} {
+			opts := Options{ExpandTools: true, Expanded: map[string]bool{item.ID: true}}
+			rows, _ := toolActivityLayout([]session.Item{item}, testTheme(), opts, width)
+			indent := min(2, width-1)
+			want, _ := toolLayout(item, testTheme(), opts, width-indent)
+			if len(rows) != len(want) {
+				t.Fatalf("%s at width %d: different layout height", name, width)
+			}
+			for i := range rows {
+				if rows[i] != strings.Repeat(" ", indent)+want[i] {
+					t.Fatalf("%s at width %d: row %d differs from full-width layout", name, width, i)
+				}
+			}
+		}
+	}
+}
+
 func TestToolActivityOmissionRow(t *testing.T) {
 	for _, count := range []int{1, 3, 4, 10} {
 		items := make([]session.Item, count)

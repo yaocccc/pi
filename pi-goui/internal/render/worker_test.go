@@ -164,7 +164,7 @@ func TestWorkerDetailsAuthoritativeAndTaskFolds(t *testing.T) {
 	opts := Options{Width: 120, Expanded: map[string]bool{"tool-group:" + item.ID: true, item.ID: true}}
 	doc := Transcript([]session.Item{item}, testTheme(), opts)
 	plain := ansi.Strip(doc.Text)
-	for _, want := range []string{"worker · 2 tasks · blocked", "implement · normal · 2 turns", "test · fast", "• Implemented task cards", "Implemented task cards", "Missing fixture", "↑1.2k ↓300", "10s", "2s", "Improve worker cards"} {
+	for _, want := range []string{"worker · 2 tasks · blocked", "implement · normal · 2 turns", "test · fast", "• Implemented task cards", "Implemented task cards", "Missing fixture", "↑1k ↓300", "10s", "2s", "Improve worker cards"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q:\n%s", want, plain)
 		}

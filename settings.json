@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.5.1",
+  "lastChangelogVersion": "1.5.2",
   "editorPaddingX": 1,
   "outputPad": 1,
   "defaultProvider": "openai-codex",
@@ -9,7 +9,7 @@
     "gpt-6-astra",
     "gpt-6.1-sol"
   ],
-  "theme": "pi",
+  "theme": "system",
   "showHardwareCursor": true,
   "transport": "auto",
   "defaultThinkingLevel": "medium",

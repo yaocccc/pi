@@ -175,9 +175,9 @@ func gitRow(g *GitStatus, theme config.Theme, width int) string {
 func CodexModeLabel(mode string) string {
 	switch mode {
 	case "fast":
-		return "fast(x2.5)"
+		return "fast x2.5"
 	case "ultrafast":
-		return "ultrafast(x8)"
+		return "ultrafast x8"
 	default:
 		return "normal x1"
 	}

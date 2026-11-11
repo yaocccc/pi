@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
 	"pi-goui/internal/rpc"
 	"pi-goui/internal/session"
@@ -124,6 +125,7 @@ func run() error {
 	}
 	model := ui.New(opts, cfg)
 	defer model.Close()
+	defer fmt.Fprint(os.Stdout, ansi.SetPointerShape("default"))
 	_, err = tea.NewProgram(model).Run()
 	return err
 }

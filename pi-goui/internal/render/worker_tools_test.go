@@ -90,6 +90,29 @@ func TestWorkerThinkingMergedIntoRecentSteps(t *testing.T) {
 	}
 }
 
+func TestWorkerActivityItemTruncation(t *testing.T) {
+	card := workerCard{activities: []any{
+		map[string]any{"type": "thinking", "detail": strings.Repeat("思考", 100)},
+		map[string]any{"type": "tool", "label": "bash", "detail": strings.Repeat("参数", 100), "status": "running"},
+		map[string]any{"type": "tool", "label": "read", "detail": strings.Repeat("path", 100), "status": "failed"},
+	}}
+	for _, width := range []int{1, 4, 20, 80, 200} {
+		rows := workerToolRows(card, testTheme(), width)
+		checkWidth(t, strings.Join(rows, "\n"), min(width, 64))
+		if width < 20 {
+			continue
+		}
+		for _, row := range rows[1:] {
+			if !strings.Contains(ansi.Strip(row), "…") {
+				t.Fatalf("missing truncation marker: %q", row)
+			}
+		}
+		if !strings.HasSuffix(ansi.Strip(rows[2]), " (运行中…)") || !strings.HasSuffix(ansi.Strip(rows[3]), " (失败)") {
+			t.Fatalf("truncation lost status: %v", rows)
+		}
+	}
+}
+
 func TestWorkerToolsMissingActivities(t *testing.T) {
 	if len(workerToolRows(workerCard{}, testTheme(), 80)) != 0 {
 		t.Fatal("invented tool calls")

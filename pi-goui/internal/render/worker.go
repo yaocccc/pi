@@ -230,7 +230,7 @@ func workerTokens(n float64) string {
 		return fmt.Sprintf("%.1fM", n/1e6)
 	}
 	if n >= 1000 {
-		return fmt.Sprintf("%.1fk", n/1000)
+		return fmt.Sprintf("%.0fk", n/1000)
 	}
 	return fmt.Sprintf("%.0f", n)
 }
