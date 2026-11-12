@@ -136,14 +136,27 @@ function parseOnlineState(value: unknown): OnlineState | undefined {
 	};
 }
 
+/** Restore the latest valid snapshot and native/manual compactions not yet captured by it. */
 export function restoreOnlineState(entries: readonly SessionEntry[]): OnlineState {
+	let state = initialOnlineState();
+	let snapshotIndex = -1;
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index];
 		if (entry?.type !== "custom" || entry.customType !== ONLINE_STATE_ENTRY) continue;
-		const state = parseOnlineState(entry.data);
-		if (state) return state;
+		const snapshot = parseOnlineState(entry.data);
+		if (snapshot) {
+			state = snapshot;
+			snapshotIndex = index;
+			break;
+		}
 	}
-	return initialOnlineState();
+	// Invalid snapshots must not hide compactions, even when the valid state is initial.
+	for (let index = snapshotIndex + 1; index < entries.length; index++) {
+		if (entries[index]?.type === "compaction") {
+			state = recordCompaction(state, { debtTokens: 0, repaymentTokens: 0 });
+		}
+	}
+	return state;
 }
 
 export function appendOnlineState(pi: ExtensionAPI, state: OnlineState): void {

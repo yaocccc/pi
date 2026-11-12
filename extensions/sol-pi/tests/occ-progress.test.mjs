@@ -68,6 +68,58 @@ test("legacy persisted snapshots default missing compaction timestamp to null an
   }
 });
 
+test("restoration distinguishes missing or damaged snapshots from a valid initial snapshot", () => {
+  const initial = initialOnlineState();
+  const compaction = { type: "compaction" };
+  const invalid = entry({ version: 1 });
+  const compacted = recordCompaction(initial, { debtTokens: 0, repaymentTokens: 0 });
+  for (const branch of [[], [invalid], [entry(initial), invalid]]) {
+    assert.deepEqual(restoreOnlineState(branch), initial);
+  }
+  for (const branch of [
+    [compaction],
+    [compaction, invalid],
+    [entry(initial), compaction, invalid],
+    [invalid, compaction, invalid],
+  ]) {
+    const restored = restoreOnlineState(branch);
+    assert.deepEqual(restored, compacted);
+    assert.equal(restored.nativeCompactionCount, 1);
+    assert.equal(restored.lastCompactionRequestCount, 0);
+  }
+  assert.deepEqual(restoreOnlineState([compaction, entry(initial), invalid]), initial,
+    "a valid initial snapshot is an authoritative anchor, not a missing state");
+});
+
+test("restoration replays every compaction after the latest valid snapshot without changing cache debt", () => {
+  const before = { ...history(), cacheDebtTokens: 1000, cacheDebtRepaymentTokens: 100 };
+  const compaction = { type: "compaction" };
+  const invalid = entry({ ...before, requestCount: -1 });
+  const branch = [compaction, entry(before), compaction, invalid,
+    { type: "custom", customType: "unrelated", data: initialOnlineState() }, compaction, invalid];
+  const once = recordCompaction(before, { debtTokens: 0, repaymentTokens: 0 });
+  const twice = recordCompaction(once, { debtTokens: 0, repaymentTokens: 0 });
+  assert.deepEqual(restoreOnlineState(branch), twice);
+  assert.equal(twice.nativeCompactionCount, 2);
+  assert.equal(twice.lastCompactionRequestCount, before.requestCount);
+  assert.equal(twice.cacheDebtTokens, before.cacheDebtTokens);
+  assert.equal(twice.cacheDebtRepaymentTokens, before.cacheDebtRepaymentTokens);
+  assert.deepEqual(restoreOnlineState([...branch, entry(twice)]), twice,
+    "persisting the restored state must not count those compactions again");
+});
+
+test("a later valid snapshot supersedes damaged records and already-accounted compactions", () => {
+  const before = history();
+  const compaction = { type: "compaction" };
+  const after = recordProviderRequest(recordCompaction(before, { debtTokens: 500, repaymentTokens: 50 }), 800);
+  const branch = [entry(before), compaction, entry(null), entry(after), entry({ version: 2 })];
+  assert.deepEqual(restoreOnlineState(branch), after);
+  const restored = restoreOnlineState([...branch, compaction]);
+  assert.deepEqual(restored, recordCompaction(after, { debtTokens: 0, repaymentTokens: 0 }));
+  assert.equal(restored.nativeCompactionCount, 2);
+  assert.equal(restored.lastCompactionRequestCount, 4);
+});
+
 test("completed-plan handoff resets task horizon, retains cumulative debt/cooldown and leaves active/empty plans alone", () => {
   const compacted = recordCompaction(history(), { debtTokens: 10000, repaymentTokens: 100 });
   assert.equal(recordCompletedPlanHandoff(compacted), compacted);

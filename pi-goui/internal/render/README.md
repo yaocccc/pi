@@ -1,5 +1,7 @@
 # Presentation module
 
+`frame/` owns role palettes, theme presets and ANSI-safe border/gradient geometry through `Border`, `Box`, `Gradient` and `Palette`. Both this package and UI components use it directly; it has no dependency on its parent. Frame algorithm tests live there, while transcript/sidebar integration and hit-geometry tests remain here. `tooldetail/` owns complete tool-detail documents. Keep component layout with its geometry rather than introducing forwarding layers just to split files.
+
 `Transcript` renders immutable `[]session.Item`. User messages are narrow right-aligned bubbles titled `你`; consecutive assistant/thinking/tool records share a left bubble titled `Options.AssistantTitle` (fallback `助手`). System/compaction/branch summaries use a `系统` frame containing one clipped synopsis. Full saved text remains in the projection. Adjacent message frames have no extra blank rows; Markdown paragraphs retain their own spacing.
 
 User text and image blocks project into one bubble. Numbered `[imageN]` references are colored blue without underline only when backed by saved `Item.Images`; `Document.ImageLinks` supplies zero-based item/index and terminal row/cell hit ranges. The UI resolves clicks against that session's saved bytes. Cache keys use image count, never base64 data; cached links receive the same section offsets as blocks. Incomplete references wrapped across very narrow rows are deliberately not clickable.

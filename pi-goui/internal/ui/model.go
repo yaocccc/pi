@@ -17,6 +17,7 @@ import (
 	"pi-goui/internal/render"
 	"pi-goui/internal/rpc"
 	"pi-goui/internal/session"
+	"pi-goui/internal/ui/imagepreview"
 )
 
 type Options struct {
@@ -111,7 +112,7 @@ type Model struct {
 	completionHidden               bool
 	search, searching              string
 	clipboardTarget                *tab
-	imagePreviews                  imagePreviewStore
+	imagePreviews                  imagePreviewer
 	lastEscape, lastClear          time.Time
 	frame                          int
 	codexFastLabel                 string
@@ -173,6 +174,7 @@ func (p *clientPool) close() error {
 }
 func New(opts Options, cfg config.Config) *Model {
 	m := &Model{opts: opts, cfg: cfg, width: 100, height: 30, pool: &clientPool{clients: map[*rpc.Client]bool{}}}
+	m.imagePreviews = &imagepreview.Store{}
 	m.quota = codex.New(cfg.AgentDir)
 	m.refreshCodexFast(time.Now())
 	m.updates.reader = newUpdateReader()
@@ -181,7 +183,9 @@ func New(opts Options, cfg config.Config) *Model {
 }
 func (m *Model) Close() error {
 	m.updates.reader.close()
-	m.imagePreviews.Close()
+	if m.imagePreviews != nil {
+		m.imagePreviews.Close()
+	}
 	m.fileReader.close()
 	m.quota.Close()
 	m.git.close()

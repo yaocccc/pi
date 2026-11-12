@@ -50,7 +50,7 @@ export class WorkerTranscriptWriter {
 	constructor(private readonly options: { cwd: string; prompt: string; snapshot?: WorkerSessionSnapshot; root?: string; maxBytes?: number }) {
 		this.descriptor = { version: 1, id: randomUUID() };
 		try {
-			const root = path.join(options.root ?? agentDir(), "worker-transcripts");
+			const root = path.join(options.root ?? path.dirname(agentDir()), "worker-transcripts");
 			fs.mkdirSync(root, { recursive: true, mode: 0o700 });
 			const stat = fs.lstatSync(root);
 			if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe transcript directory");

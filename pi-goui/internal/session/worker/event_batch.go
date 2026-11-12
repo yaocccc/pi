@@ -1,4 +1,4 @@
-package ui
+package worker
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 // of the same content block before projecting State: N tokens otherwise rebuild
 // the entire historical item list N times. Snapshots, starts/ends, tool results
 // and every other event remain ordered barriers. The saved log is not changed.
-func workerEventBatch(records []json.RawMessage) []json.RawMessage {
+func eventBatch(records []json.RawMessage) []json.RawMessage {
 	type delta struct {
 		Type         string `json:"type"`
 		ContentIndex int    `json:"contentIndex"`

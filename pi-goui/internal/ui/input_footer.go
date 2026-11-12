@@ -6,6 +6,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/render"
+	frames "pi-goui/internal/render/frame"
 )
 
 type editorFooter struct {
@@ -101,6 +102,6 @@ func (m *Model) editorFrame(t *tab) string {
 	inside := max(1, width-4)
 	// Keep a dedicated spacer above the footer, independent of editable rows.
 	body := fitBox(render.StyleImageReferences(t.editor.Area.View(), len(t.images)), inside, m.editorContentHeight(t)) + "\n\n" + m.inputFooter(t).text
-	frame := strings.Join(render.FrameBox("input", strings.Split(body, "\n"), width, m.cfg.Theme), "\n")
+	frame := strings.Join(frames.Box("input", strings.Split(body, "\n"), width, m.cfg.Theme), "\n")
 	return fitBox(frame, width, m.editorFrameHeight(t))
 }

@@ -1,4 +1,5 @@
-package render
+// Package frame owns border palettes and transparent, cell-preserving frames.
+package frame
 
 import (
 	"fmt"
@@ -31,9 +32,9 @@ var frameANSI = func() map[string][8]string {
 	return result
 }()
 
-// FrameBorder colors trusted border text with the reference edge palette and
+// Border colors trusted border text with the reference edge palette and
 // resets only foreground. Unknown kinds/edges fall back to neutral tool/top.
-func FrameBorder(kind, edge, text string) string {
+func Border(kind, edge, text string) string {
 	if text == "" {
 		return ""
 	}
@@ -51,18 +52,18 @@ func FrameBorder(kind, edge, text string) string {
 	return colors[index] + text + "\x1b[39m"
 }
 
-// FrameBox makes a square, transparent frame around already-rendered body rows.
+// Box makes a square, transparent frame around already-rendered body rows.
 // Width includes borders and, where space permits, one padding cell per side.
 // It is used by the editor so its text/footer widths and hit positions stay put.
-func FrameBox(kind string, body []string, width int, themes ...config.Theme) []string {
+func Box(kind string, body []string, width int, themes ...config.Theme) []string {
 	if width <= 0 {
 		return nil
 	}
 	border := func(left, right, edge, leftEdge, rightEdge string) string {
 		if width == 1 {
-			return FrameBorder(kind, leftEdge, left)
+			return Border(kind, leftEdge, left)
 		}
-		return FrameBorder(kind, leftEdge, left) + FrameBorder(kind, edge, strings.Repeat("─", width-2)) + FrameBorder(kind, rightEdge, right)
+		return Border(kind, leftEdge, left) + Border(kind, edge, strings.Repeat("─", width-2)) + Border(kind, rightEdge, right)
 	}
 	rows := []string{border("┌", "┐", "top", "topLeft", "topRight")}
 	padding, inside := 0, max(0, width-2)
@@ -72,11 +73,11 @@ func FrameBox(kind string, body []string, width int, themes ...config.Theme) []s
 	}
 	for _, line := range body {
 		if width == 1 {
-			rows = append(rows, FrameBorder(kind, "left", "│"))
+			rows = append(rows, Border(kind, "left", "│"))
 			continue
 		}
 		line = ansi.Truncate(line, inside, "")
-		rows = append(rows, FrameBorder(kind, "left", "│")+strings.Repeat(" ", padding)+line+strings.Repeat(" ", max(0, inside-ansi.StringWidth(line))+padding)+FrameBorder(kind, "right", "│"))
+		rows = append(rows, Border(kind, "left", "│")+strings.Repeat(" ", padding)+line+strings.Repeat(" ", max(0, inside-ansi.StringWidth(line))+padding)+Border(kind, "right", "│"))
 	}
-	return gradientFrame(kind, append(rows, border("└", "┘", "bottom", "bottomLeft", "bottomRight")), width, themes...)
+	return Gradient(kind, append(rows, border("└", "┘", "bottom", "bottomLeft", "bottomRight")), width, themes...)
 }

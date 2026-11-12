@@ -35,11 +35,14 @@ export function validateGoResponse(value: unknown, questions: AskQuestionInput[]
 }
 
 const askRpcQuestion = async (question: AskQuestionInput, ctx: ExtensionContext, signal?: AbortSignal): Promise<AskQuestionResult | null> => {
-    const customLabel = '自己输入…';
+    let customLabel = '自己输入…';
     const options = normalizeOptions(question.options);
     const dialogOptions = signal ? { signal } : undefined;
 
     if (!question.multiSelect) {
+        // RPC select returns display text, so reserve an unambiguous action label
+        // without changing or restricting any caller-provided option.
+        for (let suffix = 2; options.includes(customLabel); suffix++) customLabel = `自己输入…（${suffix}）`;
         const selected = await ctx.ui.select(question.label || question.question, [...options, customLabel], dialogOptions);
         if (!selected) return null;
         if (selected !== customLabel) return { answers: [selected], wasCustom: false };

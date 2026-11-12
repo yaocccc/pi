@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/session"
+	"pi-goui/internal/session/worker"
 )
 
 const workerPageID = "12345678-1234-4234-8234-123456789abc"
@@ -20,8 +21,9 @@ func workerPageFixture(t *testing.T) (*Model, *tab, string) {
 	t.Helper()
 	m := workerTaskFixture(t, true)
 	parent := m.current()
-	m.cfg.AgentDir = t.TempDir()
-	dir := filepath.Join(m.cfg.AgentDir, "worker-transcripts")
+	root := t.TempDir()
+	m.cfg.AgentDir = filepath.Join(root, "agent")
+	dir := filepath.Join(root, "worker-transcripts")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +152,7 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 	appendWorkerLog(t, path, "{\"type\":\"worker_transcript_end\",\"status\":\"completed\",\"complete\":true}\n")
 	m.inspector.worker.next = time.Time{}
 	receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
-	if !m.inspector.worker.stopped || m.inspector.worker.status != "completed" {
+	if !m.inspector.worker.replay.Stopped || m.inspector.worker.replay.Status != "completed" {
 		t.Fatal("missing terminal")
 	}
 	if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
@@ -175,7 +177,7 @@ func TestWorkerConversationStaleReadAndMissingRecording(t *testing.T) {
 	m.closeInspector()
 	_ = os.Remove(path)
 	receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
-	if !m.inspector.worker.stopped || !strings.Contains(m.inspector.worker.status, "不可用") {
+	if !m.inspector.worker.replay.Stopped || !strings.Contains(m.inspector.worker.replay.Status, "不可用") {
 		t.Fatal("missing file not reported")
 	}
 	if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
@@ -201,7 +203,7 @@ func TestWorkerConversationSwitchIgnoresPendingReads(t *testing.T) {
 		t.Fatal("old task read overwrote new task")
 	}
 	receiveWorkerCommand(t, m, second)
-	if len(m.tabs) != 1 || m.inspector.taskKey != "index:batch:1" || len(m.inspector.worker.state.Items) == 0 {
+	if len(m.tabs) != 1 || m.inspector.taskKey != "index:batch:1" || len(m.inspector.worker.replay.View().Items) == 0 {
 		t.Fatal("new task not displayed")
 	}
 	m.inspector.worker.next = time.Time{}
@@ -222,7 +224,7 @@ func TestWorkerConversationIncompleteAndTaskLifecycle(t *testing.T) {
 		m.inspector.worker.settled = time.Now().Add(-5 * time.Second)
 		m.inspector.worker.next = time.Time{}
 		receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
-		if !m.inspector.worker.stopped || !strings.Contains(m.inspector.worker.status, "Incomplete") {
+		if !m.inspector.worker.replay.Stopped || !strings.Contains(m.inspector.worker.replay.Status, "Incomplete") {
 			t.Fatal("false completion")
 		}
 	}
@@ -240,7 +242,7 @@ func TestWorkerConversationIncompleteAndTaskLifecycle(t *testing.T) {
 	if pending != nil {
 		m.receiveWorkerTranscript(pending().(workerTranscriptMsg))
 	}
-	if m.inspector.worker != nil && len(m.inspector.worker.state.Items) != 0 {
+	if m.inspector.worker != nil && len(m.inspector.worker.replay.View().Items) != 0 {
 		t.Fatal("removed task accepted read")
 	}
 }
@@ -331,34 +333,33 @@ func TestWorkerConversationFollowsUntilManualScroll(t *testing.T) {
 }
 
 func TestWorkerConversationActivityCache(t *testing.T) {
-	w := &workerSession{inheritedMessages: 2}
-	w.state.Items = []session.Item{
-		{ID: "inherited-tool", Role: "tool", ToolID: "old", MessageIndex: 2},
+	w := &workerSession{}
+	view := session.State{Items: []session.Item{
 		{ID: "live-tool", Role: "tool", ToolID: "new", Arguments: json.RawMessage(`{"x":1}`), Details: json.RawMessage(`{"x":1}`)},
-	}
-	w.refreshVisibleMessages()
+	}}
+	w.refreshVisibleMessages(view)
 	if len(w.visible) != 1 || w.visible[0].ToolID != "new" {
-		t.Fatal("unattributed live tool lost or inherited tool leaked")
+		t.Fatal("projected live tool lost from the display cache")
 	}
 	checkChange := func(mutate func()) {
 		t.Helper()
 		revision := w.revision
 		mutate()
-		w.refreshVisibleMessages()
+		w.refreshVisibleMessages(view)
 		if w.revision != revision+1 {
 			t.Fatal("activity change did not invalidate cache")
 		}
-		w.refreshVisibleMessages()
+		w.refreshVisibleMessages(view)
 		if w.revision != revision+1 {
 			t.Fatal("unchanged activity invalidated cache")
 		}
 	}
-	checkChange(func() { w.state.Items[1].Arguments[5] = '2' })
-	checkChange(func() { w.state.Items[1].Details[5] = '2' })
-	checkChange(func() { w.state.Items[1].Running = true })
-	checkChange(func() { w.state.Items[1].Thinking = "progress" })
-	checkChange(func() { w.state.Busy = true })
-	checkChange(func() { w.state.Items[1].MessageIndex = 3 })
+	checkChange(func() { view.Items[0].Arguments[5] = '2' })
+	checkChange(func() { view.Items[0].Details[5] = '2' })
+	checkChange(func() { view.Items[0].Running = true })
+	checkChange(func() { view.Items[0].Thinking = "progress" })
+	checkChange(func() { view.Busy = true })
+	checkChange(func() { view.Items[0].MessageIndex = 3 })
 	if len(w.visible) != 1 {
 		t.Fatal("attributed tool duplicated")
 	}
@@ -372,7 +373,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 			w := m.inspector.worker
 			deliver := func(reset bool, records ...map[string]any) {
 				t.Helper()
-				batch := session.WorkerTranscriptBatch{Reset: reset}
+				batch := worker.Batch{Reset: reset}
 				for _, record := range records {
 					raw, err := json.Marshal(record)
 					if err != nil {
@@ -401,8 +402,8 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 			}
 			header := map[string]any{"type": "worker_transcript_header", "version": 1, "id": workerPageID, "entries": entries}
 			deliver(true, header)
-			if w.inheritedMessages != inherited || len(w.visible) != 0 {
-				t.Fatalf("fork context leaked: baseline=%d visible=%+v", w.inheritedMessages, w.visible)
+			if w.replay.View().MessageCount != inherited || len(w.visible) != 0 {
+				t.Fatalf("fork context leaked: count=%d visible=%+v", w.replay.View().MessageCount, w.visible)
 			}
 			deliver(false, message("message_start", "user", 1000, text("CURRENT_TASK_INPUT")), message("message_end", "user", 1000, text("CURRENT_TASK_INPUT")))
 			if len(w.visible) != 1 || w.visible[0].Text != "CURRENT_TASK_INPUT" {
@@ -425,7 +426,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 				t.Fatal("internal activity did not invalidate the document")
 			}
 			rows, revision = m.inspector.rows, w.revision
-			w.refreshVisibleMessages()
+			w.refreshVisibleMessages(w.replay.View())
 			m.inspectorRows()
 			if w.revision != revision || &rows[0] != &m.inspector.rows[0] {
 				t.Fatal("unchanged activity invalidated the document")
@@ -465,7 +466,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 					t.Fatalf("missing formatted output %q", wanted)
 				}
 			}
-			if len(w.state.Items)-len(w.visible) != inherited || w.state.MessageCount <= inherited+2 {
+			if w.replay.View().MessageCount <= inherited+2 {
 				t.Fatal("filter destroyed full recording state")
 			}
 			if len(w.doc.Blocks) <= 2 {
@@ -474,7 +475,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 			// Replacement/truncation restarts the inherited boundary and display.
 			header["entries"] = []map[string]any{}
 			deliver(true, header)
-			if w.inheritedMessages != 0 || len(w.visible) != 0 || strings.Contains(w.doc.Text, "FINAL_TAIL") {
+			if w.replay.View().MessageCount != 0 || len(w.visible) != 0 || strings.Contains(w.doc.Text, "FINAL_TAIL") {
 				t.Fatal("reset retained previous task messages")
 			}
 			deliver(false, message("message_end", "user", 2000, text("REPLACED_INPUT")))
@@ -497,8 +498,8 @@ func BenchmarkWorkerConversation(b *testing.B) {
 				args, _ := json.Marshal(map[string]any{"path": "large.go", "content": strings.Repeat("var value = \"完整源码 👩‍💻 with sufficient length to wrap\"\n", count)})
 				items = append(items, session.Item{ID: "write", Role: "tool", ToolName: "write", Arguments: args, HasResult: true})
 				items = append(items, session.Item{ID: "task-input", Role: "user", Text: "Explain the result", MessageIndex: count + 1}, session.Item{ID: "final", Role: "assistant", Text: "# Conclusion\n\n```go\n" + strings.Repeat("var value = \"完整源码 👩‍💻 with sufficient length to wrap\"\n", count) + "```", MessageIndex: count + 2})
-				m.inspector.worker = &workerSession{state: session.State{Items: items}, revision: 1, status: "completed", stopped: true}
-				m.inspector.worker.refreshVisibleMessages()
+				m.inspector.worker = &workerSession{replay: replayFixtureItems(items), revision: 1}
+				m.inspector.worker.refreshVisibleMessages(m.inspector.worker.replay.View())
 				m.inspectorRows()
 				m.View()
 				press := func() { m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: m.mainWidth(), Y: 2}) }

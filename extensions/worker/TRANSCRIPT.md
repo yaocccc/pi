@@ -4,7 +4,7 @@ The Worker CLI/session isolation is unchanged: `new` still uses `--no-session`; 
 
 ## Discovery and lifetime
 
-- Root: `path.join(agentDir(), "worker-transcripts")`. `agentDir()` is the existing Worker configuration resolver: `PI_CODING_AGENT_DIR` when set, otherwise SDK `getAgentDir()` (path-resolved).
+- Root: `path.join(path.dirname(agentDir()), "worker-transcripts")`, normally `~/.pi/worker-transcripts` (beside `~/.pi/agent`, not inside it). `agentDir()` is the existing Worker configuration resolver: `PI_CODING_AGENT_DIR` when set, otherwise SDK `getAgentDir()` (path-resolved). When upgrading from agent-local storage, move the old `agentDir()/worker-transcripts` directory here while Workers are stopped, then reload the extension and restart the Go UI; UUID descriptors remain unchanged.
 - Task field: `transcript: { version: 1, id: "<UUID>" }`. This is published in `ChildProgress`, returned in `ChildResult`/host task result, copied into `WorkerUiTask`, and retained in `worker-snapshot-v1` parent history. An optional `incomplete: true, error: "size_limit" | "io_error" | "protocol_error"` flags known recording failure; the descriptor never contains a filesystem path.
 - Resolve **only a validated UUID** to `<root>/<id>.jsonl`; reject unknown versions, path traversal, symlink files and symlink escape. Do not accept an arbitrary path from task text/results. Use the host-produced task descriptor rather than a model-returned value.
 - Files are created exclusively with random UUID names, mode `0600`; root mode `0700`. Existing symlink roots are refused. Permissions are private, not encryption: real task messages/tool results may contain sensitive data.

@@ -12,7 +12,7 @@ import (
 const todoSweepPeriod = 15
 
 // animateTodoText uses the working message's sweep rules with a lower,
-// neutral-gray highlight. The icon, number and task share the same sweep.
+// neutral-gray highlight. Only the number and task are passed to this sweep.
 func animateTodoText(content string, frame int) string {
 	plain := ansi.Strip(content)
 	width := ansi.StringWidth(plain)

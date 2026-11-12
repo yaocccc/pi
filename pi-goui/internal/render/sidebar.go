@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/session"
 )
 
@@ -383,8 +384,8 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 				}
 				line = paint(" "+mark+" "+number+" "+oneLine(step.Goal), dim)
 				if step.Status == "in_progress" {
-					// Sweep across the icon, number and task as one broad band.
-					line = " " + animateTodoText(mark+" "+number+" "+oneLine(step.Goal), ctx.TodoFrame)
+					// Keep the circle at rest; sweep only the number and task.
+					line = " " + paint(mark, "#888888") + " " + animateTodoText(number+" "+oneLine(step.Goal), ctx.TodoFrame)
 				}
 			}
 			line = fit(line, contentWidth)
@@ -407,7 +408,7 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 		rows = rows[:contentBottom]
 	}
 	rows = append(rows, border("└", "┘"))
-	return strings.Join(gradientFrame("sidebar", rows, width, theme), "\n")
+	return strings.Join(frames.Gradient("sidebar", rows, width, theme), "\n")
 }
 
 // SidebarHoverText shares the RECENTS hover palette with sidebar-style popups.
@@ -431,7 +432,7 @@ func SidebarDetailFrame(nameRows, detailRows []string, width int, theme config.T
 		rows = append(rows, cell(line, workbenchMuted))
 	}
 	rows = append(rows, "╰"+strings.Repeat("─", max(0, width-2))+"╯")
-	return gradientFrame("sidebar", rows, width, theme)
+	return frames.Gradient("sidebar", rows, width, theme)
 }
 
 func number(n int) string {

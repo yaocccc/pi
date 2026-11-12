@@ -1,4 +1,4 @@
-package session
+package worker
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 
 const transcriptTestID = "12345678-1234-4234-8234-123456789abc"
 
-func transcriptFixture(t *testing.T) (string, string, WorkerTranscript) {
+func transcriptFixture(t *testing.T) (string, string, Transcript) {
 	t.Helper()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "worker-transcripts")
@@ -19,7 +19,7 @@ func transcriptFixture(t *testing.T) (string, string, WorkerTranscript) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, transcriptTestID+".jsonl")
-	return dir, path, WorkerTranscript{Version: 1, ID: transcriptTestID}
+	return filepath.Join(dir, "agent"), path, Transcript{Version: 1, ID: transcriptTestID}
 }
 func transcriptHeader() string {
 	return `{"type":"worker_transcript_header","version":1,"id":"` + transcriptTestID + `","cwd":"/tmp","entries":[]}` + "\n"
@@ -34,7 +34,7 @@ func TestWorkerTranscriptIncrementalPartialAndReplacement(t *testing.T) {
 	dir, path, d := transcriptFixture(t)
 	user := `{"type":"message_end","message":{"role":"user","content":"中文 🧪","timestamp":1}}`
 	putTranscript(t, path, transcriptHeader()+user[:45])
-	c, b, e := (WorkerTranscriptCursor{}).Read(dir, d)
+	c, b, e := (Cursor{}).Read(dir, d)
 	if e != nil || !b.Reset || len(b.Records) != 1 || !c.Partial() {
 		t.Fatalf("first: %+v %v", b, e)
 	}
@@ -69,12 +69,12 @@ func TestWorkerTranscriptIncrementalPartialAndReplacement(t *testing.T) {
 }
 func TestWorkerTranscriptSecurityAndLargeRecords(t *testing.T) {
 	dir, path, d := transcriptFixture(t)
-	for _, bad := range []WorkerTranscript{{1, "../secret", false, ""}, {2, d.ID, false, ""}, {1, "abc", false, ""}} {
-		if _, _, err := (WorkerTranscriptCursor{}).Read(dir, bad); err == nil {
+	for _, bad := range []Transcript{{1, "../secret", false, ""}, {2, d.ID, false, ""}, {1, "abc", false, ""}} {
+		if _, _, err := (Cursor{}).Read(dir, bad); err == nil {
 			t.Fatal("accepted bad descriptor")
 		}
 	}
-	if _, _, err := (WorkerTranscriptCursor{}).Read(dir, d); err == nil {
+	if _, _, err := (Cursor{}).Read(dir, d); err == nil {
 		t.Fatal("missing file accepted")
 	}
 	other := filepath.Join(t.TempDir(), "private")
@@ -82,13 +82,13 @@ func TestWorkerTranscriptSecurityAndLargeRecords(t *testing.T) {
 	if err := os.Symlink(other, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := (WorkerTranscriptCursor{}).Read(dir, d); err == nil {
+	if _, _, err := (Cursor{}).Read(dir, d); err == nil {
 		t.Fatal("symlink file accepted")
 	}
 	_ = os.Remove(path)
 	raw, _ := json.Marshal(map[string]any{"type": "message_end", "message": map[string]any{"role": "user", "content": strings.Repeat("x", 5<<20), "timestamp": 1}})
 	putTranscript(t, path, transcriptHeader()+string(raw)+"\n")
-	c, b, err := (WorkerTranscriptCursor{}).Read(dir, d)
+	c, b, err := (Cursor{}).Read(dir, d)
 	if err != nil || !b.More || len(b.Records) != 1 {
 		t.Fatal("first large chunk", err)
 	}
@@ -100,11 +100,11 @@ func TestWorkerTranscriptSecurityAndLargeRecords(t *testing.T) {
 	if err := os.Symlink(filepath.Dir(path), root); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := (WorkerTranscriptCursor{}).Read(filepath.Dir(root), d); err == nil {
+	if _, _, err := (Cursor{}).Read(filepath.Join(filepath.Dir(root), "agent"), d); err == nil {
 		t.Fatal("symlink root accepted")
 	}
 	putTranscript(t, path, strings.Replace(transcriptHeader(), d.ID, "00000000-0000-0000-0000-000000000000", 1))
-	if _, _, err := (WorkerTranscriptCursor{}).Read(dir, d); err == nil {
+	if _, _, err := (Cursor{}).Read(dir, d); err == nil {
 		t.Fatal("foreign header accepted")
 	}
 }
@@ -113,7 +113,7 @@ func TestWorkerTranscriptRealChildEvents(t *testing.T) {
 	if err != nil {
 		t.Skip("node unavailable")
 	}
-	output, err := exec.Command(node, "../../../extensions/worker/fixtures/transcript-child.mjs", "complete", "real prompt").Output()
+	output, err := exec.Command(node, "../../../../extensions/worker/fixtures/transcript-child.mjs", "complete", "real prompt").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,22 +131,17 @@ func TestWorkerTranscriptRealChildEvents(t *testing.T) {
 	}
 	data.WriteString(`{"type":"worker_transcript_end","status":"completed","complete":true}` + "\n")
 	putTranscript(t, path, data.String())
-	_, b, err := (WorkerTranscriptCursor{}).Read(dir, d)
+	_, b, err := (Cursor{}).Read(dir, d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var state State
-	for _, line := range b.Records {
-		var e struct{ Type string }
-		_ = json.Unmarshal(line, &e)
-		if e.Type == "worker_transcript_header" {
-			state.LoadEntries(line)
-		} else {
-			state.Apply(line)
-		}
+	var replay Replay
+	replay.Apply(ReplayRead{Batch: b})
+	if !replay.Stopped || replay.Status != "completed" {
+		t.Fatal("real child recording did not finish")
 	}
 	text := ""
-	for _, item := range state.Items {
+	for _, item := range replay.View().Items {
 		text += item.Text + "\n"
 	}
 	for _, want := range []string{"real prompt", "中文 🧪", "full content"} {

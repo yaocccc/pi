@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/render/tooldetail"
 	"pi-goui/internal/session"
 )
@@ -62,7 +63,7 @@ func ToolResultFrame(content []string, width int, theme config.Theme) []string {
 		rows = append(rows, "│"+pad+line+strings.Repeat(" ", max(0, inner-ansi.StringWidth(line)))+pad+"│")
 	}
 	rows = append(rows, border("└", "┘"))
-	return gradientFrame("sidebar", rows, width, theme)
+	return frames.Gradient("sidebar", rows, width, theme)
 }
 
 func ToolResultTitle(item session.Item) string {

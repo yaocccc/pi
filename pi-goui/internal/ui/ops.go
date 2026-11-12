@@ -15,6 +15,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"pi-goui/internal/ui/imagepreview"
 )
 
 type externalMsg struct {
@@ -117,13 +118,11 @@ type clipboardImageMsg struct {
 	pending    bool
 }
 
-const imageLimit = 20 << 20
-
 func imageData(data []byte, mimeType string) (map[string]any, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty image")
 	}
-	if len(data) > imageLimit {
+	if len(data) > imagepreview.MaxBytes {
 		return nil, errors.New("image exceeds 20 MiB")
 	}
 	switch mimeType {
@@ -139,7 +138,7 @@ func loadImage(path string) (map[string]any, error) {
 		return nil, err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, imageLimit+1))
+	b, err := io.ReadAll(io.LimitReader(f, imagepreview.MaxBytes+1))
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +169,8 @@ func readClipboardImage(id int) tea.Cmd {
 		if err = cmd.Start(); err != nil {
 			return clipboardImageMsg{id: id, err: fmt.Errorf("%s unavailable; use /attach or paste text", name)}
 		}
-		data, err := io.ReadAll(io.LimitReader(pipe, imageLimit+1))
-		if len(data) > imageLimit {
+		data, err := io.ReadAll(io.LimitReader(pipe, imagepreview.MaxBytes+1))
+		if len(data) > imagepreview.MaxBytes {
 			cancel()
 		}
 		we := cmd.Wait()

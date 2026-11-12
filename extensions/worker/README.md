@@ -10,7 +10,7 @@ Supply an optional `title`: a one-sentence task label written by the dispatching
 
 ## Read-only task transcripts
 
-New executions also save a private, bounded event log under the configured agent directory's `worker-transcripts/`. Each task carries an opaque `transcript: {version: 1, id}` descriptor for a future read-only viewer; logs are not resumable sessions and do not alter `new`/`fork` isolation. They retain real messages and tool events after completion, omit system prompts, and explicitly mark recording failures/size limits. See [TRANSCRIPT.md](TRANSCRIPT.md) for storage, privacy, lifecycle and the Go reader protocol. Existing tasks without a descriptor cannot be reconstructed.
+New executions also save a private, bounded event log in `~/.pi/worker-transcripts/` (beside the configured agent directory when overridden). Each task carries an opaque `transcript: {version: 1, id}` descriptor for a future read-only viewer; logs are not resumable sessions and do not alter `new`/`fork` isolation. They retain real messages and tool events after completion, omit system prompts, and explicitly mark recording failures/size limits. See [TRANSCRIPT.md](TRANSCRIPT.md) for storage, privacy, lifecycle and the Go reader protocol. Existing tasks without a descriptor cannot be reconstructed.
 
 ## Task session mode
 

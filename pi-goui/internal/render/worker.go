@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"pi-goui/internal/config"
+	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/render/tooldetail"
 	"pi-goui/internal/session"
 )
@@ -384,7 +385,7 @@ func workerDetailRows(item session.Item, theme config.Theme, _ Options, width in
 	for _, row := range rows {
 		contentWidth = max(contentWidth, ansi.StringWidth(strings.TrimRight(ansi.Strip(row), " \t")))
 	}
-	corners, _ := frameGradient(theme.FramePreset, "worker")
+	corners, _ := frames.Palette(theme.FramePreset, "worker")
 	c := corners[0]
 	separatorColor := fmt.Sprintf("#%02x%02x%02x", c[0], c[1], c[2])
 	for _, index := range separators {

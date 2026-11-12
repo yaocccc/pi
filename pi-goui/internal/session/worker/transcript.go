@@ -1,4 +1,4 @@
-package session
+package worker
 
 import (
 	"bytes"
@@ -11,41 +11,46 @@ import (
 	"regexp"
 )
 
-// WorkerTranscript is an opaque local recording identifier, never a session path.
-type WorkerTranscript struct {
+// Transcript is an opaque local recording identifier, never a session path.
+type Transcript struct {
 	Version    int    `json:"version"`
 	ID         string `json:"id"`
 	Incomplete bool   `json:"incomplete,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
-var workerTranscriptID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var transcriptID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-func (d WorkerTranscript) Valid() bool { return d.Version == 1 && workerTranscriptID.MatchString(d.ID) }
+func (d Transcript) Valid() bool { return d.Version == 1 && transcriptID.MatchString(d.ID) }
 
 // Cursor is owned by one asynchronous read at a time. It contains no UI state.
 // Reads are bounded and return complete records only; a trailing partial record
 // is retained until the producer appends its LF.
-type WorkerTranscriptCursor struct {
+type Cursor struct {
 	offset       int64
 	tail, anchor []byte
 	file         os.FileInfo
 	header       bool
 }
-type WorkerTranscriptBatch struct {
+type Batch struct {
 	Reset   bool
 	Records []json.RawMessage
 	More    bool
 }
 
-const workerTranscriptLimit = 65 << 20
+const transcriptLimit = 65 << 20
 
-func (c WorkerTranscriptCursor) Read(agentDir string, d WorkerTranscript) (WorkerTranscriptCursor, WorkerTranscriptBatch, error) {
-	var batch WorkerTranscriptBatch
+func (c Cursor) Read(agentDir string, d Transcript) (Cursor, Batch, error) {
+	var batch Batch
 	if !d.Valid() {
 		return c, batch, errors.New("invalid Worker transcript descriptor")
 	}
-	path := filepath.Join(agentDir, "worker-transcripts")
+	// Match the writer: recordings live beside the configured agent directory.
+	agentPath, err := filepath.Abs(agentDir)
+	if err != nil {
+		return c, batch, err
+	}
+	path := filepath.Join(filepath.Dir(agentPath), "worker-transcripts")
 	info, err := os.Lstat(path)
 	if err != nil {
 		return c, batch, err
@@ -79,7 +84,7 @@ func (c WorkerTranscriptCursor) Read(agentDir string, d WorkerTranscript) (Worke
 	if err != nil || !os.SameFile(info, actual) {
 		return c, batch, errors.New("Worker transcript file changed")
 	}
-	if actual.Size() > workerTranscriptLimit {
+	if actual.Size() > transcriptLimit {
 		return c, batch, errors.New("Worker transcript exceeds recording limit")
 	}
 	reset := c.file == nil || !os.SameFile(c.file, actual) || actual.Size() < c.offset
@@ -89,7 +94,7 @@ func (c WorkerTranscriptCursor) Read(agentDir string, d WorkerTranscript) (Worke
 		reset = n != len(buf) || !bytes.Equal(buf, c.anchor)
 	}
 	if reset {
-		c = WorkerTranscriptCursor{}
+		c = Cursor{}
 		batch.Reset = true
 	}
 	c.file = actual
@@ -106,7 +111,7 @@ func (c WorkerTranscriptCursor) Read(agentDir string, d WorkerTranscript) (Worke
 		c.anchor = append([]byte(nil), combined[max(0, len(combined)-64):]...)
 	}
 	pending := append(append([]byte(nil), c.tail...), data...)
-	if len(pending) > workerTranscriptLimit {
+	if len(pending) > transcriptLimit {
 		return c, batch, errors.New("Worker transcript record exceeds limit")
 	}
 	for {
@@ -140,4 +145,4 @@ func (c WorkerTranscriptCursor) Read(agentDir string, d WorkerTranscript) (Worke
 	return c, batch, nil
 }
 
-func (c WorkerTranscriptCursor) Partial() bool { return len(c.tail) > 0 }
+func (c Cursor) Partial() bool { return len(c.tail) > 0 }

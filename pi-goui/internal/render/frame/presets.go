@@ -1,4 +1,4 @@
-package render
+package frame
 
 import "strconv"
 
@@ -32,7 +32,10 @@ var framePresetColors = map[string][10][2]string{
 	},
 }
 
-func frameGradient(preset, kind string) ([4][3]int, bool) {
+// Palette returns RGB corners (top-left, top-right, bottom-left, bottom-right)
+// for borders and matching activity highlights. Unknown presets use Pi defaults;
+// unknown roles return false.
+func Palette(preset, kind string) ([4][3]int, bool) {
 	roles := map[string]int{"user": 0, "assistant": 1, "tool": 2, "worker": 3, "input": 4, "system": 5, "sidebar": 6, "popup": 7, "codemode": 8, "error": 9}
 	role, ok := roles[kind]
 	if !ok {

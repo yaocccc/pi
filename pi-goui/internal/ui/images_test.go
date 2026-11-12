@@ -2,7 +2,6 @@ package ui
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -96,10 +95,10 @@ func TestPendingImageKeepsOriginalPastePointAndSession(t *testing.T) {
 	}
 }
 
-func TestImageClickOpensSavedBytesButDragDoesNot(t *testing.T) {
+func TestImageClickRoutesImageButDragDoesNot(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
-	img, bytes := previewFixture(t)
+	img := session.Image{Data: "image bytes", MimeType: "image/png"}
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	tab.state.Items = []session.Item{{ID: "u", Role: "user", Text: "看这里 [image1]", Images: []session.Image{img}}}
 	tab.dirty = true
@@ -109,17 +108,13 @@ func TestImageClickOpensSavedBytesButDragDoesNot(t *testing.T) {
 	}
 	link := tab.doc.ImageLinks[0]
 	opened := 0
-	m.imagePreviews.opener = func(path string) error {
+	m.imagePreviews = &previewStub{open: func(got session.Image) error {
 		opened++
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(data) != string(bytes) {
-			t.Fatal("preview bytes changed")
+		if got != img {
+			t.Fatal("preview image changed")
 		}
 		return nil
-	}
+	}}
 	click := tea.Mouse{Button: tea.MouseLeft, X: link.Start, Y: link.Row - tab.offset + transcriptTop}
 	m.beginSelection(tab, click)
 	cmd := m.mouseRelease(click)

@@ -1,4 +1,4 @@
-package ui
+package worker
 
 import (
 	"encoding/json"
@@ -28,7 +28,7 @@ func TestWorkerEventBatchProjectionEquivalence(t *testing.T) {
 	add(`{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"authoritative"}],"timestamp":1}}`)
 	add(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"authoritative"}],"timestamp":1}}`)
 	add(`{"type":"agent_settled"}`)
-	merged := workerEventBatch(records)
+	merged := eventBatch(records)
 	if len(merged) >= len(records)/2 {
 		t.Fatal("deltas were not combined")
 	}
@@ -47,7 +47,7 @@ func TestWorkerEventBatchProjectionEquivalence(t *testing.T) {
 	for _, r := range records[:201] {
 		a.Apply(r)
 	}
-	for _, r := range workerEventBatch(records[:201]) {
+	for _, r := range eventBatch(records[:201]) {
 		b.Apply(r)
 	}
 	if !reflect.DeepEqual(a.Items, b.Items) {

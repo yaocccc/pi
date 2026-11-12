@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import askQuestion from './index.ts';
-import { validateGoResponse } from './rpc.ts';
+import { askQuestions, validateGoResponse } from './rpc.ts';
+import { QuestionInteractions } from './interaction.ts';
 
 for (const capability of ['PI_GOUI_ASK_QUESTION', 'PI_GOUI_PROTOCOL']) {
 test(`${capability}: Go questionnaire RPC sends all questions and returns confirmed answers`, async () => {
@@ -54,6 +55,61 @@ test(`${capability}: Go questionnaire RPC sends all questions and returns confir
     }
 });
 }
+
+test('ordinary RPC keeps business choices distinct from the custom-input action', async (t) => {
+    const previous = { PI_GOUI_ASK_QUESTION: process.env.PI_GOUI_ASK_QUESTION, PI_GOUI_PROTOCOL: process.env.PI_GOUI_PROTOCOL };
+    delete process.env.PI_GOUI_ASK_QUESTION;
+    delete process.env.PI_GOUI_PROTOCOL;
+    t.after(() => {
+        for (const [key, value] of Object.entries(previous)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+    });
+    const controller = new AbortController();
+    const interactions = new QuestionInteractions();
+    for (const options of [['A', 'B'], ['自己输入…', '普通项'], ['自己输入…', '自己输入…（2）', '自己输入…（3）']]) {
+        await t.test(JSON.stringify(options), async () => {
+            let selectedIndex: number | undefined = 0;
+            let inputResult: string | undefined = '  自定义答案  ';
+            let inputCalls = 0;
+            const ctx = { mode: 'rpc', ui: {
+                select: async (title: string, choices: string[], dialog?: { signal?: AbortSignal }) => {
+                    assert.equal(title, '选择');
+                    assert.equal(dialog?.signal, controller.signal);
+                    assert.deepEqual(choices.slice(0, -1), options);
+                    assert.equal(new Set(choices).size, choices.length);
+                    if (!options.includes('自己输入…')) assert.equal(choices.at(-1), '自己输入…');
+                    return selectedIndex === undefined ? undefined : choices[selectedIndex];
+                },
+                input: async (title: string, placeholder: string, dialog?: { signal?: AbortSignal }) => {
+                    assert.equal(title, '问题');
+                    assert.equal(placeholder, '请输入你的答案');
+                    assert.equal(dialog?.signal, controller.signal);
+                    inputCalls++;
+                    return inputResult;
+                },
+            } } as any;
+            const ask = () => askQuestions([{ question: '问题', label: '选择', options }], false, ctx, interactions, controller.signal);
+            for (selectedIndex = 0; selectedIndex < options.length; selectedIndex++) {
+                assert.deepEqual(await ask(), { answers: [{ answers: [options[selectedIndex]], wasCustom: false, completed: true }], cancelled: false });
+            }
+            assert.equal(inputCalls, 0);
+            // The final entry remains the action even when its usual label is a business value.
+            selectedIndex = options.length;
+            assert.deepEqual(await ask(), { answers: [{ answers: ['自定义答案'], wasCustom: true, customAnswers: ['自定义答案'], completed: true }], cancelled: false });
+            assert.equal(inputCalls, 1);
+            inputResult = undefined;
+            assert.equal(await ask(), null);
+            inputResult = '   ';
+            assert.equal(await ask(), null);
+            assert.equal(inputCalls, 3);
+            selectedIndex = undefined;
+            assert.equal(await ask(), null);
+            assert.equal(inputCalls, 3);
+        });
+    }
+});
 
 const single = [{ question: 'Pick', options: ['A', 'B'] }];
 const response = (answer: Record<string, unknown>) => ({ answers: [{ completed: true, ...answer }], cancelled: false });

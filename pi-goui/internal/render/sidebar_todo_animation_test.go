@@ -37,19 +37,17 @@ func TestTodoSweepMatchesWorkingParameters(t *testing.T) {
 			}
 		}
 	}
-	// The icon and number participate in the same entering highlight.
-	prefix := colors.FindAllStringSubmatch(animateTodoText("○ 1. Running step", 2), -1)
-	for _, col := range []int{0, 2} {
-		level, _ := strconv.Atoi(prefix[col][1])
-		if level <= 136 {
-			t.Fatal("icon and number must participate in the sweep")
-		}
+	// The entering highlight begins at the number; the caller excludes the icon.
+	prefix := colors.FindAllStringSubmatch(animateTodoText("1. Running step", 2), -1)
+	level, _ := strconv.Atoi(prefix[0][1])
+	if level <= 136 {
+		t.Fatal("number must participate in the sweep")
 	}
 }
 
 func TestTodoTextNeutralSweep(t *testing.T) {
 	colors := regexp.MustCompile(`\x1b\[38;2;(\d+);(\d+);(\d+)m`)
-	for _, content := range []string{"", "○ 3. 检查 👩‍💻 é", "○ 12. Verify changes"} {
+	for _, content := range []string{"", "3. 检查 👩‍💻 é", "12. Verify changes"} {
 		previous := ""
 		changed := false
 		for frame := 0; frame < todoSweepPeriod; frame++ {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/session"
 )
 
@@ -224,7 +225,7 @@ func codemodeFrame(body []string, item session.Item, theme config.Theme, width i
 	if item.Error {
 		kind = "error"
 	}
-	rows = gradientFrame(kind, rows, width, theme)
+	rows = frames.Gradient(kind, rows, width, theme)
 	// Keep the semantic token badge colors inside the gradient border.
 	rows[0] = ansi.Cut(rows[0], 0, 3) + title + ansi.Cut(rows[0], 3+ansi.StringWidth(title), width)
 	return rows

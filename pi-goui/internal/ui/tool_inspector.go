@@ -77,7 +77,7 @@ func (m *Model) inspectorItem(page *toolInspector) (session.Item, bool) {
 		if _, ok := m.inspectorItem(page.parent); !ok || page.parent.worker == nil {
 			return session.Item{}, false
 		}
-		items = page.parent.worker.state.Items
+		items = page.parent.worker.visible
 	}
 	for _, it := range items {
 		if it.ID == page.itemID && (it.Role == "tool" || it.Role == "toolResult") {
@@ -219,7 +219,7 @@ func (m *Model) inspectorView() string {
 	if m.height > 3 {
 		status := fmt.Sprintf("%d–%d / %d · wheel · Esc", min(len(rows), m.inspector.offset+1), min(len(rows), m.inspector.offset+m.inspectorBodyHeight()), len(rows))
 		if m.inspector.worker != nil {
-			status = render.Clean(m.inspector.worker.status) + " · " + status
+			status = render.Clean(m.inspector.worker.replay.Status) + " · " + status
 		}
 		out = append(out, m.paint(status, m.cfg.Theme.Muted))
 	}

@@ -159,14 +159,15 @@ test("recording IO failure does not fail execution, and timeout/spawn failure cl
  assert.equal(records(root, missing.transcript!.id).at(-1).status, "failed");
 });
 
-test("configured agent directory is the default storage root", (t) => {
+test("default storage is beside the configured agent directory, not inside it", (t) => {
  const root = temporary(t);
  const before = process.env.PI_CODING_AGENT_DIR;
  try {
-  process.env.PI_CODING_AGENT_DIR = root;
+  process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
   const writer = new WorkerTranscriptWriter({ cwd: root, prompt: "task" });
   writer.finish("completed");
   assert.equal(records(root, writer.descriptor.id)[0].cwd, root);
+  assert.equal(fs.existsSync(path.join(root, "agent", "worker-transcripts")), false);
  } finally {
   if (before === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = before;

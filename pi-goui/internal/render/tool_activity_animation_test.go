@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/session"
 )
 
@@ -122,7 +123,7 @@ func TestWorkingGradientMatchesInputPalette(t *testing.T) {
 			t.Fatal("working gradient changed text")
 		}
 		colors := activityTestColors(row)
-		palette, _ := frameGradient(preset, "input")
+		palette, _ := frames.Palette(preset, "input")
 		if colors[0] != palette[0] || colors[len(colors)-1] != palette[1] {
 			t.Fatalf("%s working gradient does not match input border", preset)
 		}

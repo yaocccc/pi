@@ -55,9 +55,8 @@ func TestWorkerReportConversationRendering(t *testing.T) {
 	m, parent, _ := workerPageFixture(t)
 	receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
 	w := m.inspector.worker
-	w.state.Items = []session.Item{{ID: "user", Role: "user", Text: "Task input", MessageIndex: 1}, {ID: "final", Role: "assistant", Text: reportFixture, MessageIndex: 2}}
-	w.inheritedMessages = 0
-	w.refreshVisibleMessages()
+	w.replay = replayFixtureItems([]session.Item{{ID: "user", Role: "user", Text: "Task input", MessageIndex: 1}, {ID: "final", Role: "assistant", Text: reportFixture, MessageIndex: 2}})
+	w.refreshVisibleMessages(w.replay.View())
 	for _, width := range []int{20, 40, 80} {
 		rows := m.workerConversationRows(width)
 		plain := ansi.Strip(strings.Join(rows, "\n"))
@@ -74,7 +73,7 @@ func TestWorkerReportConversationRendering(t *testing.T) {
 			t.Fatal("cache rebuilt on static view")
 		}
 	}
-	if w.visible[1].Text != reportFixture || w.state.Items[1].Text != reportFixture {
+	if w.visible[1].Text != reportFixture || w.replay.View().Items[1].Text != reportFixture {
 		t.Fatal("changed replay state")
 	}
 }

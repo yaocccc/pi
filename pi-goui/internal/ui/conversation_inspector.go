@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/render"
 	"pi-goui/internal/session"
+	"pi-goui/internal/session/worker"
 )
 
 // Shared presentation policy for the editable transcript and the read-only
@@ -127,9 +128,9 @@ func (m *Model) conversationClick(v tea.Mouse) tea.Cmd {
 	point := m.inspectorPoint(v.X, v.Y)
 	for _, link := range w.doc.ImageLinks {
 		if point.line == link.Row && point.cell >= link.Start && point.cell < link.End {
-			for _, item := range w.state.Items {
+			for _, item := range w.visible {
 				if item.ID == link.ItemID && link.ImageIndex >= 0 && link.ImageIndex < len(item.Images) {
-					return openImagePreview(&m.imagePreviews, m.current().id, item.Images[link.ImageIndex])
+					return openImagePreview(m.imagePreviews, m.current().id, item.Images[link.ImageIndex])
 				}
 			}
 			return nil
@@ -158,7 +159,7 @@ func (m *Model) openConversationDetail(id string) tea.Cmd {
 	var child *workerSession
 	title := ""
 	if key != "" {
-		for _, item := range w.state.Items {
+		for _, item := range w.visible {
 			if item.ID == itemID {
 				d, t, _, ok := workerDescriptor(item, key)
 				if !ok {
@@ -166,7 +167,7 @@ func (m *Model) openConversationDetail(id string) tea.Cmd {
 					return nil
 				}
 				title = t
-				child = &workerSession{descriptor: d, status: "正在读取", revision: 1, showThinking: w.showThinking}
+				child = &workerSession{descriptor: d, replay: worker.Replay{Status: "正在读取"}, revision: 1, showThinking: w.showThinking}
 				break
 			}
 		}

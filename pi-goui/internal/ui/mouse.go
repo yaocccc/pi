@@ -208,7 +208,7 @@ func (m *Model) mouseRelease(v tea.Mouse) tea.Cmd {
 		if row == link.Row && v.X >= link.Start && v.X < link.End {
 			for _, item := range t.state.Items {
 				if item.ID == link.ItemID && link.ImageIndex >= 0 && link.ImageIndex < len(item.Images) {
-					return openImagePreview(&m.imagePreviews, t.id, item.Images[link.ImageIndex])
+					return openImagePreview(m.imagePreviews, t.id, item.Images[link.ImageIndex])
 				}
 			}
 			return nil

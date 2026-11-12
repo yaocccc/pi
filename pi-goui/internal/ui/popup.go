@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/render"
+	frames "pi-goui/internal/render/frame"
 )
 
 // popupLayout is shared by painting and mouse selection. Coordinates are screen
@@ -217,7 +218,7 @@ func (m *Model) popupRows(d *dialog, p popupLayout) []string {
 		rows = append(rows, m.paint("│", m.cfg.Theme.Accent)+" "+line+" "+m.paint("│", m.cfg.Theme.Accent))
 	}
 	rows = append(rows, m.paint("╰"+strings.Repeat("─", p.width-2)+"╯", m.cfg.Theme.Accent))
-	return render.GradientFrame("popup", rows, p.width, m.cfg.Theme)
+	return frames.Gradient("popup", rows, p.width, m.cfg.Theme)
 }
 func (m *Model) overlayPopup(t *tab, view string) string {
 	if len(t.dialogs) == 0 {

@@ -268,9 +268,15 @@ export async function runCommand(command: string, args: string[], cwd: string, o
 			if (!settled && !terminating && process.platform !== "win32" && child.pid && processGroupActive(child.pid) !== false) terminate();
 		};
 		child.stdout.on("data", (chunk: Buffer) => {
-			const length = Math.min(chunk.length, Math.max(0, maxBytes - stdoutBytes));
-			if (length > 0) stdout.push(chunk.subarray(0, length));
-			stdoutBytes += length;
+			if (terminationError) return;
+			// Callers parse stdout as complete evidence (including NUL-delimited
+			// Git paths), so an incomplete result must never resolve successfully.
+			if (chunk.length > maxBytes - stdoutBytes) {
+				terminate(new Error(`命令 ${command} stdout 超出上限（${maxBytes} bytes）`));
+				return;
+			}
+			stdout.push(chunk);
+			stdoutBytes += chunk.length;
 		});
 		child.stderr.on("data", (chunk: Buffer) => {
 			const length = Math.min(chunk.length, Math.max(0, maxBytes - stderrBytes));

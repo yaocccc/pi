@@ -10,56 +10,55 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"pi-goui/internal/render"
 	"pi-goui/internal/session"
+	"pi-goui/internal/session/worker"
 )
 
 // A recording belongs only to the inspector, never to an editable/RPC tab.
 // Its pointer is also the generation token for outstanding asynchronous reads.
 type workerSession struct {
-	descriptor                 session.WorkerTranscript
-	state                      session.State
-	inheritedMessages          int
-	visible                    []session.Item
-	inputExpanded              map[string]bool
-	inputActions               []workerInputAction
-	visibleBusy                bool
-	cursor                     session.WorkerTranscriptCursor
-	pending, stopped, draining bool
-	next, settled              time.Time
-	status                     string
-	revision, rendered         uint64
-	doc                        render.Document
-	renderCache                render.TranscriptCache
-	folds                      map[string]bool
-	expanded, showThinking     bool
-	targets                    []conversationTarget
-	activityRows               map[int]bool
-	descriptorDetails          string
-	taskStatus                 string
+	descriptor             worker.Transcript
+	replay                 worker.Replay
+	visible                []session.Item
+	inputExpanded          map[string]bool
+	inputActions           []workerInputAction
+	visibleBusy            bool
+	cursor                 worker.Cursor
+	pending, draining      bool
+	next, settled          time.Time
+	revision, rendered     uint64
+	doc                    render.Document
+	renderCache            render.TranscriptCache
+	folds                  map[string]bool
+	expanded, showThinking bool
+	targets                []conversationTarget
+	activityRows           map[int]bool
+	descriptorDetails      string
+	taskStatus             string
 }
 type workerTranscriptMsg struct {
 	owner  *workerSession
-	cursor session.WorkerTranscriptCursor
-	batch  session.WorkerTranscriptBatch
+	cursor worker.Cursor
+	batch  worker.Batch
 	err    error
 }
 
-func selectedWorkerDescriptor(item session.Item) (session.WorkerTranscript, string, bool) {
+func selectedWorkerDescriptor(item session.Item) (worker.Transcript, string, bool) {
 	var data struct {
 		Tasks []struct {
-			Transcript session.WorkerTranscript
+			Transcript worker.Transcript
 			Status     string
 		}
 	}
 	if json.Unmarshal(item.Details, &data) != nil || len(data.Tasks) != 1 {
-		return session.WorkerTranscript{}, "", false
+		return worker.Transcript{}, "", false
 	}
 	task := data.Tasks[0]
 	return task.Transcript, task.Status, task.Transcript.Valid()
 }
-func workerDescriptor(item session.Item, key string) (session.WorkerTranscript, string, string, bool) {
+func workerDescriptor(item session.Item, key string) (worker.Transcript, string, string, bool) {
 	selected, title, ok := render.WorkerTaskResult(item, key)
 	if !ok {
-		return session.WorkerTranscript{}, "", "", false
+		return worker.Transcript{}, "", "", false
 	}
 	d, status, valid := selectedWorkerDescriptor(selected)
 	return d, title, status, valid
@@ -78,7 +77,7 @@ func (m *Model) openWorkerSession(parent *tab, itemID, key string) tea.Cmd {
 			return m.pollWorkerSession(time.Now())
 		}
 		m.finishPanelResize()
-		m.inspector = toolInspector{tabID: parent.id, itemID: itemID, taskKey: key, taskTitle: title, worker: &workerSession{descriptor: d, status: "正在读取", revision: 1, showThinking: parent.showThinking}}
+		m.inspector = toolInspector{tabID: parent.id, itemID: itemID, taskKey: key, taskTitle: title, worker: &workerSession{descriptor: d, replay: worker.Replay{Status: "正在读取"}, revision: 1, showThinking: parent.showThinking}}
 		parent.footerHover.active = ""
 		m.codexFastHover = false
 		m.resizeEditor(parent)
@@ -126,11 +125,8 @@ func (m *Model) pollWorkerPage(page *toolInspector, now time.Time) tea.Cmd {
 	if status != "" && !workerTaskActive(status) && w.settled.IsZero() {
 		w.settled = now
 	}
-	if w.stopped && !w.draining {
-		if d.Incomplete {
-			status := "Incomplete recording · " + d.Error
-			w.status = status
-		}
+	if w.replay.Stopped && !w.draining {
+		w.replay.Apply(worker.ReplayRead{Descriptor: d})
 		w.next = now.Add(2 * time.Second)
 		return nil
 	}
@@ -154,70 +150,14 @@ func (m *Model) receiveWorkerTranscript(msg workerTranscriptMsg) tea.Cmd {
 	}
 	w := page.worker
 	w.pending = false
-	changed := msg.batch.Reset
+	if w.replay.Apply(worker.ReplayRead{
+		Batch: msg.batch, Descriptor: w.descriptor, Err: msg.err, Partial: msg.cursor.Partial(),
+		TaskEnded: !w.settled.IsZero() && time.Since(w.settled) > 3*time.Second,
+	}) {
+		w.refreshVisibleMessages(w.replay.View())
+	}
 	w.cursor = msg.cursor
-	w.draining = msg.batch.More
-	if msg.batch.Reset {
-		w.state = session.State{}
-		w.inheritedMessages = 0
-		w.status = "实时 · 只读"
-		w.stopped = false
-	}
-	for _, raw := range workerEventBatch(msg.batch.Records) {
-		var event struct {
-			Type, Cwd, Status, Error string
-			Complete                 bool
-		}
-		_ = json.Unmarshal(raw, &event)
-		switch event.Type {
-		case "worker_transcript_header":
-			w.state.LoadEntries(raw)
-			// Header entries are inherited context, never this task's input.
-			w.inheritedMessages = w.state.MessageCount
-			changed = true
-			w.state.Cwd = event.Cwd
-		case "worker_transcript_end":
-			w.status = event.Status
-			w.stopped = true
-			changed = changed || w.state.Busy
-			w.state.Busy = false
-			if !event.Complete || event.Error != "" {
-				w.status = "Incomplete recording · " + event.Status + " " + event.Error
-			}
-		default:
-			// Apply's return value requests RPC refresh; it is not a content
-			// dirty flag. Message/tool events project new transcript content.
-			w.state.Apply(raw)
-			switch event.Type {
-			case "message_start", "message_update", "message_end", "tool_execution_start", "tool_execution_update", "tool_execution_end", "agent_start", "agent_settled", "compaction_start", "compaction_end":
-				changed = true
-			}
-		}
-	}
-	if w.descriptor.Incomplete {
-		w.status = "Incomplete recording · " + w.descriptor.Error
-		if !msg.batch.More {
-			w.stopped = true
-			w.state.Busy = false
-		}
-	}
-	if msg.err != nil {
-		w.draining = false
-		w.status = "会话记录不可用: " + msg.err.Error()
-		w.stopped = true
-		w.state.Busy = false
-	}
-	if !w.stopped && !w.settled.IsZero() && time.Since(w.settled) > 3*time.Second && !msg.batch.More {
-		w.status = "Incomplete recording · task ended without a terminal record"
-		w.stopped = true
-		w.state.Busy = false
-	}
-	if w.stopped && w.cursor.Partial() {
-		w.status += " · incomplete trailing record"
-	}
-	if changed {
-		w.refreshVisibleMessages()
-	}
+	w.draining = msg.batch.More && msg.err == nil
 	w.next = time.Now().Add(500 * time.Millisecond)
 	if w.draining {
 		w.next = time.Time{}
@@ -226,37 +166,29 @@ func (m *Model) receiveWorkerTranscript(msg workerTranscriptMsg) tea.Cmd {
 	return nil
 }
 
-// Only the header's inherited branch is hidden. Keep complete task items so
-// the shared renderer can group, fold and inspect all intermediate activity.
-func (w *workerSession) refreshVisibleMessages() {
-	var visible []session.Item
-	for _, item := range w.state.Items {
-		// Unattributed live tool events have ordinal zero until their assistant
-		// snapshot arrives. Persisted header tools always have an ordinal.
-		unattributed := item.MessageIndex == 0 && item.Role == "tool"
-		if item.MessageIndex > w.inheritedMessages || unattributed {
-			visible = append(visible, item)
-		}
-	}
-	if w.visibleBusy == w.state.Busy && reflect.DeepEqual(w.visible, visible) {
+// Cache an owned display snapshot; replay owns the conversation boundary.
+func (w *workerSession) refreshVisibleMessages(view session.State) {
+	visible := view.Items
+	if w.visibleBusy == view.Busy && reflect.DeepEqual(w.visible, visible) {
 		return
 	}
 	// Own mutable payloads: an in-place detail/argument update must invalidate
 	// the cached document, while unchanged polling does no payload copying.
+	visible = slices.Clone(visible)
 	for i := range visible {
 		visible[i].Arguments = slices.Clone(visible[i].Arguments)
 		visible[i].Details = slices.Clone(visible[i].Details)
 		visible[i].Images = slices.Clone(visible[i].Images)
 	}
 	w.visible = visible
-	w.visibleBusy = w.state.Busy
+	w.visibleBusy = view.Busy
 	w.revision++
 }
 
 func (m *Model) workerConversationRows(width int) []string {
 	w := m.inspector.worker
 	if m.inspector.rows == nil || w.rendered != w.revision || m.inspector.cache.width != width || m.inspector.cache.theme != m.cfg.Theme {
-		view := w.state
+		view := w.replay.View()
 		var inputActions []workerInputAction
 		view.Items, inputActions = workerInputItems(workerReportItems(w.visible), w.inputExpanded)
 		w.doc = w.renderCache.Transcript(view.Items, m.cfg.Theme, conversationOptions(view, width, w.expanded, w.showThinking, w.folds))

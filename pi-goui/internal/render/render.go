@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/session"
 )
 
@@ -161,7 +162,7 @@ func frameContent(body []string, title string, width int, kind string, right boo
 	if title != "" {
 		middle = "─ " + title + " " + strings.Repeat("─", max(0, width-5-ansi.StringWidth(title)))
 	}
-	head := FrameBorder(kind, "topLeft", "╭") + FrameBorder(kind, "top", middle) + FrameBorder(kind, "topRight", "╮")
+	head := frames.Border(kind, "topLeft", "╭") + frames.Border(kind, "top", middle) + frames.Border(kind, "topRight", "╮")
 	out := []string{head}
 	spans := []ContentSpan{{}}
 	left := 2
@@ -172,15 +173,15 @@ func frameContent(body []string, title string, width int, kind string, right boo
 		// body already wrapped; preserve all rows rather than truncating content.
 		for _, part := range wrap(row, width-4) {
 			spans = append(spans, ContentSpan{Start: left, End: left + ansi.StringWidth(strings.TrimRight(ansi.Strip(part), " ")), Content: true})
-			out = append(out, FrameBorder(kind, "left", "│")+" "+part+strings.Repeat(" ", max(0, width-4-ansi.StringWidth(part)))+" "+FrameBorder(kind, "right", "│"))
+			out = append(out, frames.Border(kind, "left", "│")+" "+part+strings.Repeat(" ", max(0, width-4-ansi.StringWidth(part)))+" "+frames.Border(kind, "right", "│"))
 		}
 		if row == "" {
 			spans = append(spans, ContentSpan{Start: left, End: left, Content: true})
-			out = append(out, FrameBorder(kind, "left", "│")+strings.Repeat(" ", width-2)+FrameBorder(kind, "right", "│"))
+			out = append(out, frames.Border(kind, "left", "│")+strings.Repeat(" ", width-2)+frames.Border(kind, "right", "│"))
 		}
 	}
-	out = append(out, FrameBorder(kind, "bottomLeft", "╰")+FrameBorder(kind, "bottom", strings.Repeat("─", width-2))+FrameBorder(kind, "bottomRight", "╯"))
-	out = gradientFrame(kind, out, width, themes...)
+	out = append(out, frames.Border(kind, "bottomLeft", "╰")+frames.Border(kind, "bottom", strings.Repeat("─", width-2))+frames.Border(kind, "bottomRight", "╯"))
+	out = frames.Gradient(kind, out, width, themes...)
 	if right {
 		for i := range out {
 			out[i] = strings.Repeat(" ", max(0, available-width)) + out[i]

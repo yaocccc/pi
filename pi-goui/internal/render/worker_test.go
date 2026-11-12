@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/session"
 )
 
@@ -102,7 +103,7 @@ func TestWorkerTaskSectionIndentation(t *testing.T) {
 			if ansi.StringWidth(card[1]) != 27 {
 				t.Fatalf("card stretched to terminal width %d: %q", width, card[1])
 			}
-			corners, _ := frameGradient(preset, "worker")
+			corners, _ := frames.Palette(preset, "worker")
 			c := corners[0]
 			separator := paint(strings.Repeat("─", 23), fmt.Sprintf("#%02x%02x%02x", c[0], c[1], c[2]))
 			if !strings.Contains(card[6], separator) {

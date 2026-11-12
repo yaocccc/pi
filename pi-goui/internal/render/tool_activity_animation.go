@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	frames "pi-goui/internal/render/frame"
 )
 
 var activityCallLabel = regexp.MustCompile(`[›⌄⋯] [0-9]+ calls`)
@@ -31,7 +32,7 @@ func AnimateToolActivity(row string, theme config.Theme, frame int) string {
 func AnimateWorkingLine(row string, theme config.Theme, frame int) string {
 	plain := ansi.Strip(row)
 	width := ansi.StringWidth(plain)
-	palette, _ := frameGradient(theme.FramePreset, "input")
+	palette, _ := frames.Palette(theme.FramePreset, "input")
 	var gradient strings.Builder
 	var state byte
 	column := 0
@@ -51,7 +52,7 @@ func AnimateWorkingLine(row string, theme config.Theme, frame int) string {
 func animateForeground(row string, theme config.Theme, frame, start, end int, kind string) string {
 	phase := (frame % 15) * 20 / 15 // 80ms ticks: 1.2s cycle, including a short pause.
 	center := -2 + float64(end-start+3)*float64(phase)/16
-	palette, _ := frameGradient(theme.FramePreset, kind)
+	palette, _ := frames.Palette(theme.FramePreset, kind)
 	baseColor, _ := strconv.ParseUint(strings.TrimPrefix(theme.Text, "#"), 16, 24)
 	if len(theme.Text) != 7 {
 		baseColor = 0xc8c8cc

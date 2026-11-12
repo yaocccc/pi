@@ -1,4 +1,4 @@
-package render
+package frame
 
 import (
 	"fmt"
@@ -8,14 +8,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// gradientFrame changes only the outer border, before any alignment padding.
+// Gradient changes only the outer border, before any alignment padding.
 // Body ANSI styles, terminal-cell geometry and transparent backgrounds survive.
-func gradientFrame(kind string, rows []string, width int, themes ...config.Theme) []string {
+func Gradient(kind string, rows []string, width int, themes ...config.Theme) []string {
 	preset := ""
 	if len(themes) > 0 {
 		preset = themes[0].FramePreset
 	}
-	corners, ok := frameGradient(preset, kind)
+	corners, ok := Palette(preset, kind)
 	if !ok || width < 1 || len(rows) == 0 {
 		return rows
 	}
@@ -60,9 +60,4 @@ func gradientFrame(kind string, rows []string, width int, themes ...config.Theme
 		}
 	}
 	return rows
-}
-
-// GradientFrame colors an existing border without changing its geometry.
-func GradientFrame(kind string, rows []string, width int, theme config.Theme) []string {
-	return gradientFrame(kind, rows, width, theme)
 }

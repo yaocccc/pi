@@ -24,7 +24,7 @@ func TestSidebarTodoTaskTextAnimation(t *testing.T) {
 	}
 	rows := strings.Split(rendered, "\n")
 	wants := []string{
-		" " + animateTodoText("○ 1. Running step", ctx.TodoFrame),
+		" " + paint("○", "#888888") + " " + animateTodoText("1. Running step", ctx.TodoFrame),
 		paint(" ○ 2. Waiting step", theme.Dim),
 		" " + paint("✓", theme.Success) + " " + paint("3.", theme.Muted) + " " + paint("Finished step", theme.Muted),
 	}
@@ -49,9 +49,9 @@ func TestSidebarTodoAnimationScope(t *testing.T) {
 		for _, frame := range []int{5, 13} {
 			ctx.TodoFrame = frame
 			rows := strings.Split(Sidebar(session.State{}, nil, theme, 40, 40, ctx), "\n")
-			want := " " + animateTodoText("○ 1. Running step", frame)
+			want := " " + paint("○", "#888888") + " " + animateTodoText("1. Running step", frame)
 			if !strings.Contains(rows[layout.TodoStart], want) {
-				t.Fatal("icon, number and task must share the same sweep")
+				t.Fatal("circle must stay at rest while the number and task share the sweep")
 			}
 			if previous != nil {
 				if rows[layout.TodoStart] == previous[layout.TodoStart] || ansi.Strip(rows[layout.TodoStart]) != ansi.Strip(previous[layout.TodoStart]) {
@@ -125,7 +125,7 @@ func TestSidebarTodoLatestAndGeometry(t *testing.T) {
 			rendered := Sidebar(session.State{}, nil, theme, 36, 27, ctx)
 			for _, want := range []string{
 				" " + paint("✓", theme.Success) + " " + paint("3.", theme.Muted) + " " + paint("Third step", theme.Muted),
-				" " + animateTodoText("○ 4. Fourth step", ctx.TodoFrame),
+				" " + paint("○", "#888888") + " " + animateTodoText("4. Fourth step", ctx.TodoFrame),
 				paint(" ○ 5. Fifth step", dimColor),
 			} {
 				if !strings.Contains(rendered, want) {

@@ -18,7 +18,7 @@ import { estimateCompactionPricing } from "./pricing.ts";
 import {
 	ONLINE_STATE_ENTRY, appendOnlineState, recordBoundary, recordCompaction,
 	recordCompletedPlanHandoff, recordCorrection, recordProviderRequest, restoreOnlineState,
-	type OnlineState, type ProgressSummary,
+	type ProgressSummary,
 } from "./state.ts";
 import {
 	estimateProjectedContextTokens, OCC_FILE_TRACKING, prepareCompaction,
@@ -170,22 +170,6 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				disabledByUs = false;
 			}
 		};
-		// Never trust a proposed draft: every operation starts from the committed branch.
-		// Also reconcile native/manual compactions, which do not have our same-batch state.
-		const reconcile = (ctx: ExtensionContext): OnlineState => {
-			const branch = ctx.sessionManager.getBranch();
-			let state = restoreOnlineState(branch);
-			let stateIndex = -1;
-			for (let i = branch.length - 1; i >= 0; i--) {
-				const entry = branch[i];
-				if (entry.type === "custom" && entry.customType === ONLINE_STATE_ENTRY &&
-					JSON.stringify(restoreOnlineState([entry])) === JSON.stringify(state)) { stateIndex = i; break; }
-			}
-			for (const entry of branch.slice(stateIndex + 1)) {
-				if (entry.type === "compaction") state = recordCompaction(state, { debtTokens: 0, repaymentTokens: 0 });
-			}
-			return state;
-		};
 		const tokens = (ctx: ExtensionContext): number => {
 			const branch = ctx.sessionManager.getBranch();
 			return estimateProjectedContextTokens(buildSessionProjection(branch), branch).tokens;
@@ -197,7 +181,8 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				if (input.signal?.aborted || input.context.signal?.aborted) throw new Error("Plan update was aborted");
 				const steps = parsePlanSteps(input.steps);
 				if (!steps?.length) throw new Error("Plan must contain at least one valid step");
-				let state = reconcile(input.context);
+				// Never trust a proposed draft: restore from the committed branch.
+				let state = restoreOnlineState(input.context.sessionManager.getBranch());
 				const transition = analyzePlanTransition(state.plan, steps);
 				const completedIds = transition.completedSteps.map((step) => step.id);
 				if (completedIds.length) {
@@ -243,7 +228,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			// Count main-agent turns as the request-horizon proxy, not transport attempts.
 			// CacheWarmer replays onPayload/before_provider_request even while streaming
 			// or awaiting our summary; only the agent lifecycle may repay OCC debt.
-			if (eligible(ctx)) appendOnlineState(pi, recordProviderRequest(reconcile(ctx), tokens(ctx)));
+			if (eligible(ctx)) appendOnlineState(pi, recordProviderRequest(restoreOnlineState(ctx.sessionManager.getBranch()), tokens(ctx)));
 		});
 		pi.on("input", (event, ctx) => {
 			if (event.streamingBehavior && eligible(ctx) && !queueUncertain) {
@@ -258,11 +243,11 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			}
 			if (event.streamingBehavior === "steer" || event.text.startsWith("CORRECTION:")) {
 				cancel();
-				if (eligible(ctx)) appendOnlineState(pi, recordCorrection(reconcile(ctx)));
+				if (eligible(ctx)) appendOnlineState(pi, recordCorrection(restoreOnlineState(ctx.sessionManager.getBranch())));
 			} else if (event.source !== "extension" && eligible(ctx)) {
 				// Only external user input can hand off a completed task. Tool results,
 				// boundary continuations and extension-injected prompts are not new tasks.
-				const state = reconcile(ctx);
+				const state = restoreOnlineState(ctx.sessionManager.getBranch());
 				const next = recordCompletedPlanHandoff(state);
 				if (next !== state) { cancel(); appendOnlineState(pi, next); }
 			}
@@ -278,7 +263,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			queuedInputs.set(key, null);
 			if (ctx.signal?.aborted || queued.session !== identity(ctx) ||
 				!ctx.sessionManager.getBranch().some(entry => entry.id === queued.anchor)) return;
-			const state = reconcile(ctx);
+			const state = restoreOnlineState(ctx.sessionManager.getBranch());
 			const next = recordCompletedPlanHandoff(state);
 			if (next !== state) { cancel(); appendOnlineState(pi, next); }
 		});
@@ -294,7 +279,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 		});
 		pi.on("session_compact", (_event, ctx) => {
 			cancel();
-			if (ctx.sessionManager.getSessionFile()) appendOnlineState(pi, reconcile(ctx));
+			if (ctx.sessionManager.getSessionFile()) appendOnlineState(pi, restoreOnlineState(ctx.sessionManager.getBranch()));
 		});
 
 		pi.on("turn_end", (event, ctx) => {
@@ -308,7 +293,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				event.toolResults.some((item) => hasSuccessfulPlanResult(item, boundary.id)))) return;
 			// The native preparation MUST see real IDs, never a speculative preview tree.
 			if (event.entries.some((entry) => entry.type !== "custom")) return;
-			const state = reconcile(ctx);
+			const state = restoreOnlineState(ctx.sessionManager.getBranch());
 			const remaining = state.plan.filter((step) => step.status !== "completed");
 			if (!remaining.length) return;
 			const local = new AbortController();
@@ -397,7 +382,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 						if (controller === local) controller = undefined;
 						if (!valid(current) || !eligible(current)) return;
 						// Rebase accounting and the reminder on the latest committed plan.
-						const state = reconcile(current);
+						const state = restoreOnlineState(current.sessionManager.getBranch());
 						const remaining = state.plan.filter(step => step.status !== "completed");
 						const next = recordCompaction(state, {
 							debtTokens: decision.postCompactionTokens * (decision.incrementalCacheCostRatio ?? 0),

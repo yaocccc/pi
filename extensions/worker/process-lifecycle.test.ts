@@ -169,6 +169,58 @@ test("normal leader exit reaps resistant descendants before releasing ownership 
 	}
 });
 
+test("auxiliary stdout is complete at the byte limit and rejects overflow instead of truncating", async () => {
+	const result = await runCommand(process.execPath, ["-e", 'process.stdout.write("éé"); process.stderr.write("12345");'], process.cwd(), { maxBytes: 4 });
+	assert.equal(result.code, 0);
+	assert.equal(result.stdout.toString("utf8"), "éé", "the limit counts bytes without truncating a complete result");
+	assert.equal(result.stderr.toString("utf8"), "1234", "diagnostic stderr remains bounded");
+	await assert.rejects(
+		runCommand(process.execPath, ["-e", 'process.stdout.write("éé!");'], process.cwd(), { maxBytes: 4 }),
+		/stdout.*超出上限.*4/,
+	);
+});
+
+test("auxiliary stdout overflow across chunks waits for resistant child cleanup", { timeout: 6_000 }, async (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "worker-command-overflow-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const next = path.join(dir, "next");
+	const script = `
+		process.on("SIGTERM",()=>{});
+		let written = false;
+		setInterval(() => {
+			if (!written && require("node:fs").existsSync(${JSON.stringify(next)})) {
+				written = true;
+				process.stdout.write("!");
+			}
+		}, 10);
+		process.stdout.write("éé");
+	`;
+	const controller = new AbortController();
+	const work = runCommand(process.execPath, ["-e", script], dir, { maxBytes: 4, timeoutMs: 4_000, signal: controller.signal })
+		.then(() => undefined, (error: Error) => error);
+	const children = (globalThis as any)[Symbol.for("pi.worker.commandChildren.v1")] as Set<import("node:child_process").ChildProcess>;
+	const child = [...children][0];
+	assert.ok(child?.pid);
+	let chunks = 0;
+	child.stdout!.on("data", () => { chunks++; });
+	try {
+		await until(() => chunks === 1);
+		// Only release the second write after the first data event, so the test
+		// exercises cumulative accounting rather than pipe chunking heuristics.
+		fs.writeFileSync(next, "");
+		const error = await work;
+		assert.match(error?.message ?? "", /stdout.*超出上限.*4/);
+		assert.doesNotMatch(error!.message, /FORCE_SETTLE/);
+		assert.equal(chunks, 2);
+		assert.equal(processRunning(child.pid), false, "overflow must reject only after cleanup");
+		assert.equal(children.has(child), false, "confirmed close releases exit-fallback ownership");
+	} finally {
+		controller.abort();
+		try { child.kill("SIGKILL"); } catch {}
+		await work;
+	}
+});
+
 test("auxiliary command cancellation and timeout await resistant child cleanup", { timeout: 8_000 }, async (t) => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "worker-command-cleanup-"));
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
