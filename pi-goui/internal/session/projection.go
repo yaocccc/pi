@@ -27,6 +27,11 @@ func (r *record) project() *recordProjection {
 		return p
 	}
 	p.visible = true
+	// Background fetch completion is useful to the agent, not the transcript.
+	// Keep the record and its ordinal; suppress only its display blocks.
+	if r.summary == "" && m.Role == "custom" && m.CustomType == "web-search-content-ready" {
+		return p
+	}
 	add := func(t Item, busy, active bool) {
 		p.blocks = append(p.blocks, projectedBlock{item: t, busy: busy, active: active})
 	}

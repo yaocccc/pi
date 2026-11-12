@@ -24,11 +24,12 @@ type questionAnswer struct {
 	Completed     bool     `json:"completed"`
 }
 type questionnaire struct {
-	Questions []question       `json:"questions"`
-	Review    bool             `json:"review"`
-	Answers   []questionAnswer `json:"answers"`
-	Active    int              `json:"-"`
-	Input     bool             `json:"-"`
+	Questions     []question       `json:"questions"`
+	Review        bool             `json:"review"`
+	Answers       []questionAnswer `json:"answers"`
+	Active        int              `json:"-"`
+	Input         bool             `json:"-"`
+	MessageOffset int              `json:"-"`
 }
 
 func (q *questionnaire) activeMulti() bool {
@@ -64,6 +65,7 @@ func (q *questionnaire) tabs(width int) string {
 }
 func (m *Model) refreshQuestionnaire(d *dialog) {
 	q := d.questionnaire
+	previousMessage := d.message
 	d.title = "回答问题"
 	d.options = nil
 	if q.Active == len(q.Questions) {
@@ -98,11 +100,23 @@ func (m *Model) refreshQuestionnaire(d *dialog) {
 		}
 		d.options = append(d.options, option{Label: custom})
 	}
+	if d.message != previousMessage {
+		q.MessageOffset = 0
+	}
 	m.resizeDialog(d)
 }
 func (m *Model) questionnaireKey(t *tab, d *dialog, k tea.KeyPressMsg) tea.Cmd {
 	q := d.questionnaire
 	key := k.String()
+	if key == "pgup" || key == "pgdown" {
+		p := m.popupGeometry(d)
+		delta := max(1, len(p.message))
+		if key == "pgup" {
+			delta = -delta
+		}
+		q.MessageOffset = min(max(0, p.messageStart+delta), max(0, p.messageTotal-len(p.message)))
+		return nil
+	}
 	if key == "esc" {
 		if q.Input {
 			q.Input = false

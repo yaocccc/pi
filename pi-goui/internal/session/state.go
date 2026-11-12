@@ -14,6 +14,7 @@ type content struct {
 }
 type message struct {
 	Role                     string          `json:"role"`
+	CustomType               string          `json:"customType,omitempty"`
 	Content                  json.RawMessage `json:"content"`
 	Details                  json.RawMessage `json:"details,omitempty"`
 	partial                  bool
