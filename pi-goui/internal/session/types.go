@@ -53,6 +53,9 @@ type State struct {
 	Model                         ModelInfo
 	Stats                         Stats
 	Items                         []Item
+	Plan                          []PlanStep
+	PlanRevision                  uint64
+	livePlanEntry, livePlanTool   string
 	// MessageCount includes full-branch message records and summary boundaries,
 	// independent of content blocks, wrapping, folding or thinking visibility.
 	MessageCount       int

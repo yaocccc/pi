@@ -58,7 +58,7 @@ func (m *Model) overlayToast(t *tab, view string, now time.Time) string {
 		if y >= len(rows) {
 			break
 		}
-		rows[y] = ansi.Cut(rows[y], 0, box.x) + line + ansi.Cut(rows[y], box.x+box.width, m.mainWidth())
+		rows[y] = popupBackdropSlice(rows[y], 0, box.x) + line + popupBackdropSlice(rows[y], box.x+box.width, m.mainWidth())
 	}
 	return strings.Join(rows, "\n")
 }

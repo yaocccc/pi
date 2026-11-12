@@ -1,4 +1,6 @@
 import { estimateToolTokens } from '../shared/token-estimate.ts';
+import { StringDecoder } from "node:string_decoder";
+import { WorkerTranscriptWriter } from "./transcript.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { present } from "./callbacks.ts";
 import { captureWorkerSession, workerSessionArgs, type WorkerSessionSnapshot } from "./session.ts";
@@ -115,7 +117,7 @@ export async function runPiWorker(
 	timeoutMs: number,
 	concurrencyLimit: number,
 	onProgress?: (progress: ChildProgress) => void,
-	control?: { invocation?: { command: string; args: string[] }; managedTimeout?: boolean; owner?: WorkerOwner; sessionSnapshot?: WorkerSessionSnapshot },
+	control?: { invocation?: { command: string; args: string[] }; managedTimeout?: boolean; owner?: WorkerOwner; sessionSnapshot?: WorkerSessionSnapshot; transcriptRoot?: string },
 ): Promise<ChildResult> {
 	const owner = control?.owner ?? defaultOwner;
 	const activities: WorkerUiActivity[] = [];
@@ -128,6 +130,7 @@ export async function runPiWorker(
 	const toolTokens = (id: string, result: any): number | undefined => Array.isArray(result?.content)
 		? (toolArgumentTokens.get(id) ?? 0) + estimateTokens({ ...result, role: 'toolResult' })
 		: undefined;
+	let transcript: WorkerTranscriptWriter | undefined;
 	let phase = "等待执行槽位";
 	let toolCalls = 0;
 	let lastEmitAt = 0;
@@ -144,7 +147,7 @@ export async function runPiWorker(
 		const now = Date.now();
 		if (!force && now - lastEmitAt < 150) return;
 		lastEmitAt = now;
-		present(() => onProgress?.({ phase, activities: activities.map((item) => ({ ...item })), toolCalls, usage: usageSnapshot(), actualModel: undefined }));
+		present(() => onProgress?.({ phase, activities: activities.map((item) => ({ ...item })), toolCalls, usage: usageSnapshot(), actualModel: undefined, transcript: transcript ? { ...transcript.descriptor } : undefined }));
 	};
 	const setPhase = (value: string, status: WorkerUiActivityStatus = "running") => {
 		phase = value;
@@ -211,9 +214,12 @@ export async function runPiWorker(
 			const source = signal?.aborted ? terminationSource(signal) : "owner_shutdown";
 			return { exitCode: 1, stderr: "", assistantText: "", errorMessage: `Worker 启动前已终止 [source=${source} parent=${process.pid} owner=${owner.id}]`, aborted: source !== "task_timeout", timedOut: source === "task_timeout", termination: { stage: "spawn", code: source, source, parentPid: process.pid, ownerId: owner.id }, truncated: false, activities, toolCalls, usage: usageSnapshot() };
 		}
+		transcript = new WorkerTranscriptWriter({ cwd, prompt, snapshot: task.sessionMode === "fork" ? control?.sessionSnapshot : undefined, root: control?.transcriptRoot });
+		emit(true);
 		return await new Promise<ChildResult>((resolve) => {
 			let diagnostic: ChildResult["termination"];
 			let stdoutBuffer = "";
+			const stdoutDecoder = new StringDecoder("utf8");
 			let stderr = "";
 			let assistantText = "";
 			let actualProvider: string | undefined;
@@ -259,6 +265,7 @@ export async function runPiWorker(
 				if (groupCheckTimer) clearTimeout(groupCheckTimer);
 				signal?.removeEventListener("abort", abortHandler);
 				if (childClosed) forgetChild(owner, child);
+				transcript?.finish(timedOut ? "timed_out" : aborted ? "cancelled" : exitCode !== 0 || errorMessage ? "failed" : "completed");
 				phase = aborted ? "已取消" : timedOut ? "已超时" : exitCode === 0 ? "子进程已完成" : "子进程失败";
 				for (const activity of activities) {
 					if (activity.status !== "running") continue;
@@ -268,7 +275,7 @@ export async function runPiWorker(
 				emit(true);
 				const usage = usageSnapshot();
 				usage.turns = Math.max(usage.turns, settledUsage.turns);
-				resolve({ exitCode, stderr: stderr.slice(-16_384), assistantText, actualProvider, actualModel, stopReason, errorMessage, termination: diagnostic, aborted, timedOut, truncated, activities: activities.map((item) => ({ ...item })), toolCalls, usage });
+				resolve({ transcript: transcript ? { ...transcript.descriptor } : undefined, exitCode, stderr: stderr.slice(-16_384), assistantText, actualProvider, actualModel, stopReason, errorMessage, termination: diagnostic, aborted, timedOut, truncated, activities: activities.map((item) => ({ ...item })), toolCalls, usage });
 			};
 			const checkClosedGroup = () => {
 				if (settled || closedCode === undefined) return;
@@ -284,6 +291,7 @@ export async function runPiWorker(
 				if (settled || (terminating && !cleaningDescendants)) return;
 				const alreadyTerminating = terminating;
 				terminating = true;
+				if (reason === "output") transcript?.incomplete("protocol_error");
 				cleaningDescendants = reason === "cleanup";
 				if (!cleaningDescendants) {
 					const source = reason === "abort" ? terminationSource(signal) : reason;
@@ -319,6 +327,8 @@ export async function runPiWorker(
 			if (!control?.managedTimeout) timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
 			if (signal?.aborted) abortHandler(); else signal?.addEventListener("abort", abortHandler, { once: true });
 			const processEvent = (event: any) => {
+				if (!event || typeof event !== "object" || typeof event.type !== "string") { transcript?.incomplete("protocol_error"); return; }
+				transcript?.record(event);
 				recordThinking(event);
 				if (event.type === "turn_start") {
 					currentTurn = Math.max(currentTurn, Number(event.turnIndex) + 1 || settledUsage.turns + 1);
@@ -345,7 +355,8 @@ export async function runPiWorker(
 					errorMessage ||= event.message.errorMessage;
 					const reported = messageUsage(event.message, 1);
 					if (!reported.input) reported.input = streamUsage.input;
-					if (!reported.output) reported.output = streamUsage.output || estimateMessageTokens(event.message);
+					// Match main-session output: explicit usage (even zero) is authoritative.
+					if (event.message.usage == null) reported.output = Math.max(streamUsage.output, estimateMessageTokens(event.message));
 					if (!reported.cacheRead) reported.cacheRead = streamUsage.cacheRead;
 					if (!reported.cacheWrite) reported.cacheWrite = streamUsage.cacheWrite;
 					if (!reported.contextTokens) reported.contextTokens = streamUsage.contextTokens;
@@ -387,7 +398,7 @@ export async function runPiWorker(
 					terminate("output");
 					return;
 				}
-				stdoutBuffer += chunk.toString("utf8");
+				stdoutBuffer += stdoutDecoder.write(chunk);
 				const lines = stdoutBuffer.split("\n");
 				stdoutBuffer = lines.pop() || "";
 				if (Buffer.byteLength(stdoutBuffer, "utf8") > MAX_WORKER_EVENT_LINE_BYTES) {
@@ -406,7 +417,7 @@ export async function runPiWorker(
 						break;
 					}
 					try { processEvent(JSON.parse(line)); }
-					catch { /* ignore non-JSON diagnostics */ }
+					catch { transcript?.incomplete("protocol_error"); /* keep execution independent of logging */ }
 				}
 			});
 			child.stderr!.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-65_536); });
@@ -429,8 +440,9 @@ export async function runPiWorker(
 					diagnostic = { stage: "process", code: exitSignal ?? `EXIT_${code ?? "UNKNOWN"}`, source: "child_exit", parentPid: process.pid, workerPid: child.pid, ownerId: owner.id };
 					errorMessage ||= `Worker 子进程异常退出 [code=${diagnostic.code} source=child_exit parent=${process.pid} worker=${child.pid ?? "unknown"} owner=${owner.id}]`;
 				}
+				stdoutBuffer += stdoutDecoder.end();
 				if (stdoutBuffer.trim()) {
-					try { processEvent(JSON.parse(stdoutBuffer)); } catch { /* ignore trailing diagnostics */ }
+					try { processEvent(JSON.parse(stdoutBuffer)); } catch { transcript?.incomplete("protocol_error"); }
 				}
 				reapDescendants();
 				if (terminating) checkClosedGroup();
@@ -438,6 +450,7 @@ export async function runPiWorker(
 			});
 		});
 	} finally {
+		transcript?.finish("failed");
 		release?.();
 		await fs.promises.rm(tempDir, { recursive: true, force: true });
 	}
@@ -520,10 +533,10 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 		signal,
 		config.defaultTimeoutMs,
 		config.maxConcurrentWorkers,
-		(progress) => report({ phase: progress.phase, activities: progress.activities, toolCalls: progress.toolCalls, usage: progress.usage }),
+		(progress) => report({ phase: progress.phase, activities: progress.activities, toolCalls: progress.toolCalls, usage: progress.usage, transcript: progress.transcript }),
 		{ managedTimeout, owner, sessionSnapshot },
 	);
-	report({ phase: "校验结果与修改范围", activities: child.activities, toolCalls: child.toolCalls, usage: child.usage });
+	report({ phase: "校验结果与修改范围", activities: child.activities, toolCalls: child.toolCalls, usage: child.usage, transcript: child.transcript });
 	const parsed = parseStructuredResult(child.assistantText);
 	let delta = { changed: [] as string[] };
 	let deltaError: string | undefined;
@@ -560,6 +573,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	}
 	return {
 		status,
+		transcript: child.transcript,
 		execution: { ...baseExecution(task, route, 1, warnings), actual_model_id: child.actualProvider && child.actualModel ? `${child.actualProvider}/${child.actualModel}` : route.modelId, actual_thinking: route.thinking, usage: child.usage, exit_code: child.exitCode, timed_out: child.timedOut, cancelled: child.aborted, termination: child.termination },
 		failure,
 		summary,

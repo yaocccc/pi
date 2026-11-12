@@ -67,6 +67,35 @@ func TestQuestionnaireFlow(t *testing.T) {
 		t.Fatal("final confirmation did not close")
 	}
 }
+func TestQuestionnaireCustomEditing(t *testing.T) {
+	m, tab, d := openQuestionnaire(t)
+	d.selected = 2
+	m.submitQuestion(tab, d)
+	press := func(code rune) { m.dialogKey(tab, tea.KeyPressMsg{Code: code}, "") }
+	m.dialogKey(tab, tea.KeyPressMsg{Code: 'a', Text: "abc"}, "")
+	press(tea.KeyLeft)
+	press(tea.KeyBackspace)
+	if d.editor.Value() != "ac" || d.editor.CursorOffset() != 1 {
+		t.Fatalf("left/backspace failed: %q at %d", d.editor.Value(), d.editor.CursorOffset())
+	}
+	press(tea.KeyDelete)
+	if d.editor.Value() != "a" {
+		t.Fatalf("delete failed: %q", d.editor.Value())
+	}
+	press(tea.KeyHome)
+	if d.editor.CursorOffset() != 0 {
+		t.Fatal("home failed")
+	}
+	press(tea.KeyRight)
+	if d.editor.CursorOffset() != 1 || !d.questionnaire.Input || d.questionnaire.Active != 0 {
+		t.Fatal("right moved question instead of cursor")
+	}
+	press(tea.KeyEnter)
+	if d.questionnaire.Input || d.questionnaire.Answers[0].CustomAnswers[0] != "a" {
+		t.Fatal("edited custom answer not submitted")
+	}
+}
+
 func TestQuestionnaireCustomAndCancel(t *testing.T) {
 	m, tab, d := openQuestionnaire(t)
 	q := d.questionnaire

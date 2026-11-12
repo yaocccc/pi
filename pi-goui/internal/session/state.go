@@ -39,6 +39,8 @@ type entry struct {
 	ParentID      *string `json:"parentId"`
 	Message       json.RawMessage
 	Summary, Name string
+	CustomType    string
+	Data          json.RawMessage
 }
 
 func keyOf(m message) string {
@@ -105,6 +107,8 @@ func (s *State) LoadState(raw json.RawMessage) error {
 		s.runActive = false
 		s.Items = nil
 		s.MessageCount = 0
+		s.setPlan(nil)
+		s.livePlanEntry, s.livePlanTool = "", ""
 	}
 	s.ID = v.SessionID
 	s.File = v.SessionFile
@@ -233,11 +237,19 @@ func (s *State) LoadEntries(raw json.RawMessage) error {
 		}
 	}
 	var next []record
+	var plan []PlanStep
+	planCaughtUp := s.livePlanEntry == "" && s.livePlanTool == ""
 	keys := map[string]bool{}
 	persistedTools := map[string]bool{}
 	usedIDs := map[string]bool{}
 	for i := len(path) - 1; i >= 0; i-- {
 		e := path[i]
+		if steps, ok := planFromEntry(e); ok {
+			plan = steps
+		}
+		if e.ID == s.livePlanEntry {
+			planCaughtUp = true
+		}
 		switch e.Type {
 		case "message":
 			var m message
@@ -248,6 +260,16 @@ func (s *State) LoadEntries(raw json.RawMessage) error {
 				persistedTools[m.ToolCallID] = true
 				if len(m.Details) == 0 {
 					m.Details = priorDetails[m.ToolCallID]
+				}
+			}
+			if m.Role == "toolResult" {
+				if m.ToolCallID == s.livePlanTool {
+					planCaughtUp = true
+				}
+				if m.ToolName == "update_plan" && (m.IsError == nil || !*m.IsError) {
+					if steps, ok := parsePlan(m.Details); ok {
+						plan = steps
+					}
 				}
 			}
 			k := keyOf(m)
@@ -281,6 +303,10 @@ func (s *State) LoadEntries(raw json.RawMessage) error {
 			remaining = append(remaining, r)
 		}
 	}
+	if branchChanged || planCaughtUp {
+		s.setPlan(plan)
+		s.livePlanEntry, s.livePlanTool = "", ""
+	}
 	s.live = remaining
 	s.records = next
 	s.leaf = leaf
@@ -304,7 +330,14 @@ func (s *State) LoadMessages(raw json.RawMessage) error {
 	for _, r := range s.live {
 		known[r.key] = true
 	}
+	var fallbackPlan []PlanStep
+	fallbackPlanFound := false
 	for _, m := range v.Messages {
+		if len(s.records) == 0 && s.livePlanEntry == "" && s.livePlanTool == "" && m.Role == "toolResult" && m.ToolName == "update_plan" && (m.IsError == nil || !*m.IsError) {
+			if steps, ok := parsePlan(m.Details); ok {
+				fallbackPlan, fallbackPlanFound = steps, true
+			}
+		}
 		k := keyOf(m)
 		if known[k] {
 			continue
@@ -315,11 +348,23 @@ func (s *State) LoadMessages(raw json.RawMessage) error {
 		s.live = append(s.live, record{id: id, key: k, msg: m})
 		known[k] = true
 	}
+	if fallbackPlanFound {
+		s.setPlan(fallbackPlan)
+	}
 	s.project()
 	return nil
 }
 func (s *State) upsert(m message, finished bool) {
 	s.init()
+	if finished && m.Role == "toolResult" && m.ToolName == "update_plan" && (m.IsError == nil || !*m.IsError) {
+		if steps, ok := parsePlan(m.Details); ok {
+			revision := s.PlanRevision
+			s.setPlan(steps)
+			if s.livePlanEntry == "" && s.PlanRevision != revision {
+				s.livePlanTool = m.ToolCallID
+			}
+		}
+	}
 	if m.Role == "toolResult" {
 		m.partial = !finished
 	}
@@ -419,6 +464,13 @@ func (s *State) Apply(raw json.RawMessage) bool {
 	case "thinking_level_changed":
 		s.Thinking = e.Level
 	case "entry_appended":
+		var entry entry
+		if json.Unmarshal(e.Entry, &entry) == nil {
+			if steps, ok := planFromEntry(entry); ok {
+				s.setPlan(steps)
+				s.livePlanEntry, s.livePlanTool = entry.ID, ""
+			}
+		}
 		refresh = true
 	case "message_start", "message_end":
 		var m message
@@ -503,6 +555,18 @@ func (s *State) Apply(raw json.RawMessage) bool {
 		r.projection = nil
 		s.project()
 	case "tool_execution_start", "tool_execution_update", "tool_execution_end":
+		if e.Type == "tool_execution_end" && e.ToolName == "update_plan" && (e.IsError == nil || !*e.IsError) {
+			var result message
+			if json.Unmarshal(e.Result, &result) == nil && (result.IsError == nil || !*result.IsError) {
+				if steps, ok := parsePlan(result.Details); ok {
+					revision := s.PlanRevision
+					s.setPlan(steps)
+					if s.livePlanEntry == "" && s.PlanRevision != revision {
+						s.livePlanTool = e.ToolCallID
+					}
+				}
+			}
+		}
 		// Nested calls belong to their parent's result/details, not the
 		// transcript. Caching them here leaves orphan tools at the end of
 		// every subsequent turn because no top-level message references them.

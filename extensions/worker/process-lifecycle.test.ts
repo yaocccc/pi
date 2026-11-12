@@ -21,11 +21,13 @@ test("tool activities estimate complete payloads once across duplicate completio
 	const owner = createWorkerOwner();
 	const snapshots: ChildProgress[] = [];
 	try {
-		await launch(owner, "tool-tokens", undefined, 10_000, (progress) => snapshots.push(progress));
+		const result = await launch(owner, "tool-tokens", undefined, 10_000, (progress) => snapshots.push(progress));
 		const activity = snapshots.at(-1)!.activities.find((item) => item.id === "tool:read-1")!;
 		assert.equal(activity.contextSizeEstimate, Math.ceil(JSON.stringify({ path: "example.ts" }).length / 4) + 750);
 		assert.ok(activity.detail!.length < 3000, "count uses full result, not preview");
 		assert.equal(snapshots.at(-1)!.toolCalls, 1);
+		assert.equal(result.usage.output, 10, "only model output counts; tool results are excluded");
+		assert.equal(snapshots.at(-1)!.usage.output, 10);
 	} finally { beginWorkerShutdown(owner); }
 });
 

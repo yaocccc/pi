@@ -22,7 +22,7 @@ const SidebarHistoryRows = 1
 
 type SessionRow struct {
 	ID, Name, Status string
-	Active           bool
+	Active, Hovered  bool
 }
 type GitStatus struct {
 	Branch                                 string
@@ -47,11 +47,15 @@ type SidebarContext struct {
 	History        []string
 	HistoryHovered []bool
 	HistoryOffset  int
+	Todo           []session.PlanStep
+	TodoScroll     int // Rows back from the latest steps; zero follows the end.
+	TodoFrame      int // Shared working-message animation frame.
 }
 type SidebarLayout struct {
 	DirectoryRow, ContextRow, StatsRow, QuotaRow, NewRow, SessionsStart, Capacity int
 	HistoryRow, HistoryStart, HistoryCount, HistoryOffset                         int
 	ModeRow                                                                       int
+	TodoRow, TodoStart, TodoCount, TodoOffset                                     int
 }
 
 func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
@@ -69,9 +73,15 @@ func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 		}
 		extra++
 	}
+	todoRow, todoCount := -1, min(10, len(context.Todo), max(0, height-(10+extra)-11-min(1, len(context.History))))
+	todoHeight := 0
+	if todoCount > 0 {
+		todoHeight = todoCount + 1 // Separator followed immediately by steps.
+		todoRow = height - 1 - todoHeight
+	}
 	historyRow := 10 + extra
 	// Keep only complete history entries and room for New session and one open-session card.
-	historyCount := min(5, len(context.History), max(0, (height-historyRow-8)/SidebarHistoryRows))
+	historyCount := min(5, len(context.History), max(0, (height-historyRow-todoHeight-8)/SidebarHistoryRows))
 	extra += historyCount * SidebarHistoryRows
 	newRow := SidebarNewRow + extra
 	start := SidebarSessionStart + extra
@@ -81,10 +91,12 @@ func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 	}
 	return SidebarLayout{
 		DirectoryRow: directoryRow, ContextRow: 4, StatsRow: 6, QuotaRow: quotaRow, ModeRow: modeRow,
+		TodoRow: todoRow, TodoStart: todoRow + 1, TodoCount: todoCount,
+		TodoOffset: max(0, len(context.Todo)-todoCount-max(0, context.TodoScroll)),
 		HistoryRow: historyRow, HistoryStart: historyRow + 2, HistoryCount: historyCount,
 		HistoryOffset: min(max(0, context.HistoryOffset), max(0, len(context.History)-historyCount)),
 		NewRow:        newRow, SessionsStart: start,
-		Capacity: max(0, (height-start-1)/SidebarSessionRows),
+		Capacity: max(0, (height-start-todoHeight-1)/SidebarSessionRows),
 	}
 }
 func contextValues(state session.State) (percent float64, used, total string) {
@@ -337,8 +349,56 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 	}
 	rows = append(rows, cell(""), cell(NewSessionLabel()), cell(""))
 	contentBottom := max(0, height-1)
-	for _, card := range sidebarSessionCards(sessions, inner, max(0, contentBottom-layout.SessionsStart)) {
+	sessionsBottom := contentBottom
+	if layout.TodoCount > 0 {
+		sessionsBottom = layout.TodoRow
+	}
+	for _, card := range sidebarSessionCards(sessions, inner, max(0, sessionsBottom-layout.SessionsStart)) {
 		rows = append(rows, cell(card))
+	}
+	if layout.TodoCount > 0 {
+		for len(rows) < layout.TodoRow {
+			rows = append(rows, cell(""))
+		}
+		rows = append(rows, separator())
+		for row := 0; row < layout.TodoCount; row++ {
+			step := ctx.Todo[layout.TodoOffset+row]
+			mark, markColor, textColor := "○", theme.Muted, theme.Text
+			switch step.Status {
+			case "completed":
+				mark, markColor, textColor = "✓", theme.Success, theme.Muted
+			}
+			contentWidth := inner
+			scrollbar := len(ctx.Todo) > layout.TodoCount && inner >= 2
+			if scrollbar {
+				contentWidth -= 2
+			}
+			number := fmt.Sprintf("%*d.", len(fmt.Sprint(len(ctx.Todo))), layout.TodoOffset+row+1)
+			body := paint(number, theme.Muted) + " " + paint(oneLine(step.Goal), textColor)
+			line := " " + paint(mark, markColor) + " " + body
+			if step.Status == "in_progress" || step.Status == "pending" {
+				dim := theme.Dim
+				if dim == "" {
+					dim = theme.Muted
+				}
+				line = paint(" "+mark+" "+number+" "+oneLine(step.Goal), dim)
+				if step.Status == "in_progress" {
+					// Sweep across the icon, number and task as one broad band.
+					line = " " + animateTodoText(mark+" "+number+" "+oneLine(step.Goal), ctx.TodoFrame)
+				}
+			}
+			line = fit(line, contentWidth)
+			if scrollbar {
+				thumbSize := max(1, layout.TodoCount*layout.TodoCount/len(ctx.Todo))
+				thumbStart := layout.TodoOffset * (layout.TodoCount - thumbSize) / (len(ctx.Todo) - layout.TodoCount)
+				bar := "│"
+				if row >= thumbStart && row < thumbStart+thumbSize {
+					bar = "┃"
+				}
+				line += strings.Repeat(" ", max(0, contentWidth-ansi.StringWidth(line))+1) + ScrollbarMark(bar)
+			}
+			rows = append(rows, cell(line))
+		}
 	}
 	for len(rows) < contentBottom {
 		rows = append(rows, cell(""))

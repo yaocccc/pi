@@ -180,8 +180,8 @@ func TestWorkerDetailsAuthoritativeAndTaskFolds(t *testing.T) {
 		}
 	}
 	parent := blockByID(t, doc, item.ID)
-	if parent.End != parent.Start+1 || !parent.Expanded {
-		t.Fatalf("only batch header should toggle: %+v", parent)
+	if parent.End <= parent.Start+1 || !parent.Expanded {
+		t.Fatalf("expanded worker body should toggle: %+v", parent)
 	}
 	for _, b := range doc.Blocks {
 		if b.Role == "workerTask" && (b.Foldable || !b.Expanded) {

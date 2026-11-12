@@ -30,6 +30,9 @@ type footerReplyMsg struct {
 }
 
 func (m *Model) footerHoverKind(t *tab) string {
+	if m.inspectorFullscreen() {
+		return ""
+	}
 	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || !m.sidebarHistory.pointerKnown {
 		return ""
 	}
@@ -51,6 +54,9 @@ func (m *Model) footerHoverKind(t *tab) string {
 }
 
 func (m *Model) footerTargetKind(t *tab) string {
+	if m.inspectorFullscreen() {
+		return ""
+	}
 	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || !m.sidebarHistory.pointerKnown {
 		return ""
 	}

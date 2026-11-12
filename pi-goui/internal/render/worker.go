@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"pi-goui/internal/config"
+	"pi-goui/internal/render/tooldetail"
 	"pi-goui/internal/session"
 )
 
@@ -452,7 +453,12 @@ func workerLayout(item session.Item, theme config.Theme, opts Options, width int
 		detail = frame(detail, title, cardWidth, "worker", false, width, theme)
 	}
 	rows = append(rows, detail...)
-	for _, b := range children {
+	blocks[0].End = len(rows)
+	tasks := tooldetail.WorkerTasks(item)
+	for i, b := range children {
+		if i < len(tasks) && tasks[i].Key != "" {
+			b.InspectorParent, b.InspectorTask = item.ID, tasks[i].Key
+		}
 		b.Start += offset
 		b.End += offset
 		blocks = append(blocks, b)

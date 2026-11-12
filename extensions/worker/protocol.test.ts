@@ -62,6 +62,18 @@ test("title survives schema, execution and UI snapshots without replacing object
 	} finally { await h.close(); }
 });
 
+test("host transcript locator survives completion without progress and result compaction", async () => {
+	const transcript = { version: 1 as const, id: "12345678-1234-4234-8234-123456789abc" };
+	const h = harness(async () => ({ ...complete, transcript }));
+	try {
+		const response = await h.call({ tasks: [task] });
+		assert.deepEqual(response.details.tasks[0].transcript, transcript);
+		assert.notEqual(response.details.tasks[0].transcript, transcript);
+		const continued = await h.call({ batchId: payload(response).batchId });
+		assert.deepEqual(continued.details.tasks[0].transcript, transcript);
+	} finally { await h.close(); }
+});
+
 test("only tasks-array starts, continuations and cancellations are accepted", () => {
 	for (const input of [{ tasks: [task] }, { tasks: [task, task] }, { tasks: Array(12).fill(task) }, { batchId: "batch" }, { batchId: "batch", cancel: true }]) {
 		assert.doesNotThrow(() => validateWorkerInput(input));

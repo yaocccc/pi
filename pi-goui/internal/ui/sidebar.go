@@ -10,7 +10,15 @@ import (
 
 func (m *Model) sidebarContext() render.SidebarContext {
 	directory := m.tabDirectory(m.current())
-	context := render.SidebarContext{Directory: directory, Mode: m.codexFastMode(), Quota: &render.SidebarQuota{Now: time.Now()}}
+	context := render.SidebarContext{Directory: directory, Mode: m.codexFastMode(), Quota: &render.SidebarQuota{Now: time.Now()}, TodoFrame: m.frame}
+	if t := m.current(); t != nil {
+		if !t.todoExpiry.hidden || t.todoExpiry.revision != t.state.PlanRevision || t.todoExpiry.file != t.state.File {
+			context.Todo = t.state.Plan
+		}
+		if t.todoRevision == t.state.PlanRevision {
+			context.TodoScroll = t.todoScroll
+		}
+	}
 	if m.sidebarHistory.cwd == directory {
 		context.HistoryOffset = m.sidebarHistory.offset
 		for _, saved := range m.sidebarHistory.sessions {
@@ -46,6 +54,19 @@ func (m *Model) sidebarContext() render.SidebarContext {
 	}
 	return context
 }
+
+// Hover uses the same inner card rectangle and scroll offset as rendering.
+func (m *Model) sidebarSessionHovered(index int) bool {
+	t := m.current()
+	h := m.sidebarHistory
+	if t == nil || len(t.dialogs) > 0 || m.inspectorOpen() || m.codexFastPopupVisible() || !h.pointerKnown || m.sidebarWidth() == 0 || h.pointerX < m.mainWidth()+2 || h.pointerX >= m.width-2 {
+		return false
+	}
+	layout := m.sidebarLayout()
+	row := h.pointerY - layout.SessionsStart
+	return row >= 0 && row < layout.Capacity*render.SidebarSessionRows && row/render.SidebarSessionRows+m.sidebarOffset == index
+}
+
 func (m *Model) sidebarLayout() render.SidebarLayout {
 	return render.SidebarGeometry(m.height, m.sidebarContext())
 }

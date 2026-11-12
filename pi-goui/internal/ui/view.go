@@ -18,8 +18,20 @@ import (
 const transcriptTop = 0
 
 func (m *Model) sidebarWidth() int {
+	if m.inspectorOpen() {
+		if m.width < 60 {
+			return 0
+		}
+		if m.panelResize.inspector > 0 {
+			return min(m.panelResize.inspector, m.width-40)
+		}
+		return min(60, m.width/3)
+	}
 	if m.width < 96 || m.height < 20 {
 		return 0
+	}
+	if m.panelResize.sidebar > 0 {
+		return min(m.panelResize.sidebar, m.width-40)
 	}
 	return 32
 }
@@ -135,6 +147,7 @@ func (m *Model) View() tea.View {
 		for i := range visible {
 			visible[i] = m.selectionLine(t, visible[i], offset+i)
 		}
+		m.overlayToolInspect(visible)
 		text := strings.Join(visible, "\n")
 		if len(t.state.Items) == 0 && !m.showStartupInfo(t) {
 			text = m.paint(welcomeText, theme.Muted)
@@ -165,6 +178,9 @@ func (m *Model) View() tea.View {
 		main = top + "\n" + m.statusLine(t, m.workingLine(t)) + "\n" + m.editorFrame(&backdrop)
 	}
 	main = fitBox(main, w, m.height)
+	if m.inspectorFullscreen() {
+		main = m.inspectorView()
+	}
 	main = m.overlayFooterHover(t, main)
 	main = m.overlayToast(t, main, time.Now())
 	main = m.overlayPopup(t, main)
@@ -188,16 +204,23 @@ func (m *Model) View() tea.View {
 			if other.unread > 0 {
 				status += fmt.Sprintf(" +%d", other.unread)
 			}
-			rows = append(rows, render.SessionRow{ID: fmt.Sprint(i + m.sidebarOffset + 1), Name: session.DisplayName(other.state), Status: status, Active: other == t})
+			rows = append(rows, render.SessionRow{ID: fmt.Sprint(i + m.sidebarOffset + 1), Name: session.DisplayName(other.state), Status: status, Active: other == t, Hovered: m.sidebarSessionHovered(i + m.sidebarOffset)})
 		}
-		side := render.Sidebar(t.state, rows, theme, sw, m.height, m.sidebarContext())
+		side := ""
+		if m.inspectorOpen() {
+			side = m.inspectorView()
+		} else {
+			side = render.Sidebar(t.state, rows, theme, sw, m.height, m.sidebarContext())
+		}
 		mainLines, sideLines := strings.Split(main, "\n"), strings.Split(side, "\n")
 		for i := range mainLines {
 			mainLines[i] += sideLines[i]
 		}
 		main = strings.Join(mainLines, "\n")
 	}
-	main = m.overlaySidebarHistoryTooltip(t, main)
+	if !m.inspectorOpen() {
+		main = m.overlaySidebarHistoryTooltip(t, main)
+	}
 	main = m.overlayCodexFast(main)
 	view := tea.NewView(main)
 	view.Cursor = m.inputCursor(t)
@@ -215,6 +238,9 @@ func (m *Model) View() tea.View {
 // inputCursor uses the same cell offsets and clipping as the rendered input.
 // A painted cursor alone does not update the terminal's IME anchor.
 func (m *Model) inputCursor(t *tab) *tea.Cursor {
+	if m.inspectorFullscreen() && len(t.dialogs) == 0 {
+		return nil
+	}
 	a := t.editor.Area
 	x, y := 2, m.editorTop(t)+1
 	width, height := max(1, m.mainWidth()-4), m.editorContentHeight(t)
@@ -258,13 +284,19 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	if m.beginPanelResize(v) {
+		return nil
+	}
 	if m.clickCodexFast(v.X, v.Y) {
 		return nil
 	}
 	if cmd, handled := m.clickFooterPopup(t, v.X, v.Y); handled {
 		return cmd
 	}
-	if m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
+	if m.inspectorClick(v) {
+		return nil
+	}
+	if !m.inspectorOpen() && m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
 		layout := m.sidebarLayout()
 		if v.Y == layout.DirectoryRow && v.X >= m.mainWidth()+2 && v.X < m.width-2 {
 			return m.openCwd(t)
@@ -281,6 +313,24 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 		row := v.Y - layout.SessionsStart
 		idx := row/render.SidebarSessionRows + m.sidebarOffset
 		if row >= 0 && row < layout.Capacity*render.SidebarSessionRows && idx < len(m.tabs) {
+			start, length := render.SidebarSessionCloseButton(max(0, m.sidebarWidth()-4))
+			closeX := m.mainWidth() + 2 + start
+			if len(t.dialogs) == 0 && row%render.SidebarSessionRows == 0 && length > 0 && v.X >= closeX && v.X < closeX+length {
+				target := m.tabs[idx]
+				if target.state.Busy || target.state.Compacting || target.sending || target.awaitingStart {
+					focus := m.activate(idx)
+					closeCmd := m.requestCloseSession(target, false)
+					// A background task may already be asking a question. Show
+					// the close confirmation first, preserving it on cancellation.
+					if n := len(target.dialogs); n > 1 {
+						confirmation := target.dialogs[n-1]
+						copy(target.dialogs[1:], target.dialogs[:n-1])
+						target.dialogs[0] = confirmation
+					}
+					return tea.Batch(focus, closeCmd, m.focus(target))
+				}
+				return m.requestCloseSession(target, false)
+			}
 			return m.activate(idx)
 		}
 		return nil
@@ -309,6 +359,15 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 		t.noteScroll()
 		t.follow = true
 		m.clampScroll(t)
+		return nil
+	}
+	if id, rect, ok := m.toolInspectTarget(v.X, v.Y); ok && rect.contains(v.X, v.Y) {
+		for _, block := range t.doc.Blocks {
+			if block.ID == id && block.InspectorParent != "" && block.InspectorTask != "" {
+				return m.openWorkerSession(t, block.InspectorParent, block.InspectorTask)
+			}
+		}
+		m.openInspector(id)
 		return nil
 	}
 	m.beginSelection(t, v)

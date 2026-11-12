@@ -28,7 +28,7 @@ func popupFilter(d *dialog) bool {
 	if d.questionnaire != nil {
 		return d.questionnaire.Input
 	}
-	return d.kind != "confirm" && d.kind != "close" && d.kind != "resume" && d.kind != "help" && d.kind != "session-delete"
+	return d.kind != "confirm" && d.kind != "close" && d.kind != "resume" && d.kind != "help" && d.kind != "session-delete" && d.kind != "session-send-confirm"
 }
 func (m *Model) popupGeometry(d *dialog) popupLayout {
 	p := popupLayout{width: min(72, max(1, m.mainWidth()-4)), help: d.kind == "help", textOnly: popupTextOnly(d), framed: true}

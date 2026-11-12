@@ -120,6 +120,7 @@ func (m *Model) transcriptPoint(t *tab, x, y int) textPoint {
 	return textPoint{row, min(max(0, x), max(0, m.mainWidth()-1))}
 }
 func (m *Model) beginSelection(t *tab, v tea.Mouse) {
+	m.inspector.selection = transcriptSelection{}
 	t.selection = transcriptSelection{}
 	if m.height < 8 || v.Mod&tea.ModShift != 0 || v.X < 0 || v.X >= m.mainWidth() || v.Y < transcriptTop || v.Y >= m.transcriptHeight(t)+transcriptTop {
 		return
@@ -132,6 +133,12 @@ func (m *Model) beginSelection(t *tab, v tea.Mouse) {
 	t.selection = transcriptSelection{anchor: point, end: point, dragging: true, document: t.doc.Text, lines: lines, content: t.doc.Content}
 }
 func (m *Model) mouseMotion(v tea.Mouse) {
+	if m.movePanelResize(v) {
+		return
+	}
+	if m.inspectorMotion(v) {
+		return
+	}
 	t := m.current()
 	if t == nil || !t.selection.dragging {
 		return
@@ -158,6 +165,14 @@ func (m *Model) mouseMotion(v tea.Mouse) {
 	}
 }
 func (m *Model) mouseRelease(v tea.Mouse) tea.Cmd {
+	if m.panelResize.dragging {
+		m.movePanelResize(tea.Mouse{X: v.X, Y: v.Y, Button: tea.MouseLeft})
+		m.finishPanelResize()
+		return nil
+	}
+	if cmd, ok := m.inspectorRelease(v); ok {
+		return cmd
+	}
 	t := m.current()
 	if t == nil || !t.selection.dragging {
 		return nil
@@ -199,13 +214,9 @@ func (m *Model) mouseRelease(v tea.Mouse) tea.Cmd {
 			return nil
 		}
 	}
-	for _, b := range t.doc.Blocks {
-		if b.Foldable && row >= b.Start && row < b.End {
-			t.folds[b.ID] = !b.Expanded
-			t.dirty = true
-			m.document(t)
-			break
-		}
+	if toggleDocumentBlock(t.doc, row, t.folds) {
+		t.dirty = true
+		m.document(t)
 	}
 	return nil
 }

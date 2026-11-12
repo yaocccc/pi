@@ -15,8 +15,10 @@ type editorFooter struct {
 }
 
 func (m *Model) editorContentHeight(t *tab) int { return max(1, t.editor.Area.Height()) }
-func (m *Model) editorFrameHeight(t *tab) int   { return m.editorContentHeight(t) + 4 }
-func (m *Model) editorTop(t *tab) int           { return m.height - m.editorFrameHeight(t) }
+func (m *Model) editorFrameHeight(t *tab) int {
+	return m.editorContentHeight(t) + 4
+}
+func (m *Model) editorTop(t *tab) int { return m.height - m.editorFrameHeight(t) }
 func (m *Model) compactKey(action, preferred string) string {
 	keys := m.cfg.Keys.Keys(action)
 	if len(keys) == 0 {

@@ -65,6 +65,10 @@ export function batchUiSnapshot(batch: Batch): WorkerUiDetails {
 	details.batchId = batch.id;
 	// Opaque Pi routing IDs are metadata, not user text: never redact or truncate them.
 	details.originToolCallId = batch.ui.originToolCallId;
+	for (let i = 0; i < details.tasks.length; i++) {
+		const transcript = batch.ui.tasks[i].transcript;
+		if (transcript) details.tasks[i].transcript = { ...transcript };
+	}
 	details.controlErrors = batch.ui.controlErrors?.map((error, index) => ({
 		toolCallId: error.toolCallId, message: details.controlErrors![index].message,
 	}));
@@ -251,6 +255,8 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 						owner.changed();
 						if (toolActive) present(() => onUpdate?.(respond(`${running.task.mode} ${uiTask.phase}`, batchUiSnapshot(running.batch))));
 					}, () => running.overlappedWriter, true, invocationSession.processes, running.task.sessionMode === "fork" ? sessionSnapshot : undefined);
+					// Preserve the host-produced locator even when no progress callback ran.
+					if (item.transcript) uiTask.transcript = { ...item.transcript };
 					const sanitized = sanitizeStructuredValue(item) as Record<string, any>;
 					const compact = compactWorkerResult(sanitized);
 					compact.observed_changed_files = Array.isArray(sanitized.observed_changed_files) ? sanitized.observed_changed_files : [];

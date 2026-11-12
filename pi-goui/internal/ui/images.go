@@ -36,6 +36,9 @@ func (a imagePasteAnchor) position(current string) int {
 }
 
 func (m *Model) startImagePaste(t *tab, cmd tea.Cmd, atStart bool) tea.Cmd {
+	if blocked, next := m.gateSession(t); blocked {
+		return next
+	}
 	anchor := imagePasteAnchor{t.editor.Value(), t.editor.CursorOffset()}
 	if atStart {
 		anchor = imagePasteAnchor{}

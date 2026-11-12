@@ -4,6 +4,10 @@
 
 Supply an optional `title`: a one-sentence task label written by the dispatching model (aim for 10–30 characters, not a mechanical truncation). Native Pi and Go UI display a nonblank title in place of the objective; omitted or blank titles fall back to the complete `objective` for old calls/history. `objective` remains the full execution goal and is unchanged in the worker contract.
 
+## Read-only task transcripts
+
+New executions also save a private, bounded event log under the configured agent directory's `worker-transcripts/`. Each task carries an opaque `transcript: {version: 1, id}` descriptor for a future read-only viewer; logs are not resumable sessions and do not alter `new`/`fork` isolation. They retain real messages and tool events after completion, omit system prompts, and explicitly mark recording failures/size limits. See [TRANSCRIPT.md](TRANSCRIPT.md) for storage, privacy, lifecycle and the Go reader protocol. Existing tasks without a descriptor cannot be reconstructed.
+
 ## Task session mode
 
 Every task requires explicit `sessionMode: "new" | "fork"` and `preset: "fast" | "normal" | "deep"`. The dispatching model chooses both; users do not need to configure them. Prefer `fork` to retain the current conversation’s decisions and investigation context. Use `new` only when little context handoff is needed and a short contract fully describes the task. Do not ask the user to select a mode unless they explicitly want control. Omitted or invalid values are rejected; `auto` is not a preset. The following is a model tool-call example, not required user input. Modes may be mixed in a `tasks` batch:

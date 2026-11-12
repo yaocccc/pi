@@ -35,7 +35,7 @@ func (m *Model) filtered(d *dialog) []option {
 		return nil
 	}
 	query := strings.ToLower(d.editor.Value())
-	if d.kind == "confirm" || d.kind == "close" || d.kind == "resume" || d.kind == "session-delete" {
+	if d.kind == "confirm" || d.kind == "close" || d.kind == "resume" || d.kind == "session-delete" || d.kind == "session-send-confirm" {
 		query = ""
 	}
 	var options []option
@@ -188,7 +188,7 @@ func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 	if match("tui.select.confirm") || match("tui.input.submit") {
 		return m.confirmDialog(t, d)
 	}
-	if d.kind == "confirm" || d.kind == "close" || d.kind == "resume" || d.kind == "session-delete" {
+	if d.kind == "confirm" || d.kind == "close" || d.kind == "resume" || d.kind == "session-delete" || d.kind == "session-send-confirm" {
 		return nil
 	}
 	for _, action := range m.cfg.Keys.Actions() {
@@ -244,6 +244,8 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 	}
 	t.dialogs = t.dialogs[1:]
 	switch d.kind {
+	case "session-send-confirm":
+		return m.confirmSessionSend(t, d, value)
 	case "theme":
 		m.restoreTheme(d)
 		return m.chooseTheme(t, value)
@@ -270,7 +272,7 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 	case "thinking":
 		return call(t, "set_thinking_level", map[string]any{"level": value})
 	case "fork":
-		return call(t, "fork", map[string]any{"entryId": value})
+		return m.requestFork(t, value)
 	case "name":
 		return call(t, "set_session_name", map[string]any{"name": value})
 	case "close":

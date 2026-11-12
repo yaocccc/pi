@@ -39,6 +39,7 @@ type workingState struct {
 	total                                 workingUsage
 	finished                              map[[32]byte]workingUsage
 	order                                 [][32]byte
+	workers                               map[string]workingUsage
 }
 
 func workingNonnegative(n float64) float64 {
@@ -168,7 +169,11 @@ func (w *workingState) finish(m workingMessage) {
 		}
 		w.order = append(w.order, key)
 	}
-	w.total.input += usage.input - old.input
+	// Main input is the latest turn's context, not cumulative token usage.
+	// Repeated finals for earlier turns must not replace the latest context.
+	if !seen || (len(w.order) > 0 && w.order[len(w.order)-1] == key) {
+		w.total.input = usage.input
+	}
 	w.total.output += usage.output - old.output
 	w.finished[key] = usage
 	// A duplicate final for an earlier turn must not clear the next live turn.
@@ -179,10 +184,58 @@ func (w *workingState) finish(m workingMessage) {
 		w.live = workingUsage{}
 	}
 }
+
+// Worker usage snapshots are cumulative. Key by batch and task, not the
+// invocation ID: continuation calls and toolResult messages repeat snapshots.
+func (w *workingState) workerUsage(raw json.RawMessage, toolCallID string) {
+	var result struct {
+		ToolCallID string
+		Details    struct {
+			Kind, BatchID, OriginToolCallID string
+			Tasks                           []struct {
+				Index int
+				Usage struct{ Input, Output, CacheRead, CacheWrite float64 }
+			}
+		}
+	}
+	if json.Unmarshal(raw, &result) != nil || result.Details.Kind != "worker-ui" {
+		return
+	}
+	d := result.Details
+	id := d.BatchID
+	if id == "" {
+		id = d.OriginToolCallID
+	}
+	if id == "" {
+		id = result.ToolCallID
+	}
+	if id == "" {
+		id = toolCallID
+	}
+	if id == "" {
+		return
+	}
+	if w.workers == nil {
+		w.workers = make(map[string]workingUsage)
+	}
+	for _, task := range d.Tasks {
+		key := fmt.Sprintf("%s:%d", id, task.Index)
+		old := w.workers[key]
+		u := task.Usage
+		// Ignore duplicate or stale snapshots, including late progress updates.
+		w.workers[key] = workingUsage{
+			input:  math.Max(old.input, workingNonnegative(u.Input)),
+			output: math.Max(old.output, workingNonnegative(u.Output)),
+		}
+	}
+}
+
 func (w *workingState) apply(raw json.RawMessage, now time.Time) {
 	var event struct {
 		Type                  string
 		TurnIndex             *int
+		ToolCallID            string
+		PartialResult, Result json.RawMessage
 		Message               json.RawMessage
 		AssistantMessageEvent struct {
 			Type                     string
@@ -204,6 +257,10 @@ func (w *workingState) apply(raw json.RawMessage, now time.Time) {
 		return
 	}
 	switch event.Type {
+	case "tool_execution_update":
+		w.workerUsage(event.PartialResult, event.ToolCallID)
+	case "tool_execution_end":
+		w.workerUsage(event.Result, event.ToolCallID)
 	case "agent_settled":
 		w.active = false
 		w.ended = now
@@ -225,6 +282,7 @@ func (w *workingState) apply(raw json.RawMessage, now time.Time) {
 			w.snapshot(m)
 		}
 	case "message_end":
+		w.workerUsage(event.Message, "")
 		if m, ok := workingDecode(event.Message); ok {
 			w.finish(m)
 		}
@@ -319,8 +377,16 @@ func (w *workingState) formatLine(now time.Time, theme config.Theme, detailed bo
 	if seconds >= 60 {
 		duration = fmt.Sprintf("%dm%ds", seconds/60, seconds%60)
 	}
-	input := w.total.input + w.live.input
+	input := w.total.input
+	// Keep the last known context while the next turn has no usage yet.
+	if w.current && w.live.input > 0 {
+		input = w.live.input
+	}
 	output := w.total.output
+	for _, usage := range w.workers {
+		input += usage.input
+		output += usage.output
+	}
 	if w.current {
 		output += math.Max(w.live.output, w.estimate())
 	}

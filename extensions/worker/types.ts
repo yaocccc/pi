@@ -68,6 +68,7 @@ export type WorkerUiActivityStatus = "running" | "completed" | "failed";
 
 export interface WorkerUsage {
 	input: number;
+	/** Cumulative model output, including thinking/tool calls but excluding tool results. */
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
@@ -86,7 +87,16 @@ export interface WorkerUiActivity {
 	at: number;
 }
 
+/** Opaque local log identifier, never an arbitrary path or resumable session. */
+export interface WorkerTranscript {
+	version: 1;
+	id: string;
+	incomplete?: boolean;
+	error?: "size_limit" | "io_error" | "protocol_error";
+}
+
 export interface ChildProgress {
+	transcript?: WorkerTranscript;
 	phase: string;
 	activities: WorkerUiActivity[];
 	toolCalls: number;
@@ -95,6 +105,7 @@ export interface ChildProgress {
 }
 
 export interface WorkerUiTask {
+	transcript?: WorkerTranscript;
 	index: number;
 	mode: WorkerMode;
 	title?: string;
@@ -133,6 +144,7 @@ export interface WorkerUiDetails {
 }
 
 export interface ChildResult {
+	transcript?: WorkerTranscript;
 	exitCode: number;
 	stderr: string;
 	assistantText: string;

@@ -87,13 +87,17 @@ func TestResumeReplacesSlotAndIsolatesLateEvents(t *testing.T) {
 		t.Fatal("resume modified saved file")
 	}
 }
-func TestResumeConfirmsWorkAndReusesAlreadyOpenTarget(t *testing.T) {
-	for _, state := range []string{"draft", "busy", "compacting", "sending", "preflight", "image"} {
+func TestResumePreservesWorkAndReusesAlreadyOpenTarget(t *testing.T) {
+	for _, state := range []string{"history", "loading", "draft", "busy", "compacting", "sending", "preflight", "image"} {
 		t.Run(state, func(t *testing.T) {
 			m := testModel(t, "")
 			old := m.current()
 			target := savedSession(t)
 			switch state {
+			case "history":
+				old.state.MessageCount = 2
+			case "loading":
+				old.refreshing = true
 			case "draft":
 				old.setValue("keep me")
 			case "busy":
@@ -107,21 +111,24 @@ func TestResumeConfirmsWorkAndReusesAlreadyOpenTarget(t *testing.T) {
 			case "image":
 				old.images = []map[string]any{{"data": "fixture"}}
 			}
-			m.resume(target)
-			if m.current() != old || len(m.tabs) != 1 || len(old.dialogs) != 1 || old.dialogs[0].kind != "resume" {
-				t.Fatal("replacement did not request confirmation")
+			client, _ := fakeClient(t)
+			old.client = client
+			if cmd := m.resume(target); cmd == nil {
+				t.Fatal("missing startup command")
 			}
-			m.finishResume(old, "no")
-			if m.current() != old || len(m.tabs) != 1 {
-				t.Fatal("cancel replaced tab")
+			if len(m.tabs) != 2 || m.tabs[0] != old || m.current() == old || m.current().state.File != sessionPath(target) {
+				t.Fatal("resume did not preserve source and activate a new tab")
+			}
+			if len(old.dialogs) != 0 || old.client != client {
+				t.Fatal("resume changed source dialogs or client")
 			}
 			if state == "draft" && old.editor.Value() != "keep me" {
-				t.Fatal("cancel lost draft")
+				t.Fatal("resume lost draft")
 			}
-			old.dialogs = nil
-			m.finishResume(old, target)
-			if m.current() == old || len(m.tabs) != 1 {
-				t.Fatal("confirmation didn't replace current slot")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if _, err := client.Call(ctx, map[string]any{"type": "get_state"}); err != nil {
+				t.Fatal("source client is no longer usable:", err)
 			}
 		})
 	}

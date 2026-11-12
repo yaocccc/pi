@@ -48,6 +48,15 @@ func SidebarNewButton(width int) (start, length int) {
 	return 0, max(0, width)
 }
 
+// SidebarSessionCloseButton shares the cell geometry with mouse hit testing.
+// Hide the button if there is not room for both an ordinal and the full label.
+func SidebarSessionCloseButton(width int) (start, length int) {
+	if width < 8 {
+		return 0, 0
+	}
+	return width - 4, 4 // 关闭 occupies four terminal cells.
+}
+
 // sidebarHistoryRow reserves a navigation gutter before truncating the name.
 func sidebarHistoryRow(name string, width int, active bool) string {
 	marker := fit("  ", width)
@@ -113,13 +122,22 @@ func sidebarSessionCards(sessions []SessionRow, width, height int) []string {
 			remaining--
 			row += workbenchStyle(fit(status, remaining), statusColor, false)
 		}
+		if start, length := SidebarSessionCloseButton(width); s.Hovered && length > 0 {
+			row = ansi.Truncate(row, start-1, "")
+			row += strings.Repeat(" ", max(0, start-ansi.StringWidth(row)))
+			row += workbenchStyle("关闭", "190;190;190", false)
+		}
 		name := oneLine(s.Name)
 		indent := strings.Repeat(" ", min(2, width))
 		name = fit(name, max(0, width-ansi.StringWidth(indent)))
 		nameRow := indent + workbenchStyle(name, workbenchText, s.Active)
-		if s.Active {
+		if s.Active || s.Hovered {
+			background := "57;64;66"
+			if s.Active {
+				background = "82;85;88"
+			}
 			highlight := func(line string) string {
-				return "\x1b[48;2;82;85;88m" + line + strings.Repeat(" ", max(0, width-ansi.StringWidth(line))) + "\x1b[49m"
+				return "\x1b[48;2;" + background + "m" + line + strings.Repeat(" ", max(0, width-ansi.StringWidth(line))) + "\x1b[49m"
 			}
 			row, nameRow = highlight(row), highlight(nameRow)
 		}

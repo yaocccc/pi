@@ -37,18 +37,51 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 	if len(t.dialogs) > 0 {
 		return m.dialogKey(t, k, chord)
 	}
+	if m.inspectorOpen() && k.Code == tea.KeyEscape {
+		m.backInspector()
+		return nil
+	}
+	if w := m.inspector.worker; w != nil && (m.inspectorFullscreen() || m.inspectorContains(m.sidebarHistory.pointerX, m.sidebarHistory.pointerY)) {
+		if match("app.tools.expand") {
+			w.expanded = !w.expanded
+			w.revision++
+			return nil
+		}
+		if match("app.thinking.toggle") {
+			w.showThinking = !w.showThinking
+			w.revision++
+			return nil
+		}
+	}
 	if match("app.interrupt") && (t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.interruptRequested) {
 		return m.interrupt(t)
 	}
 	if match("tui.input.copy") || match("app.message.copy") {
+		if m.inspectorOpen() {
+			if text := m.inspector.selection.text(); text != "" {
+				return tea.SetClipboard(text)
+			}
+		}
 		if text := t.selection.text(); text != "" {
 			return copySelection(t, text)
 		}
 	}
 	// Keyboard editing/navigation ends a mouse gesture; copied text never replaces a draft.
 	t.selection = transcriptSelection{}
+	m.inspector.selection = transcriptSelection{}
 	if t.editor.Jumping() {
 		return m.editDraft(t, "", k)
+	}
+	// Gate editor actions, including completion/history shortcuts, while leaving
+	// transcript navigation and session management available.
+	editing := k.Text != "" || match("app.clear") || match("app.editor.external") || match("app.clipboard.pasteImage") || match("app.message.followUp") || match("tui.input.submit") || match("tui.input.tab") || match("tui.input.newLine")
+	for _, action := range m.cfg.Keys.Actions() {
+		editing = editing || (strings.HasPrefix(action, "tui.editor.") && match(action))
+	}
+	if editing && m.searching == "" {
+		if blocked, cmd := m.gateSession(t); blocked {
+			return cmd
+		}
 	}
 	if m.searching != "" {
 		return m.searchKey(t, k, chord)
@@ -340,6 +373,16 @@ func (m *Model) listSessions(t *tab, hideCurrent bool) tea.Cmd {
 	}
 }
 func (m *Model) submit(t *tab, follow bool) tea.Cmd {
+	return m.submitChecked(t, follow, false)
+}
+
+func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
+	if !checked && t.state.File != "" && !t.ownRunActive() {
+		if t.sessionGuard.path == t.state.File && t.sessionGuard.warning != "" && !t.sessionGuard.approved {
+			return m.sessionGateDialog(t)
+		}
+		return m.inspectSession(t, true, follow, time.Now())
+	}
 	original := t.editor.Value()
 	text, attached := referencedImages(strings.TrimSpace(original), t.images)
 	if text == "" && len(attached) == 0 {

@@ -238,7 +238,7 @@ export function estimateMessageTokens(message: any): number {
 	for (const part of message.content) {
 		if (part?.type === "text" && typeof part.text === "string") chars += part.text.length;
 		else if (part?.type === "thinking" && typeof part.thinking === "string") chars += part.thinking.length;
-		else if (part?.type === "toolCall") chars += JSON.stringify(part.arguments ?? {}).length;
+		else if (part?.type === "toolCall") chars += (typeof part.name === "string" ? part.name.length : 0) + JSON.stringify(part.arguments ?? {}).length;
 	}
 	return Math.ceil(chars / 4);
 }

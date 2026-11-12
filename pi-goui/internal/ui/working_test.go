@@ -62,14 +62,37 @@ func TestWorkingLifecycleAndMetrics(t *testing.T) {
 		t.Fatal("new run leaked previous metrics")
 	}
 }
+func TestWorkingLatestContextWithWorkers(t *testing.T) {
+	now := time.Unix(1, 0)
+	var w workingState
+	workingApply(&w, `{"type":"agent_start"}`, now)
+	workingApply(&w, workingFinal(1, 4), now)
+	workingApply(&w, `{"type":"tool_execution_update","partialResult":{"details":{"kind":"worker-ui","batchId":"a","tasks":[{"index":0,"usage":{"input":100,"cacheRead":900,"output":6}}]}}}`, now)
+	check := func(want string) {
+		t.Helper()
+		if line := ansi.Strip(w.line(now, config.Theme{})); !strings.Contains(line, want) {
+			t.Fatalf("want %q in %s", want, line)
+		}
+	}
+	check("↑135 ↓10")
+	workingApply(&w, `{"type":"message_start","message":{"role":"assistant","timestamp":2,"content":[]}}`, now)
+	check("↑135 ↓10")
+	workingApply(&w, `{"type":"message_update","message":{"role":"assistant","timestamp":2,"content":[],"usage":{"input":5,"cacheRead":10,"cacheWrite":5,"output":0}}}`, now)
+	check("↑120 ↓10")
+	workingApply(&w, `{"type":"message_end","message":{"role":"assistant","timestamp":2,"content":[],"usage":{"input":5,"cacheRead":10,"cacheWrite":5,"output":2}}}`, now)
+	check("↑120 ↓12")
+	workingApply(&w, workingFinal(1, 4), now)
+	check("↑120 ↓12")
+}
+
 func TestWorkingSnapshotsDuplicatesAndTurns(t *testing.T) {
 	now := time.Unix(1, 0)
 	var w workingState
 	workingApply(&w, `{"type":"agent_start"}`, now)
-	snapshot := `{"type":"message_update","message":{"role":"assistant","timestamp":1,"content":[{"type":"text","text":"abcdefgh"}],"usage":{"input":2,"output":0}}}`
+	snapshot := `{"type":"message_update","message":{"role":"assistant","timestamp":1,"content":[{"type":"text","text":"abcdefgh"}],"usage":{"input":2,"cacheRead":20,"cacheWrite":5,"output":0}}}`
 	workingApply(&w, snapshot, now)
 	workingApply(&w, snapshot, now)
-	if w.estimate() != 2 || w.turn != 1 {
+	if w.estimate() != 2 || w.turn != 1 || w.live.input != 27 {
 		t.Fatalf("snapshots accumulate: %+v", w)
 	}
 	workingApply(&w, workingFinal(1, 4), now)
@@ -88,7 +111,7 @@ func TestWorkingSnapshotsDuplicatesAndTurns(t *testing.T) {
 		t.Fatal("late duplicate cleared next turn")
 	}
 	workingApply(&w, workingFinal(2, 6), now)
-	if w.total.output != 10 || w.total.input != 70 {
+	if w.total.output != 10 || w.total.input != 35 {
 		t.Fatalf("final totals %+v", w.total)
 	}
 	var other workingState

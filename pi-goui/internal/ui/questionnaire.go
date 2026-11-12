@@ -117,6 +117,13 @@ func (m *Model) questionnaireKey(t *tab, d *dialog, k tea.KeyPressMsg) tea.Cmd {
 		if key == "enter" {
 			return m.submitQuestion(t, d)
 		}
+		if !d.editor.Jumping() {
+			for _, action := range m.cfg.Keys.Actions() {
+				if strings.HasPrefix(action, "tui.editor.") && m.cfg.Keys.Match(action, key) {
+					return d.editor.Update(action, k)
+				}
+			}
+		}
 		return d.editor.Update("", k)
 	}
 	switch key {

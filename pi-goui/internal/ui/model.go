@@ -25,6 +25,9 @@ type Options struct {
 	PiArgs                []string
 }
 type tab struct {
+	todoScroll                                                                     int
+	todoRevision                                                                   uint64
+	todoExpiry                                                                     todoExpiryState
 	footerHover                                                                    footerHoverState
 	newSession                                                                     bool
 	mutation                                                                       *sessionAction
@@ -56,6 +59,8 @@ type tab struct {
 	workingStart            int
 	assistantStats          map[string]string
 	toast                   toastState
+	forkPending             bool
+	sessionGuard            sessionGuard
 }
 type command struct{ Name, Description string }
 type option struct {
@@ -67,6 +72,7 @@ type dialog struct {
 	cwd                              *cwdCompletion
 	questionnaire                    *questionnaire
 	workerSettings                   *workerSettingsDialog
+	sessionSend                      *sessionGuardMsg
 	hideCurrent                      bool
 	action                           *sessionAction
 	kind, title, message, requestID  string
@@ -77,7 +83,9 @@ type dialog struct {
 	namedOnly, showPath, reverseSort bool
 }
 type Model struct {
+	panelResize                    panelResizeState
 	pointerShape                   string
+	inspector                      toolInspector
 	sidebarHistory                 sidebarHistoryState
 	updates                        updateState
 	sessionActions                 map[string]*sessionAction
@@ -223,6 +231,8 @@ func (m *Model) activate(i int) tea.Cmd {
 			d.editor.Area.Blur()
 		}
 	}
+	m.finishPanelResize()
+	m.inspector = toolInspector{}
 	m.active = i
 	t := m.current()
 	t.unread = 0
@@ -398,7 +408,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.receiveUpdateCheck(v)
 	case sessionActionMsg:
 		cmds = append(cmds, m.finishSessionAction(v))
+	case tea.BlurMsg:
+		m.finishPanelResize()
 	case tea.WindowSizeMsg:
+		m.panelResize.dragging = false
 		m.width = max(1, v.Width)
 		m.height = max(1, v.Height)
 		m.revealSidebar()
@@ -426,6 +439,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if hadGit != (m.sidebarContext().Git != nil) {
 			m.revealSidebar()
 		}
+	case workerTranscriptMsg:
+		cmds = append(cmds, m.receiveWorkerTranscript(v))
 	case openedMsg:
 		t := m.byID(v.id)
 		if t == nil {
@@ -504,6 +519,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+	case forkSnapshotMsg:
+		cmds = append(cmds, m.forkSnapshot(v))
+	case forkCreatedMsg:
+		cmds = append(cmds, m.forkCreated(v))
 	case snapshotMsg:
 		t := m.byID(v.id)
 		if t == nil {
@@ -545,11 +564,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !t.dead && v.revision != t.revision {
 			t.refreshAgain = true
 		}
+		cmds = append(cmds, m.inspectSession(t, false, false, time.Now()))
 		// During a run, keep consuming live events rather than spin on snapshots
 		// that immediately become stale. agent_settled requests the final refresh.
 		if t.refreshAgain && !t.state.Busy && !t.state.Compacting {
 			cmds = append(cmds, m.refresh(t))
 		}
+	case sessionGuardMsg:
+		cmds = append(cmds, m.sessionGuardResult(v))
 	case replyMsg:
 		t := m.byID(v.id)
 		if t == nil {
@@ -586,6 +608,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t := m.byID(v.id); t != nil {
 			if v.err != nil {
 				t.status = v.err.Error()
+			} else if blocked, cmd := m.gateSession(t); blocked {
+				cmds = append(cmds, cmd)
 			} else {
 				t.setValue(v.text)
 				m.resizeEditor(t)
@@ -614,6 +638,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, tea.ReadClipboard)
 				}
 			} else {
+				if blocked, cmd := m.gateSession(t); blocked {
+					cmds = append(cmds, cmd)
+					break
+				}
 				m.attachImage(t, v.image, v.anchor)
 			}
 		}
@@ -669,6 +697,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollFooterPopup(m.current(), delta)
 			break
 		}
+		if m.inspectorWheel(v.Mouse()) {
+			break
+		}
 		t := m.current()
 		if t != nil {
 			delta := 0
@@ -677,9 +708,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if v.Button == tea.MouseWheelDown {
 				delta = 3
 			}
-			if m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
+			if !m.inspectorOpen() && m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
 				layout := m.sidebarLayout()
-				if v.Y >= layout.HistoryStart && v.Y < layout.HistoryStart+layout.HistoryCount*render.SidebarHistoryRows {
+				if layout.TodoCount > 0 && v.Y >= layout.TodoRow && v.Y < layout.TodoStart+layout.TodoCount {
+					offset := min(max(0, layout.TodoOffset+delta), max(0, len(t.state.Plan)-layout.TodoCount))
+					t.todoScroll = max(0, len(t.state.Plan)-layout.TodoCount-offset)
+					t.todoRevision = t.state.PlanRevision
+				} else if v.Y >= layout.HistoryStart && v.Y < layout.HistoryStart+layout.HistoryCount*render.SidebarHistoryRows {
 					m.sidebarHistory.offset = min(max(0, layout.HistoryOffset+delta), max(0, len(m.sidebarHistory.sessions)-layout.HistoryCount))
 				} else if v.Y >= layout.SessionsStart && v.Y < m.height-1 {
 					visible := max(1, layout.Capacity)
@@ -696,11 +731,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scroll(t, delta)
 			}
 		}
+	case todoExpiredMsg:
+		if t := m.byID(v.id); t != nil && t.todoExpiry.generation == v.generation && t.todoExpiry.revision == t.state.PlanRevision && t.todoExpiry.file == t.state.File {
+			t.todoExpiry.hidden = true
+		}
 	case tickMsg:
 		m.refreshCodexFast(time.Time(v))
 		m.frame++
 		now := time.Time(v)
+		cmds = append(cmds, m.pollWorkerSession(now))
 		for _, t := range m.tabs {
+			if t == m.current() {
+				cmds = append(cmds, m.inspectSession(t, false, false, now))
+			}
 			for i := len(t.dialogs) - 1; i >= 0; i-- {
 				d := t.dialogs[i]
 				if !d.deadline.IsZero() && now.After(d.deadline) {
@@ -718,6 +761,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.editTarget(t, "", msg))
 		}
 	}
+	for _, t := range m.tabs {
+		cmds = append(cmds, t.syncTodoExpiry())
+	}
+	if m.panelResize.dragging && !m.panelResizeValid() {
+		m.finishPanelResize()
+	}
+	if m.inspector.itemID != "" && !m.inspectorOpen() {
+		m.closeInspector()
+	}
 	cmds = append(cmds, m.ensureFileCompletion(), m.ensureCwdCompletion())
 	if t := m.current(); renderNow && t != nil && t.dirty {
 		m.document(t)
@@ -727,15 +779,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 func (m *Model) document(t *tab) {
 	// Freeze only the display during a drag, never the RPC event projection.
-	if t.selection.dragging {
+	if t.selection.dragging || m.panelResize.dragging {
 		return
-	}
-	assistantTitle := t.state.Model.Name
-	if assistantTitle == "" {
-		assistantTitle = t.state.Model.ID
-	}
-	if assistantTitle == "" {
-		assistantTitle = "助手"
 	}
 	if m.showStartupInfo(t) {
 		if t.doc.Text == "" {
@@ -743,9 +788,14 @@ func (m *Model) document(t *tab) {
 		}
 		t.doc = m.startupDocument(t)
 	} else {
-		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, render.Options{ShowToolActivity: t.state.Busy && !t.dead && !t.state.Compacting, AssistantTitle: assistantTitle, AssistantStats: t.assistantStats, Width: m.mainWidth(), MessageCount: t.state.MessageCount, ExpandTools: t.expanded, ShowThinking: t.showThinking, Expanded: t.folds})
+		opts := conversationOptions(t.state, m.mainWidth(), t.expanded, t.showThinking, t.folds)
+		opts.ShowToolActivity = opts.ShowToolActivity && !t.dead
+		opts.AssistantStats = t.assistantStats
+		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, opts)
 	}
-	if t.selection.document != t.doc.Text {
+	// A side-by-side recording must not discard the parent's selected text.
+	// Its immutable selection snapshot remains copyable across panel reflow.
+	if t.selection.document != t.doc.Text && !((m.inspector.worker != nil || m.inspector.parent != nil) && m.inspector.tabID == t.id) {
 		t.selection = transcriptSelection{}
 	}
 	t.dirty = false
@@ -770,7 +820,7 @@ func (m *Model) scroll(t *tab, delta int) {
 func (m *Model) editTarget(t *tab, action string, msg tea.Msg) tea.Cmd {
 	if len(t.dialogs) > 0 {
 		d := t.dialogs[0]
-		if d.kind == "help" || d.kind == "confirm" || d.kind == "close" || (d.questionnaire != nil && !d.questionnaire.Input) {
+		if d.kind == "help" || d.kind == "confirm" || d.kind == "close" || d.kind == "session-send-confirm" || (d.questionnaire != nil && !d.questionnaire.Input) {
 			return nil
 		}
 		before := d.editor.Value()
@@ -784,6 +834,9 @@ func (m *Model) editTarget(t *tab, action string, msg tea.Msg) tea.Cmd {
 	return m.editDraft(t, action, msg)
 }
 func (m *Model) editDraft(t *tab, action string, msg tea.Msg) tea.Cmd {
+	if blocked, cmd := m.gateSession(t); blocked {
+		return cmd
+	}
 	before := t.editor.Value()
 	cmd := t.editor.Update(action, msg)
 	if before != t.editor.Value() {
@@ -863,7 +916,8 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 		}
 		_ = json.Unmarshal(v.data, &data)
 		d := m.newDialog("fork", "Fork from a user message", "The current session remains saved.")
-		for _, v := range data.Messages {
+		for i := len(data.Messages) - 1; i >= 0; i-- {
+			v := data.Messages[i]
 			d.options = append(d.options, option{Label: v.Text, Value: v.EntryID})
 		}
 		t.dialogs = append(t.dialogs, d)
@@ -937,13 +991,6 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 			t.status = "Queued"
 		}
 		return nil
-	case "fork":
-		var p struct{ Text string }
-		_ = json.Unmarshal(v.data, &p)
-		if p.Text != "" {
-			t.setValue(p.Text)
-		}
-		t.follow = true
 	}
 	return m.refresh(t)
 }

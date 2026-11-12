@@ -113,7 +113,7 @@ func saveCodexFast(dir, level string) error {
 // Right alignment keeps the popup stationary when the selected label changes.
 func (m *Model) codexFastGeometry() (hitRect, footerPopupRect, bool) {
 	t := m.current()
-	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || m.sidebarWidth() < 12 {
+	if t == nil || m.inspectorOpen() || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || m.sidebarWidth() < 12 {
 		return hitRect{}, footerPopupRect{}, false
 	}
 	y := m.sidebarLayout().ModeRow
@@ -131,6 +131,9 @@ func (m *Model) codexFastGeometry() (hitRect, footerPopupRect, bool) {
 }
 
 func (m *Model) codexFastPopupVisible() bool {
+	if m.inspectorFullscreen() {
+		return false
+	}
 	target, box, ok := m.codexFastGeometry()
 	if !ok || !m.sidebarHistory.pointerKnown {
 		return false

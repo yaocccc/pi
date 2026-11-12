@@ -22,7 +22,11 @@ func ReadFile(path string) (json.RawMessage, error) {
 		return nil, err
 	}
 	defer f.Close()
-	r := bufio.NewReaderSize(f, 64*1024)
+	return readEntries(f, path)
+}
+
+func readEntries(source io.Reader, path string) (json.RawMessage, error) {
+	r := bufio.NewReaderSize(source, 64*1024)
 	var entries []json.RawMessage
 	var leaf *string
 	line := 0

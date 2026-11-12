@@ -22,6 +22,9 @@ func (m *Model) updatePointer() tea.Cmd {
 }
 
 func (m *Model) pointerShapeAt(x, y int) string {
+	if m.panelResize.dragging || m.panelResizeTarget(x, y) {
+		return "ew-resize"
+	}
 	t := m.current()
 	if t == nil || x < 0 || x >= m.width || y < 0 || y >= m.height {
 		return "text"
@@ -43,6 +46,37 @@ func (m *Model) pointerShapeAt(x, y int) string {
 	}
 	if box, ok := m.sidebarHistoryTooltip(t); ok && x >= box.x && x < box.x+box.width && y >= box.y && y < box.y+box.height {
 		return "pointer"
+	}
+	if m.inspectorOpen() && len(t.dialogs) > 0 {
+		p := m.popupGeometry(t.dialogs[0])
+		if x >= p.x && x < p.x+p.width && y >= p.y && y < p.y+p.height {
+			return "pointer"
+		}
+		return "text"
+	}
+	if m.inspectorContains(x, y) {
+		if rect, ok := m.inspectorCloseTarget(x, y); ok && rect.contains(x, y) {
+			return "pointer"
+		}
+		left, _ := m.inspectorBounds()
+		if m.inspector.parent != nil && y == 1 && x >= left+m.inspectorInset() && x < left+m.inspectorInset()+ansi.StringWidth("← 返回") {
+			return "pointer"
+		}
+		if _, ok := m.workerInputTarget(x, y); ok {
+			return "pointer"
+		}
+		if _, rect, ok := m.conversationInspectTarget(x, y); ok && rect.contains(x, y) {
+			return "pointer"
+		}
+		if w := m.inspector.worker; w != nil && y >= 2 && y < m.height-2 {
+			row := m.inspectorPoint(x, y).line
+			for _, b := range w.doc.Blocks {
+				if b.Foldable && row >= b.Start && row < b.End {
+					return "pointer"
+				}
+			}
+		}
+		return "text"
 	}
 	if m.sidebarWidth() > 0 && x >= m.mainWidth() {
 		layout := m.sidebarLayout()

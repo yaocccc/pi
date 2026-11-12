@@ -32,7 +32,7 @@ func (m *Model) resumeTarget(file string) (string, bool) {
 	return file, true
 }
 
-// openRecent preserves work in the current tab, unlike explicit resume/replace.
+// openRecent reuses only an empty tab and otherwise preserves current work.
 func (m *Model) openRecent(file string) tea.Cmd {
 	file, ok := m.resumeTarget(file)
 	if !ok {
@@ -58,38 +58,13 @@ func (m *Model) openRecent(file string) tea.Cmd {
 }
 
 func (m *Model) resume(file string) tea.Cmd {
-	file, ok := m.resumeTarget(file)
-	if !ok {
-		return nil
-	}
-	for i, other := range m.tabs {
-		if !other.dead && sessionPath(other.state.File) == file {
-			return m.activate(i)
-		}
-	}
-	t := m.current()
-	if t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.editor.Value() != "" || len(t.images) > 0 {
-		d := m.newDialog("resume", "Replace this session?", "The saved history remains. Current work and unsent draft will be stopped.")
-		d.options = []option{{Label: "Cancel", Value: "no"}, {Label: "Resume selected session", Value: file}}
-		t.dialogs = append(t.dialogs, d)
-		return m.focus(t)
-	}
-	return m.replaceSession(t, file)
+	return m.openRecent(file)
 }
 func (m *Model) finishResume(t *tab, file string) tea.Cmd {
 	if file == "no" || t != m.current() {
 		return nil
 	}
-	target, ok := m.resumeTarget(file)
-	if !ok {
-		return nil
-	}
-	for i, other := range m.tabs {
-		if !other.dead && sessionPath(other.state.File) == target {
-			return m.activate(i)
-		}
-	}
-	return m.replaceSession(t, target)
+	return m.resume(file)
 }
 func (m *Model) replaceSession(old *tab, file string) tea.Cmd {
 	return m.replaceSessionCwd(old, file, m.tabDirectory(old))

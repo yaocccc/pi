@@ -14,7 +14,7 @@ type sidebarTooltip struct {
 }
 
 func (m *Model) sidebarHistoryTooltip(t *tab) (sidebarTooltip, bool) {
-	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || m.sidebarWidth() == 0 {
+	if t == nil || m.inspectorOpen() || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || m.sidebarWidth() == 0 {
 		return sidebarTooltip{}, false
 	}
 	ctx := m.sidebarContext()
