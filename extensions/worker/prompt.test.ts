@@ -47,11 +47,18 @@ test("always-loaded tool metadata and worker system prompt stay within compact b
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
 	});
-	const body = workerPromptBody();
-	assert.ok(Buffer.byteLength(body) <= 2850);
-	assert.ok(!body.startsWith("---"));
-	for (const instruction of ["allowedPaths", "forbiddenPaths", "dir/**", "blocked" , "不覆盖或撤销已有修改", "不可逆命令"]) {
-		assert.ok(body.includes(instruction), instruction);
+	const modes = ["scout", "implement", "test", "review", "fix"] as const;
+	for (const mode of modes) {
+		const body = workerPromptBody(mode);
+		assert.ok(Buffer.byteLength(body) <= 3600, `${mode} prompt budget`);
+		assert.ok(!body.startsWith("---"));
+		for (const instruction of ["allowedPaths", "forbiddenPaths", "dir/**", "blocked", "不覆盖或撤销已有修改", "不可逆命令"]) {
+			assert.ok(body.includes(instruction), `${mode}: ${instruction}`);
+		}
+		for (const role of modes) {
+			const roleBody = fs.readFileSync(new URL(`./agents/${role}.md`, import.meta.url), "utf8").trim();
+			assert.equal(body.includes(roleBody), role === mode, `${mode} only loads its own role`);
+		}
 	}
 });
 

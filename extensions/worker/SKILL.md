@@ -56,7 +56,9 @@ description: Use for Worker delegation, Fast/Normal/Deep routing, parallel task 
 
 主 Agent 直接验收小任务和普通任务，不默认追加 Review。需要独立审查时常规用 fast，重要或困难任务用 deep；定向 Fix 仅处理已确认问题，最终仍由主 Agent 验收。
 
-检查实际 diff、原有修改是否保留、验证是否真实执行、逐条验收证据、blocker、越界及未解析输出。blocked/failed 不得当成功。Review finding 须含文件位置、证据、影响、建议与置信度。
+Review 须明确基线、范围、需求及规范来源；单 Worker 检查需求与工程双轴，高风险才拆分。副作用验证另行安排。
+
+检查真实 diff、原有修改、验证与验收证据、blocker、越界及未解析输出。blocked/failed 不得当成功，Review completed 不等于实现通过。核实 finding 依据、位置、触发条件、影响和归因，并检查覆盖限制。
 
 并行写任务的 `changed_files` 可能按声明范围归属；`observed_changed_files` 保留完整 Git 观测。共享工作区无法确定范围外改动来源，须检查整批 diff，不能只信 Worker 报告。
 

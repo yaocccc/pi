@@ -522,7 +522,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 		const failure = failureDetails(stage, reason);
 		return { status: "blocked", execution: baseExecution(task, route, 0, warnings), failure, summary: [reason], changed_files: [], observed_changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
 	}
-	const systemPrompt = workerPromptBody();
+	const systemPrompt = workerPromptBody(task.mode);
 	report({ status: "running", resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, attempt: 1, phase: "启动 Worker" });
 	const child = await runPiWorker(
 		task,

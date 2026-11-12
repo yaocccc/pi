@@ -1,5 +1,9 @@
 # Worker batches
 
+## Role prompts
+
+Before each child starts, `prompt.ts` reads `agents/worker.md` (shared boundaries) plus `agents/{mode}.md` (`scout`, `implement`, `test`, `review`, or `fix`) and injects them via `--append-system-prompt`. Both `new` and `fork` use only the selected role; missing files fail the task. The task contract is passed separately. Prompt edits affect subsequent tasks, not running children.
+
 ## Task title
 
 Supply an optional `title`: a one-sentence task label written by the dispatching model (aim for 10–30 characters, not a mechanical truncation). Native Pi and Go UI display a nonblank title in place of the objective; omitted or blank titles fall back to the complete `objective` for old calls/history. `objective` remains the full execution goal and is unchanged in the worker contract.
