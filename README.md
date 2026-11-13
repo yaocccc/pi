@@ -4,6 +4,10 @@
 
 这是我的个人 [Pi Coding Agent](https://pi.dev) 配置与独立终端前端：包含 `pi-goui`、自定义扩展、主题、快捷键与工作流，而非通用发行版。仓库只适合存放可公开的配置源码；扩展拥有本机权限，请先审查代码再运行，尤其是第三方扩展。
 
+## 演示视频
+
+[观看演示视频](pi-coding-agent-demo.mp4)
+
 ## 功能概览
 
 - **[pi-goui](pi-goui/README.md)**：Go / Bubble Tea v2 独立前端，每个会话使用独立 `pi --mode rpc` 子进程，复用 Pi 的 Agent、工具、认证、配置和扩展。侧栏展示会话、目录、CTX、用量和符合条件的 Codex 额度；背景默认透明。
