@@ -17,32 +17,85 @@ import (
 type Fork struct {
 	ID, Path, Name, Cwd string
 	Entries             json.RawMessage
+	Origin              Header
 }
 
-// CreateFork copies the active branch through the selected user entry's reply,
-// stopping before the next user message. The snapshot comes from get_entries,
-// not the file's last leaf (which may differ after in-memory tree navigation).
-func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawMessage) (Fork, error) {
-	var out Fork
-	if _, err := regularSessionPath(source); err != nil {
-		return out, err
+// ForkPreview is derived from the same active-branch prefix used for persistence.
+// PreviewFork performs no filesystem operations.
+type ForkPreview struct {
+	Prefix                                     []json.RawMessage
+	LeafID, NextUserID, Text, Reply, Timestamp string
+	Turn, ExcludedTurns                        int
+	ReplyCompleted                             bool
+	// Checkpoints compare only the copied prefix and next user boundary;
+	// later streaming messages are deliberately not part of this history.
+	history      []record
+	prefixIDs    []string
+	branchIDs    map[string]bool
+	snapshotLeaf string
+}
+
+// ForkCheckpoint is an immutable view of the currently displayed branch. Record
+// messages are replaced, not mutated in place, by State.Apply/LoadEntries.
+// Keeping both the request and response checkpoints detects changed history
+// without treating a delta in a later turn as a stale fork selection.
+type ForkCheckpoint struct {
+	records      []record
+	persisted    int
+	leaf, active string
+	pathIDs      map[string]bool
+}
+
+func (s *State) ForkCheckpoint() ForkCheckpoint {
+	return ForkCheckpoint{records: slices.Concat(s.records, s.live), persisted: len(s.records), leaf: s.leaf, active: s.active, pathIDs: s.pathIDs}
+}
+
+func forkMessageKey(m message) string {
+	// LoadEntries can enrich a persisted tool result with live UI details.
+	// Those details are not evidence that the persisted history changed.
+	if m.Role == "toolResult" {
+		m.Details = nil
 	}
-	f, err := os.Open(source)
-	if err != nil {
-		return out, err
+	return keyOf(m)
+}
+
+// Matches requires the same ordered history and user boundary on a compatible
+// active branch. A descendant leaf is normal while a later turn is streaming;
+// an ancestor/sibling navigation which removes the boundary cannot match.
+func (c ForkCheckpoint) Matches(p ForkPreview) bool {
+	if p.NextUserID == "" || !p.ReplyCompleted || c.leaf == "" || (!p.branchIDs[c.leaf] && !c.pathIDs[p.snapshotLeaf]) {
+		return false
 	}
-	header, readErr := readRecord(bufio.NewReader(f))
-	_ = f.Close()
-	if readErr != nil {
-		return out, readErr
+	if len(c.records) < len(p.history) {
+		return false
 	}
-	var original struct {
-		Type, ID string
-		Version  int
+	// Verify native ancestry up to the cached leaf as well as message content.
+	// The rest may be a live suffix which has not been reconciled with IDs yet.
+	for _, id := range p.prefixIDs {
+		if !c.pathIDs[id] {
+			return false
+		}
+		if id == c.leaf {
+			break
+		}
 	}
-	if json.Unmarshal(header, &original) != nil || original.Type != "session" || original.Version != 3 || original.ID != sourceID {
-		return out, errors.New("fork source identity changed or is not a native v3 session")
+	for i, expected := range p.history {
+		actual := c.records[i]
+		if actual.msg.partial || actual.id == c.active || actual.summary != expected.summary || forkMessageKey(actual.msg) != forkMessageKey(expected.msg) {
+			return false
+		}
+		// A persisted record may have a live alias, but its native entry must
+		// remain on this branch. Live suffix records have no native ID yet;
+		// their exact ordered message content is the available identity.
+		if i < c.persisted && !c.pathIDs[expected.id] {
+			return false
+		}
 	}
+	return true
+}
+
+func PreviewFork(selected string, snapshot json.RawMessage) (ForkPreview, error) {
+	var out ForkPreview
 	var data struct {
 		Entries []json.RawMessage `json:"entries"`
 		LeafID  string            `json:"leafId"`
@@ -51,9 +104,9 @@ func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawM
 		return out, err
 	}
 	type entry struct {
-		ID, Type string
-		ParentID *string
-		Message  message
+		ID, Type, Timestamp, Summary string
+		ParentID                     *string
+		Message                      message
 	}
 	entries := make(map[string]entry, len(data.Entries))
 	raw := make(map[string]json.RawMessage, len(data.Entries))
@@ -82,17 +135,94 @@ func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawM
 		}
 	}
 	slices.Reverse(branch)
+	out.branchIDs, out.snapshotLeaf = seen, data.LeafID
 	index := slices.Index(branch, selected)
 	if index < 0 || entries[selected].Type != "message" || entries[selected].Message.Role != "user" {
 		return out, errors.New("selected user message is no longer on the active branch")
 	}
+	out.Text, out.Timestamp = userText(entries[selected].Message.Content), entries[selected].Timestamp
 	end := len(branch)
-	for i := index + 1; i < len(branch); i++ {
-		e := entries[branch[i]]
+	for i, id := range branch {
+		e := entries[id]
 		if e.Type == "message" && e.Message.Role == "user" {
-			end = i
-			break
+			if i <= index {
+				out.Turn++
+			} else {
+				out.ExcludedTurns++
+				if end == len(branch) {
+					end, out.NextUserID = i, id
+				}
+			}
 		}
+	}
+	out.prefixIDs = branch[:end]
+	pendingTools := map[string]bool{}
+	invalidToolCall := false
+	for i, id := range branch[:end] {
+		e := entries[id]
+		out.Prefix = append(out.Prefix, raw[id])
+		out.LeafID = id
+		switch e.Type {
+		case "message":
+			out.history = append(out.history, record{id: id, msg: e.Message})
+		case "compaction":
+			out.history = append(out.history, record{id: id, summary: "Context compacted — earlier messages retained\n" + e.Summary})
+		case "branch_summary":
+			out.history = append(out.history, record{id: id, summary: "Branch summary\n" + e.Summary})
+		}
+		if i <= index || e.Type != "message" {
+			continue
+		}
+		switch m := e.Message; m.Role {
+		case "assistant":
+			if text := textOf(m.Content); text != "" {
+				out.Reply = text
+			}
+			for _, block := range blocks(m.Content) {
+				if block.Type == "toolCall" {
+					invalidToolCall = invalidToolCall || block.ID == "" || pendingTools[block.ID]
+					pendingTools[block.ID] = true
+				}
+			}
+			out.ReplyCompleted = (m.StopReason == "stop" || m.StopReason == "length") && len(pendingTools) == 0 && !invalidToolCall
+		case "toolResult":
+			delete(pendingTools, m.ToolCallID)
+			out.ReplyCompleted = false // A final assistant reply must follow tools.
+		}
+	}
+	if out.NextUserID != "" {
+		out.history = append(out.history, record{id: out.NextUserID, msg: entries[out.NextUserID].Message})
+	}
+	return out, nil
+}
+
+// CreateFork copies the active branch through the selected user entry's reply,
+// stopping before the next user message. The snapshot comes from get_entries,
+// not the file's last leaf (which may differ after in-memory tree navigation).
+func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawMessage) (Fork, error) {
+	var out Fork
+	if _, err := regularSessionPath(source); err != nil {
+		return out, err
+	}
+	f, err := os.Open(source)
+	if err != nil {
+		return out, err
+	}
+	header, readErr := readRecord(bufio.NewReader(f))
+	_ = f.Close()
+	if readErr != nil {
+		return out, readErr
+	}
+	var original struct {
+		Type, ID string
+		Version  int
+	}
+	if json.Unmarshal(header, &original) != nil || original.Type != "session" || original.Version != 3 || original.ID != sourceID {
+		return out, errors.New("fork source identity changed or is not a native v3 session")
+	}
+	preview, err := PreviewFork(selected, snapshot)
+	if err != nil {
+		return out, err
 	}
 	var uuid [16]byte
 	if _, err := rand.Read(uuid[:]); err != nil {
@@ -103,17 +233,14 @@ func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawM
 	out.Cwd, out.Name = cwd, name
 	now := time.Now().UTC()
 	out.Path = filepath.Join(filepath.Dir(source), now.Format("2006-01-02T15-04-05-000Z")+"_"+out.ID+".jsonl")
-	header, err = json.Marshal(map[string]any{"type": "session", "version": 3, "id": out.ID, "timestamp": now.Format(time.RFC3339Nano), "cwd": cwd, "parentSession": source})
+	provenance := &ForkProvenance{Version: 1, SourceID: sourceID, UserEntryID: selected, CutoffEntryID: preview.LeafID, Turn: preview.Turn}
+	out.Origin = Header{Type: "session", ID: out.ID, Cwd: cwd, ParentSession: source, Fork: provenance}
+	header, err = json.Marshal(map[string]any{"type": "session", "version": 3, "id": out.ID, "timestamp": now.Format(time.RFC3339Nano), "cwd": cwd, "parentSession": source, "piGouiFork": provenance})
 	if err != nil {
 		return out, err
 	}
-	prefix := make([]json.RawMessage, 0, end+1)
-	var parent *string
-	for _, id := range branch[:end] {
-		prefix = append(prefix, raw[id])
-		copyID := id
-		parent = &copyID
-	}
+	prefix := append([]json.RawMessage(nil), preview.Prefix...)
+	parent := &preview.LeafID
 	// A final native session_info overrides inherited names without modifying
 	// copied entries, labels, compaction references or extension metadata.
 	nameID := "fork-" + out.ID

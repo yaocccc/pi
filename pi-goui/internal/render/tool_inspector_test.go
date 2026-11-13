@@ -9,6 +9,41 @@ import (
 	"pi-goui/internal/session"
 )
 
+func TestWorkerTaskSummaryRowsAreIsolatedAndCompact(t *testing.T) {
+	for _, result := range []string{
+		`{"summary":["SUMMARY_END"],"validation":[{"command":"test","result":"passed"}],"risks":["RISK_END"],"execution":{"session":"PRIVATE_PATH"}}`,
+		`"{\"summary\":[\"SUMMARY_END\"],\"validation\":[{\"command\":\"test\",\"result\":\"passed\"}],\"risks\":[\"RISK_END\"]}"`,
+	} {
+		details := `{"kind":"worker-ui","tasks":[{"title":"任务 🧪","objective":"GOAL_END","status":"completed","preset":"deep","activities":[{"id":"SECRET_ACTIVITY","at":123}],"allowedPaths":["PRIVATE_PATH"],"transcript":{"id":"SECRET_ID"},"result":` + result + `}]}`
+		item := session.Item{Role: "tool", ToolName: "worker", Details: json.RawMessage(details), Text: "SECRET_TEXT", Arguments: json.RawMessage(`{"tasks":[{"objective":"OTHER_TASK"}]}`)}
+		for _, width := range []int{1, 20, 60} {
+			rows := WorkerTaskSummaryRows(item, "记录文件不存在或已清理", testTheme(), width)
+			for _, row := range rows {
+				if ansi.StringWidth(row) > width {
+					t.Fatalf("row exceeded %d: %q", width, row)
+				}
+			}
+			if width < 60 {
+				continue
+			}
+			plain := ansi.Strip(strings.Join(rows, "\n"))
+			for _, want := range []string{"简要详情", "GOAL_END", "SUMMARY_END", "passed", "RISK_END", "deep"} {
+				if !strings.Contains(plain, want) {
+					t.Fatalf("missing %q: %s", want, plain)
+				}
+			}
+			for _, hidden := range []string{"SECRET", "PRIVATE", "OTHER_TASK", "Activity", "transcript"} {
+				if strings.Contains(plain, hidden) {
+					t.Fatalf("leaked %q", hidden)
+				}
+			}
+		}
+		if string(item.Details) != details || item.Text != "SECRET_TEXT" {
+			t.Fatal("summary mutated saved item")
+		}
+	}
+}
+
 func TestConversationDrilldownCompleteToolBodies(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{"path": "large.go", "content": "FIRST_SOURCE\n" + strings.Repeat("var word = \"完整 👩‍💻\"\n", 100) + "LAST_SOURCE"})
 	items := []session.Item{

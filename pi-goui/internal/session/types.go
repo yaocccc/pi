@@ -34,6 +34,7 @@ type Item struct {
 	HasResult                bool
 	// EstimatedTokens counts historical call/result payload, not billed usage.
 	EstimatedTokens int
+	Compaction      *CompactionMetrics
 	// MessageIndex is the 1-based full-branch record ordinal, shared by its blocks.
 	// Zero means execution output arrived before any attributable message record.
 	MessageIndex  int
@@ -76,4 +77,6 @@ type State struct {
 type Summary struct {
 	ID, Path, Name, FirstMessage, Cwd string
 	Modified                          int64
+	ParentSession                     string
+	Fork                              *ForkProvenance
 }

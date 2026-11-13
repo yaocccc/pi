@@ -135,7 +135,7 @@ func DefaultBindings() Bindings {
 	}
 	windows := runtime.GOOS == "windows" || runtime.GOOS == "linux" && (os.Getenv("WSL_DISTRO_NAME") != "" || os.Getenv("WSL_INTEROP") != "")
 	if windows {
-		for k, v := range map[string][]string{"app.model.cycleBackward": {"alt+p"}, "app.message.followUp": {"ctrl+q"}, "app.message.dequeue": {"alt+q"}, "app.clipboard.pasteImage": {"alt+v"}, "tui.editor.undo": {"alt+z"}, "tui.altScreen.previousPrompt": {"ctrl+up"}, "tui.altScreen.nextPrompt": {"ctrl+down"}, "tui.altScreen.search": {"ctrl+f"}} {
+		for k, v := range map[string][]string{"app.model.cycleBackward": {"alt+p"}, "app.message.followUp": {"ctrl+q"}, "app.message.dequeue": {"alt+q"}, "app.clipboard.pasteImage": {"alt+v"}, "tui.editor.undo": {"alt+z"}, "tui.altScreen.search": {"ctrl+f"}} {
 			b.bindings[k] = v
 		}
 	}

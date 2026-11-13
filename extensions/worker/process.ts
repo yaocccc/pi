@@ -214,7 +214,7 @@ export async function runPiWorker(
 			const source = signal?.aborted ? terminationSource(signal) : "owner_shutdown";
 			return { exitCode: 1, stderr: "", assistantText: "", errorMessage: `Worker 启动前已终止 [source=${source} parent=${process.pid} owner=${owner.id}]`, aborted: source !== "task_timeout", timedOut: source === "task_timeout", termination: { stage: "spawn", code: source, source, parentPid: process.pid, ownerId: owner.id }, truncated: false, activities, toolCalls, usage: usageSnapshot() };
 		}
-		transcript = new WorkerTranscriptWriter({ cwd, prompt, snapshot: task.sessionMode === "fork" ? control?.sessionSnapshot : undefined, root: control?.transcriptRoot });
+		transcript = new WorkerTranscriptWriter({ cwd, prompt, root: control?.transcriptRoot });
 		emit(true);
 		return await new Promise<ChildResult>((resolve) => {
 			let diagnostic: ChildResult["termination"];

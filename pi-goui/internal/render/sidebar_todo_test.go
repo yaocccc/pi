@@ -24,7 +24,7 @@ func TestSidebarTodoTaskTextAnimation(t *testing.T) {
 	}
 	rows := strings.Split(rendered, "\n")
 	wants := []string{
-		" " + paint("○", "#888888") + " " + animateTodoText("1. Running step", ctx.TodoFrame),
+		paint(" ○ 1. ", theme.Dim) + animateTodoText("Running step", ctx.TodoFrame),
 		paint(" ○ 2. Waiting step", theme.Dim),
 		" " + paint("✓", theme.Success) + " " + paint("3.", theme.Muted) + " " + paint("Finished step", theme.Muted),
 	}
@@ -39,6 +39,10 @@ func TestSidebarTodoAnimationScope(t *testing.T) {
 	for _, dim := range []string{"#667788", ""} {
 		theme := testTheme()
 		theme.Dim = dim
+		dimColor := dim
+		if dimColor == "" {
+			dimColor = theme.Muted
+		}
 		ctx := SidebarContext{Todo: []session.PlanStep{
 			{ID: "1", Goal: "Running step", Status: "in_progress"},
 			{ID: "2", Goal: "Waiting step", Status: "pending"},
@@ -49,9 +53,9 @@ func TestSidebarTodoAnimationScope(t *testing.T) {
 		for _, frame := range []int{5, 13} {
 			ctx.TodoFrame = frame
 			rows := strings.Split(Sidebar(session.State{}, nil, theme, 40, 40, ctx), "\n")
-			want := " " + paint("○", "#888888") + " " + animateTodoText("1. Running step", frame)
+			want := paint(" ○ 1. ", dimColor) + animateTodoText("Running step", frame)
 			if !strings.Contains(rows[layout.TodoStart], want) {
-				t.Fatal("circle must stay at rest while the number and task share the sweep")
+				t.Fatal("circle and number must stay dim while only the task text sweeps")
 			}
 			if previous != nil {
 				if rows[layout.TodoStart] == previous[layout.TodoStart] || ansi.Strip(rows[layout.TodoStart]) != ansi.Strip(previous[layout.TodoStart]) {
@@ -125,7 +129,7 @@ func TestSidebarTodoLatestAndGeometry(t *testing.T) {
 			rendered := Sidebar(session.State{}, nil, theme, 36, 27, ctx)
 			for _, want := range []string{
 				" " + paint("✓", theme.Success) + " " + paint("3.", theme.Muted) + " " + paint("Third step", theme.Muted),
-				" " + paint("○", "#888888") + " " + animateTodoText("4. Fourth step", ctx.TodoFrame),
+				paint(" ○ 4. ", dimColor) + animateTodoText("Fourth step", ctx.TodoFrame),
 				paint(" ○ 5. Fifth step", dimColor),
 			} {
 				if !strings.Contains(rendered, want) {

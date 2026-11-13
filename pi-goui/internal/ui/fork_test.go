@@ -69,8 +69,8 @@ func TestForkNewestFirstAndIndependentTab(t *testing.T) {
 	}
 	v.entries = snapshot // fake RPC returns an empty tree; supply its fixture tree.
 	write := m.forkSnapshot(v)
-	if write == nil {
-		t.Fatal("snapshot rejected")
+	if write == nil || len(source.dialogs) != 0 {
+		t.Fatal("selection must directly schedule creation without a preview")
 	}
 	result := write().(forkCreatedMsg)
 	if result.err != nil {
@@ -90,7 +90,7 @@ func TestForkNewestFirstAndIndependentTab(t *testing.T) {
 	if string(originalBytes) != string(after) {
 		t.Fatal("source file mutated")
 	}
-	if fork.state.ID == source.state.ID || fork.state.File == source.state.File || fork.state.Name != "fork from Original" || fork.editor.Value() != "" {
+	if fork.state.ID == source.state.ID || fork.state.File == source.state.File || fork.state.Name != "Original" || fork.editor.Value() != "" {
 		t.Fatal("fork identity/name/draft wrong")
 	}
 	var texts []string
@@ -107,6 +107,31 @@ func TestForkNewestFirstAndIndependentTab(t *testing.T) {
 	records := wireRecords(t, wire, 1)
 	if len(records) != 1 || records[0]["type"] != "get_entries" {
 		t.Fatalf("source received mutation: %#v", records)
+	}
+}
+
+func TestForkInheritsDisplayName(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"Original", "Original"},
+		{"项目重构", "项目重构"},
+		{"", "first"},
+		{"fork from Original", "fork from Original"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			m, source, _, _ := uiForkFixture(t)
+			source.state.Name = tc.name
+			cmd := m.requestFork(source, "new")
+			if cmd == nil {
+				t.Fatal("fork request rejected")
+			}
+			snapshot := cmd().(forkSnapshotMsg)
+			if snapshot.err != nil || snapshot.name != tc.want {
+				t.Fatalf("fork name = %q, error = %v; want %q", snapshot.name, snapshot.err, tc.want)
+			}
+			if source.state.Name != tc.name {
+				t.Fatal("fork naming changed the source")
+			}
+		})
 	}
 }
 
@@ -138,11 +163,9 @@ func TestForkCancelBusyAndStale(t *testing.T) {
 	cmd = m.requestFork(tab, "new")
 	v = cmd().(forkSnapshotMsg)
 	v.entries = json.RawMessage(`{"entries":[],"leafId":null}`)
-	result := m.forkSnapshot(v)().(forkCreatedMsg)
-	if result.err == nil {
+	if m.forkSnapshot(v) != nil || tab.forkPending {
 		t.Fatal("invalid selection accepted")
 	}
-	m.forkCreated(result)
 	if len(m.tabs) != 1 || tab.forkPending || tab.state.Name != "Original" {
 		t.Fatal("failure changed source")
 	}

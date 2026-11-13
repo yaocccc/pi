@@ -20,6 +20,7 @@ type toolInspector struct {
 	tabID              int
 	itemID             string
 	taskKey, taskTitle string
+	fallbackReason     string
 	offset             int
 	followPaused       bool
 	cache              inspectorKey
@@ -108,7 +109,7 @@ func (m *Model) inspectorContains(x, y int) bool {
 }
 func (m *Model) closeInspector() {
 	m.finishPanelResize()
-	worker := m.inspector.worker != nil || m.inspector.parent != nil
+	worker := m.inspector.worker != nil || m.inspector.parent != nil || m.inspector.taskKey != ""
 	m.inspector = toolInspector{}
 	if t := m.current(); t != nil {
 		if !worker {
@@ -171,7 +172,11 @@ func (m *Model) inspectorRows() []string {
 		key.running != item.Running || key.failed != item.Error || key.result != item.HasResult ||
 		key.images != len(item.Images) || key.width != bodyWidth || key.theme != m.cfg.Theme {
 		m.inspector.cache = inspectorKey{item.ToolName, item.Text, string(item.Arguments), string(item.Details), item.Running, item.Error, item.HasResult, len(item.Images), bodyWidth, m.cfg.Theme}
-		m.inspector.rows = render.ToolResultRows(item, m.cfg.Theme, bodyWidth)
+		if m.inspector.fallbackReason != "" {
+			m.inspector.rows = render.WorkerTaskSummaryRows(item, m.inspector.fallbackReason, m.cfg.Theme, bodyWidth)
+		} else {
+			m.inspector.rows = render.ToolResultRows(item, m.cfg.Theme, bodyWidth)
+		}
 		// The title may decode large source arguments too; cache it with rows.
 		m.inspector.title = render.ToolResultTitle(item)
 		m.inspector.selection = transcriptSelection{}
@@ -186,6 +191,9 @@ func (m *Model) inspectorView() string {
 	title := m.inspector.title
 	if m.inspector.taskKey != "" {
 		title = "worker · " + strings.ReplaceAll(render.Clean(m.inspector.taskTitle), "\n", " ")
+		if m.inspector.fallbackReason != "" {
+			title = "简要详情 · " + strings.ReplaceAll(render.Clean(m.inspector.taskTitle), "\n", " ")
+		}
 		if m.inspector.worker != nil {
 			title = "只读 · " + strings.ReplaceAll(render.Clean(m.inspector.taskTitle), "\n", " ")
 		}
@@ -241,7 +249,7 @@ func (m *Model) inspectorClick(v tea.Mouse) bool {
 	if t == nil || len(t.dialogs) > 0 || !m.inspectorContains(v.X, v.Y) {
 		return false
 	}
-	if m.inspector.worker == nil && m.inspector.parent == nil {
+	if m.inspector.worker == nil && m.inspector.parent == nil && m.inspector.taskKey == "" {
 		t.selection = transcriptSelection{}
 	}
 	if rect, ok := m.inspectorCloseTarget(v.X, v.Y); ok && rect.contains(v.X, v.Y) {
@@ -366,7 +374,7 @@ func (m *Model) inspectorCloseRect() (hitRect, bool) {
 
 func (m *Model) toolInspectTarget(x, y int) (string, hitRect, bool) {
 	t := m.current()
-	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.inspector.selection.dragging || m.height < 8 || m.inspectorFullscreen() || x < 0 || x >= m.mainWidth() || y < transcriptTop || y >= transcriptTop+m.transcriptHeight(t) {
+	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.inspector.selection.dragging || m.height < 8 || m.inspectorFullscreen() || x < 0 || x >= m.mainWidth() || y < m.chatTop(m.current()) || y >= m.chatTop(m.current())+m.transcriptHeight(t) {
 		return "", hitRect{}, false
 	}
 	if box, ok := m.toastBox(t, time.Now()); ok && box.contains(x, y) {
@@ -385,7 +393,7 @@ func (m *Model) toolInspectTarget(x, y int) (string, hitRect, bool) {
 		}
 	}
 	lines := strings.Split(t.doc.Text, "\n")
-	row := t.offset + y - transcriptTop
+	row := t.offset + y - m.chatTop(m.current())
 	items := map[string]bool{}
 	workers := map[string]bool{}
 	for _, it := range t.state.Items {
@@ -432,7 +440,7 @@ func (m *Model) toolInspectTarget(x, y int) (string, hitRect, bool) {
 			if buttonRow <= top || buttonRow >= bottom || buttonRow < t.offset || buttonRow >= t.offset+m.transcriptHeight(t) {
 				return
 			}
-			rect := hitRect{x: right - w, y: buttonRow - t.offset + transcriptTop, width: w}
+			rect := hitRect{x: right - w, y: buttonRow - t.offset + m.chatTop(m.current()), width: w}
 			if nearInspectorButton(rect, x, y) {
 				targets = append(targets, candidate{id, rect})
 			}
@@ -468,7 +476,7 @@ func (m *Model) overlayToolInspect(rows []string) {
 	if !ok {
 		return
 	}
-	i := rect.y - transcriptTop
+	i := rect.y - m.chatTop(m.current())
 	if i < 0 || i >= len(rows) {
 		return
 	}

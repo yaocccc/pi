@@ -20,7 +20,7 @@ func TestStartupUpdateNoticeBelowWelcome(t *testing.T) {
 	tab.setValue("keep draft")
 	m.Update(updateCheckMsg{report: updates.Report{LatestVersion: "1.2.4", Packages: []updates.Package{{}}}})
 	view := ansi.Strip(m.View().Content)
-	welcome, notice := strings.Index(view, "Create a second session"), strings.Index(view, "Updates available:")
+	welcome, notice := strings.Index(view, "A quiet place to work."), strings.Index(view, "Updates available:")
 	if welcome < 0 || notice <= welcome || !strings.Contains(view, "Pi 1.2.4") {
 		t.Fatal("notice should follow default chat content", view)
 	}
@@ -112,7 +112,7 @@ func TestPiReleaseNotesBelowWelcomeAreScrollableAndNotHistory(t *testing.T) {
 	m.receiveReleaseNotes(releaseNotesMsg{notes})
 	m.document(tab)
 	text := ansi.Strip(tab.doc.Text)
-	welcome, title := strings.Index(text, "Create a second session"), strings.Index(text, "Pi 1.2.4")
+	welcome, title := strings.Index(text, "A quiet place to work."), strings.Index(text, "Pi 1.2.4")
 	if welcome < 0 || title <= welcome || !strings.Contains(text, "Last release note.") || tab.offset != 0 {
 		t.Fatal("release notes missing or not shown from the top", text)
 	}

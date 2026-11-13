@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -36,6 +37,54 @@ func WorkerTaskResult(item session.Item, key string) (session.Item, string, bool
 		}
 	}
 	return session.Item{}, "", false
+}
+
+// WorkerTaskSummaryRows renders an already-isolated task snapshot. The allowlist
+// deliberately excludes transport IDs, contracts, raw payloads and activity logs;
+// this is a clearly labelled fallback, not a reconstructed conversation.
+func WorkerTaskSummaryRows(item session.Item, reason string, theme config.Theme, width int) []string {
+	var data struct{ Tasks []map[string]json.RawMessage }
+	_ = json.Unmarshal(item.Details, &data)
+	selected := map[string]json.RawMessage{}
+	if len(data.Tasks) == 1 {
+		task := data.Tasks[0]
+		for _, key := range []string{"title", "objective", "status", "mode", "requestedPreset", "resolvedPreset", "phase"} {
+			if raw, ok := task[key]; ok {
+				selected[key] = raw
+			}
+		}
+		if _, ok := selected["requestedPreset"]; !ok {
+			if raw, ok := task["preset"]; ok {
+				selected["requestedPreset"] = raw
+			}
+		}
+		var result map[string]json.RawMessage
+		resultRaw := task["result"]
+		var text string
+		if json.Unmarshal(resultRaw, &text) == nil {
+			resultRaw = json.RawMessage(text)
+		}
+		if json.Unmarshal(resultRaw, &result) == nil && result != nil {
+			brief := map[string]json.RawMessage{}
+			for _, key := range []string{"status", "summary", "validation", "acceptance", "changed_files", "findings", "risks", "error"} {
+				if raw, ok := result[key]; ok {
+					brief[key] = raw
+				}
+			}
+			selected["result"], _ = json.Marshal(brief)
+		} else if raw, ok := task["result"]; ok {
+			var text string
+			if json.Unmarshal(raw, &text) == nil {
+				selected["result"] = raw
+			}
+		}
+	}
+	brief := item
+	brief.Arguments, brief.Text, brief.Images = nil, "", nil
+	brief.Details, _ = json.Marshal(map[string]any{"tasks": []any{selected}})
+	rows := visualWrap(paint("简要详情 · 完整会话记录不可用", theme.Muted), max(1, width))
+	rows = append(rows, visualWrap(paint(Clean(reason), theme.Muted), max(1, width))...)
+	return append(rows, ToolResultRows(brief, theme, width)...)
 }
 
 // ToolResultFrame uses the sidebar's square corners, padding and gradient.

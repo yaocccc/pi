@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager, buildSessionProjection, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { createOnlineContextCompactExtension } from "../extensions/online-context-compact/extension.ts";
+import { createOnlineContextCompactExtension, ONLINE_METRICS_ENTRY } from "../extensions/online-context-compact/extension.ts";
 import { resolveOnlineSettings, resolveSummarySettings } from "../extensions/online-context-compact/settings.ts";
 import { initialOnlineState, recordProviderRequest, recordBoundary, recordCompaction, recordCompletedPlanHandoff, recordCorrection, restoreOnlineState, ONLINE_STATE_ENTRY } from "../extensions/online-context-compact/state.ts";
 import { prepareCompaction, OCC_FILE_TRACKING } from "../extensions/online-context-compact/native-preparation.ts";
@@ -136,6 +136,7 @@ test("applied notification measures the committed boundary, includes the reminde
   now = 8500;
   const draft = settle(h), compacted = draft.entries[0];
   assert.equal(h.notices.length, 1, "not applied until the draft is committed");
+  assert.ok(!h.manager().getBranch().some(e => e.customType === ONLINE_METRICS_ENTRY));
   const estimate = () => buildSessionProjection(h.manager().getBranch()).messages.reduce((sum, m) => sum + estimateTokens(m), 0);
   const before = estimate();
   h.manager().appendCompaction(compacted.summary, compacted.firstKeptEntryId, 1000, compacted.details);
@@ -148,7 +149,15 @@ test("applied notification measures the committed boundary, includes the reminde
   assert.ok(after > withoutReminder);
   h.manager().appendMessage({ role: "user", content: "AFTER COMMIT " + "x".repeat(5000), timestamp: 5 });
   now = 9000;
+  const messages = buildSessionProjection(h.manager().getBranch()).messages;
   h.handlers.get("agent_settled")({}, h.ctx);
+  const metrics = h.manager().getBranch().filter(e => e.customType === ONLINE_METRICS_ENTRY);
+  assert.equal(metrics.length, 1);
+  assert.deepEqual(metrics[0].data, {
+    version: 1, compactionId: h.manager().getBranch().find(e => e.type === "compaction").id,
+    estimated: true, beforeTokens: before, afterTokens: after, generationMs: 2500, durationMs: 8000,
+  });
+  assert.deepEqual(buildSessionProjection(h.manager().getBranch()).messages, messages, "metrics are display-only");
   assert.equal(h.notices.length, 2);
   const message = h.notices[1][0];
   assert.ok(message.includes(`约 ${before.toLocaleString("en-US")} → ${after.toLocaleString("en-US")} tokens`));
@@ -156,6 +165,34 @@ test("applied notification measures the committed boundary, includes the reminde
   assert.match(message, /生成 2\.5s，总耗时 8\.0s（含等待安全边界）/);
   h.handlers.get("agent_settled")({}, h.ctx);
   assert.equal(h.notices.length, 2);
+  assert.equal(h.manager().getBranch().filter(e => e.customType === ONLINE_METRICS_ENTRY).length, 1);
+});
+
+for (const hasUI of [false, true]) test(`committed metrics persist with hasUI=${hasUI} and match RPC notifications`, async t => {
+  const previous = process.env.PI_GOUI_PROTOCOL;
+  process.env.PI_GOUI_PROTOCOL = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
+  const h = harness();
+  h.ctx.hasUI = hasUI;
+  h.ctx.mode = hasUI ? "rpc" : "json";
+  await h.boundary(); await h.ready;
+  h.finish(); await tick();
+  const draft = settle(h);
+  for (const entry of draft.entries) {
+    if (entry.type === "compaction") h.manager().appendCompaction(entry.summary, entry.firstKeptEntryId, 1000, entry.details);
+    else if (entry.type === "custom") h.manager().appendCustomEntry(entry.customType, entry.data);
+    else h.manager().appendCustomMessageEntry(entry.customType, entry.content, entry.display);
+  }
+  h.handlers.get("turn_start")({}, h.ctx);
+  const metrics = h.manager().getBranch().find(e => e.customType === ONLINE_METRICS_ENTRY);
+  assert.ok(metrics?.data.beforeTokens > metrics?.data.afterTokens);
+  if (hasUI) {
+    const notice = JSON.parse(h.notices.at(-1)[0].slice("pi-goui:event:v1:".length));
+    assert.equal(notice.name, "context.applied");
+    assert.deepEqual(notice.data, metrics.data);
+  } else assert.deepEqual(h.notices, []);
+  h.handlers.get("agent_settled")({}, h.ctx);
+  assert.equal(h.manager().getBranch().filter(e => e.customType === ONLINE_METRICS_ENTRY).length, 1);
 });
 
 test("token notification reports growth rather than claiming savings for a larger summary", async () => {

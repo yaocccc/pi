@@ -469,14 +469,14 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			imageLinks = append(imageLinks, links...)
 			appendSection(body, []Block{{ID: item.ID, Role: item.Role, MessageIndex: item.MessageIndex, Start: 0, End: len(body)}})
 		} else if item.Role == "system" || item.Role == "compaction" || item.Role == "branch_summary" {
-			body := []string{paint(fit(systemSynopsis(item.Text), max(1, width-4)), theme.Muted)}
+			body := systemRows(item, max(1, width-4), theme)
 			if width >= 8 {
 				var bubbleWidth int
 				title := "系统"
 				body, bubbleWidth = compactBubble(body, title, width)
 				body, sectionContent = frameContent(body, title, bubbleWidth, "system", false, width, theme)
 			} else {
-				body = []string{paint(fit(systemSynopsis(item.Text), width), theme.Muted)}
+				body = systemRows(item, width, theme)
 			}
 			appendSection(body, []Block{{ID: item.ID, Role: item.Role, MessageIndex: item.MessageIndex, Start: 0, End: len(body)}})
 		} else {

@@ -13,7 +13,7 @@ import (
 
 func TestInputFooterLayoutAndEffectiveKeys(t *testing.T) {
 	for _, width := range []int{132, 100, 80, 60, 30, 12, 1} {
-		m := testModel(t, `{"tui.input.submit":"alt+s","tui.input.newLine":"alt+j","app.exit":"alt+q"}`)
+		m := testModel(t, `{"tui.input.submit":"alt+s","tui.input.newLine":"alt+j","app.interrupt":"alt+q"}`)
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 36})
 		tab := m.current()
 		tab.state.Model = session.ModelInfo{ID: "gpt-6-astra"}
@@ -52,7 +52,7 @@ func TestInputFooterLayoutAndEffectiveKeys(t *testing.T) {
 				}
 			}
 			if width >= 100 {
-				for _, hint := range []string{"alt+s", "alt+j", "alt+q"} {
+				for _, hint := range []string{"alt+s", "alt+j"} {
 					if !strings.Contains(ansi.Strip(footer.text), hint) {
 						t.Fatalf("missing effective hint %s: %s", hint, footer.text)
 					}

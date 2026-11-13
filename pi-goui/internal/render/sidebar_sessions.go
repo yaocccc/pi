@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/internal/session"
 )
 
 // SidebarSessionRows is the number of terminal rows occupied by a session card.
@@ -58,13 +59,17 @@ func SidebarSessionCloseButton(width int) (start, length int) {
 }
 
 // sidebarHistoryRow reserves a navigation gutter before truncating the name.
-func sidebarHistoryRow(name string, width int, active bool) string {
+func sidebarHistoryRow(name string, width int, active bool, depths ...int) string {
 	marker := fit("  ", width)
 	color, markerColor := workbenchText, workbenchMuted
 	if active {
 		color, markerColor = workbenchAccent, workbenchAccent
 	}
-	name = fit(oneLine(name), max(0, width-ansi.StringWidth(marker)))
+	prefix := ""
+	if len(depths) > 0 {
+		prefix = session.ThreadPrefix(depths[0])
+	}
+	name = fit(prefix+oneLine(name), max(0, width-ansi.StringWidth(marker)))
 	return workbenchStyle(marker, markerColor, false) + workbenchStyle(name, color, active)
 }
 

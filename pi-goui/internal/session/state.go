@@ -34,6 +34,7 @@ type record struct {
 	summary string
 	// Owned by this record version; replaced together with msg or summary.
 	projection *recordProjection
+	compaction *CompactionMetrics
 }
 type entry struct {
 	Type, ID      string
@@ -237,6 +238,14 @@ func (s *State) LoadEntries(raw json.RawMessage) error {
 			}
 		}
 	}
+	// Only the active ancestry can supply checkpoint metrics; sibling branches
+	// must not leak their display metadata into this transcript.
+	metrics := map[string]*CompactionMetrics{}
+	for _, e := range path {
+		if id, value := compactionMetricsFromEntry(e); value != nil && metrics[id] == nil {
+			metrics[id] = value
+		}
+	}
 	var next []record
 	var plan []PlanStep
 	planCaughtUp := s.livePlanEntry == "" && s.livePlanTool == ""
@@ -283,7 +292,7 @@ func (s *State) LoadEntries(raw json.RawMessage) error {
 			keys[k] = true
 			next = append(next, record{id: id, key: k, msg: m})
 		case "compaction":
-			next = append(next, record{id: e.ID, summary: "Context compacted — earlier messages retained\n" + e.Summary})
+			next = append(next, record{id: e.ID, summary: "Context compacted — earlier messages retained\n" + e.Summary, compaction: metrics[e.ID]})
 		case "branch_summary":
 			next = append(next, record{id: e.ID, summary: "Branch summary\n" + e.Summary})
 		case "session_info":

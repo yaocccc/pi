@@ -37,6 +37,59 @@ func forkSource(t *testing.T) (string, json.RawMessage) {
 	return path, snapshot
 }
 
+func TestForkPreviewMatchesPersistedPrefix(t *testing.T) {
+	path, snapshot := forkSource(t)
+	for _, selected := range []string{"u1", "selected"} {
+		preview, err := PreviewFork(selected, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if preview.Turn < 1 || len(preview.Prefix) == 0 || preview.Reply == "" {
+			t.Fatalf("incomplete preview: %+v", preview)
+		}
+		if selected == "u1" && (preview.Turn != 1 || preview.ExcludedTurns != 1 || preview.NextUserID != "selected" || preview.LeafID != "compact") {
+			t.Fatalf("wrong boundary: %+v", preview)
+		}
+		if selected == "selected" && (preview.Turn != 2 || preview.ExcludedTurns != 0 || preview.NextUserID != "" || preview.LeafID != "error" || preview.Text != "edit me [image1]") {
+			t.Fatalf("wrong last round: %+v", preview)
+		}
+		fork, err := CreateFork(path, "original", "/tmp", "preview test", selected, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var data struct{ Entries []json.RawMessage }
+		if err := json.Unmarshal(fork.Entries, &data); err != nil {
+			t.Fatal(err)
+		}
+		if len(data.Entries) != len(preview.Prefix)+1 {
+			t.Fatal("preview and persistence disagree")
+		}
+		for i, raw := range preview.Prefix {
+			if string(raw) != string(data.Entries[i]) {
+				t.Fatal("preview and persistence differ at", i)
+			}
+		}
+	}
+}
+
+func TestForkPreviewToolsAndInvalidBranches(t *testing.T) {
+	snapshot := json.RawMessage(`{"entries":[{"id":"u","type":"message","parentId":null,"timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"question"}},{"id":"call","type":"message","parentId":"u","message":{"role":"assistant","content":[{"type":"toolCall","id":"t","name":"read","arguments":{}}]}},{"id":"result","type":"message","parentId":"call","message":{"role":"toolResult","toolCallId":"t","content":"result"}},{"id":"reply","type":"message","parentId":"result","message":{"role":"assistant","content":"answer"}},{"id":"next","type":"message","parentId":"reply","message":{"role":"user","content":"later"}}],"leafId":"next"}`)
+	p, err := PreviewFork("u", snapshot)
+	if err != nil || len(p.Prefix) != 4 || p.LeafID != "reply" || p.Reply != "answer" || p.Timestamp != "2026-01-01T00:00:00Z" {
+		t.Fatalf("tool round preview: %+v %v", p, err)
+	}
+	for _, raw := range []string{
+		`{"entries":[],"leafId":null}`,
+		`{"entries":[{"id":"u","type":"message","parentId":"missing","message":{"role":"user"}}],"leafId":"u"}`,
+		`{"entries":[{"id":"u","type":"message","parentId":"u","message":{"role":"user"}}],"leafId":"u"}`,
+		`{"entries":[{"id":"u","type":"message","message":{"role":"user"}},{"id":"u","type":"message","message":{"role":"user"}}],"leafId":"u"}`,
+	} {
+		if _, err := PreviewFork("u", json.RawMessage(raw)); err == nil {
+			t.Fatal("accepted invalid branch", raw)
+		}
+	}
+}
+
 func TestCreateForkPrefixAndIdentity(t *testing.T) {
 	path, snapshot := forkSource(t)
 	before, _ := os.ReadFile(path)

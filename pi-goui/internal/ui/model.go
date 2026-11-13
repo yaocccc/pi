@@ -61,6 +61,8 @@ type tab struct {
 	assistantStats          map[string]string
 	toast                   toastState
 	forkPending             bool
+	origin                  session.Header
+	originJump              *branchJump
 	sessionGuard            sessionGuard
 }
 type command struct{ Name, Description string }
@@ -88,6 +90,7 @@ type Model struct {
 	pointerShape                   string
 	inspector                      toolInspector
 	sidebarHistory                 sidebarHistoryState
+	branchEpoch                    uint64
 	updates                        updateState
 	sessionActions                 map[string]*sessionAction
 	files                          fileCompletionState
@@ -222,6 +225,7 @@ func (m *Model) addTab(file string) *tab {
 	return t
 }
 func (m *Model) activate(i int) tea.Cmd {
+	m.branchEpoch++
 	if i < 0 || i >= len(m.tabs) {
 		return nil
 	}
@@ -306,6 +310,7 @@ type snapshotMsg struct {
 	id                              int
 	revision                        uint64
 	state, entries, stats, commands json.RawMessage
+	origin                          *session.Header
 	err                             error
 }
 type sessionsMsg struct {
@@ -381,9 +386,13 @@ func (m *Model) refresh(t *tab) tea.Cmd {
 		if s.err != nil {
 			return s
 		}
-		var current struct{ SessionFile string }
+		var current struct{ SessionFile, SessionID string }
 		if json.Unmarshal(s.state, &current) == nil && current.SessionFile != "" {
 			file = current.SessionFile
+		}
+		if file != "" {
+			h, _ := session.ReadHeader(file, current.SessionID)
+			s.origin = &h
 		}
 		s.entries, s.err = c.Call(ctx, map[string]any{"type": "get_entries"})
 		if s.err != nil && file != "" {
@@ -527,6 +536,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.forkSnapshot(v))
 	case forkCreatedMsg:
 		cmds = append(cmds, m.forkCreated(v))
+	case branchOpenMsg:
+		cmds = append(cmds, m.branchOpenResult(v))
 	case snapshotMsg:
 		t := m.byID(v.id)
 		if t == nil {
@@ -556,7 +567,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			if v.origin != nil {
+				t.origin = *v.origin
+			}
 			t.dirty = true
+			if len(v.entries) > 0 {
+				m.finishOriginJump(t)
+			}
 			if len(t.history) == 0 {
 				for _, it := range t.state.Items {
 					if it.Role == "user" && strings.TrimSpace(it.Text) != "" {
@@ -711,6 +728,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delta = -3
 			} else if v.Button == tea.MouseWheelDown {
 				delta = 3
+			}
+			if len(t.dialogs) == 0 && !m.inspectorFullscreen() && v.X >= 0 && v.X < m.mainWidth() && v.Y >= m.editorTop(t) && v.Y < m.height {
+				t.editor.Scroll(delta)
+				break
 			}
 			if !m.inspectorOpen() && m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
 				layout := m.sidebarLayout()
@@ -919,10 +940,10 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 			Messages []struct{ EntryID, Text string }
 		}
 		_ = json.Unmarshal(v.data, &data)
-		d := m.newDialog("fork", "Fork from a user message", "The current session remains saved.")
+		d := m.newDialog("fork", "从此轮分叉 · 选择用户消息", "最新在前；选择后直接分叉，包含本轮回复及工具结果。")
 		for i := len(data.Messages) - 1; i >= 0; i-- {
 			v := data.Messages[i]
-			d.options = append(d.options, option{Label: v.Text, Value: v.EntryID})
+			d.options = append(d.options, forkChoice(t, v.EntryID, v.Text))
 		}
 		t.dialogs = append(t.dialogs, d)
 	case "get_entries":

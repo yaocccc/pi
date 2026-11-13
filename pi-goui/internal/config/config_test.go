@@ -86,8 +86,10 @@ func TestDefaultsAndLoadErrors(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(c.Keys.Actions()) < 90 {
-		t.Fatal("missing native action definitions")
+	for _, action := range []string{"tui.input.submit", "tui.editor.cursorLeft", "tui.select.confirm", "tui.altScreen.pageUp", "app.session.new", "app.session.delete", "app.model.select"} {
+		if len(c.Keys.Keys(action)) == 0 {
+			t.Fatalf("missing supported action: %s", action)
+		}
 	}
 	if !c.Keys.Match("tui.input.newLine", "ctrl+j") {
 		t.Fatal("native ctrl+j newline missing")

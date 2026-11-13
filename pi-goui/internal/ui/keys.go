@@ -16,9 +16,11 @@ import (
 var localCommands = []command{
 	{"new", "New parallel session"}, {"sessions", "Switch / resume a session"}, {"resume", "Resume a saved session"},
 	{"model", "Select model"}, {"thinking", "Set thinking level"}, {"name", "Rename this session"},
+	{"origin", "View the source session and fork turn"},
 	{"tree", "Browse full saved tree"}, {"fork", "Branch from a user message"}, {"compact", "Compact model context; keep visible history"},
 	{"theme", "Choose frontend color theme"}, {"hotkeys", "Effective native keybindings"}, {"reload", "Reload frontend keybindings, theme and settings"},
 	{"copy", "Copy last assistant response"}, {"export", "Export conversation as HTML"}, {"attach", "Attach an image by path"}, {"detach", "Remove pending image attachments"},
+	{"delete", "Delete this session permanently (confirm first)"},
 	{"close", "Close this session"}, {"quit", "Exit; stop all open sessions"},
 }
 
@@ -42,11 +44,6 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 		return nil
 	}
 	if w := m.inspector.worker; w != nil && (m.inspectorFullscreen() || m.inspectorContains(m.sidebarHistory.pointerX, m.sidebarHistory.pointerY)) {
-		if match("app.tools.expand") {
-			w.expanded = !w.expanded
-			w.revision++
-			return nil
-		}
 		if match("app.thinking.toggle") {
 			w.showThinking = !w.showThinking
 			w.revision++
@@ -110,7 +107,7 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 			m.completionHidden = true
 			return nil
 		}
-		if match("tui.input.submit") || match("tui.input.tab") {
+		if match("tui.input.tab") {
 			if m.files.pending == "" {
 				t.notify("No file matches · " + m.hint("tui.select.cancel") + " to dismiss")
 			}
@@ -147,10 +144,16 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 		return tea.Suspend
 	case match("app.session.new"):
 		return m.open("")
+	case match("app.session.previous"):
+		return m.activate((m.active + len(m.tabs) - 1) % len(m.tabs))
+	case match("app.session.next"):
+		return m.activate((m.active + 1) % len(m.tabs))
 	case match("app.session.resume"):
-		return m.listSessions(t, true)
+		return m.listSessions(t, false)
 	case match("app.session.tree"):
 		return call(t, "get_entries", nil)
+	case match("app.session.origin"):
+		return m.requestOrigin(t)
 	case match("app.session.fork"):
 		return call(t, "get_fork_messages", nil)
 	case match("app.model.select"):
@@ -163,11 +166,6 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 		return call(t, "cycle_thinking_level", nil)
 	case match("app.thinking.save"):
 		return saveThinking(t, m.cfg.AgentDir)
-	case match("app.tools.expand"):
-		t.expanded = !t.expanded
-		t.dirty = true
-		m.document(t)
-		return nil
 	case match("app.thinking.toggle"):
 		t.showThinking = !t.showThinking
 		t.dirty = true
@@ -377,6 +375,10 @@ func (m *Model) submit(t *tab, follow bool) tea.Cmd {
 }
 
 func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
+	if t.sending {
+		t.notify("Sending; wait before appending more content")
+		return nil
+	}
 	if !checked && t.state.File != "" && !t.ownRunActive() {
 		if t.sessionGuard.path == t.state.File && t.sessionGuard.warning != "" && !t.sessionGuard.approved {
 			return m.sessionGateDialog(t)
@@ -395,23 +397,6 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 			m.completionHidden = false
 			return cmd
 		}
-		parts := strings.Fields(strings.TrimPrefix(text, "/"))
-		if len(parts) == 0 {
-			t.notify("Choose a command")
-			return nil
-		}
-		name := parts[0]
-		known := false
-		for _, c := range t.commands {
-			if c.Name == name {
-				known = true
-				break
-			}
-		}
-		if !known {
-			t.status = "Unknown command /" + name + "; not sent to the model"
-			return nil
-		}
 	}
 	if t.imagePending > 0 {
 		t.notify("Reading clipboard image; wait before sending")
@@ -422,6 +407,7 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 		return nil
 	}
 	id, c := t.id, t.client
+	mergePending := t.state.Busy && !strings.HasPrefix(text, "/")
 	payload := map[string]any{"type": "prompt", "message": text}
 	if t.state.Busy {
 		if follow {
@@ -446,6 +432,13 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
+		if mergePending {
+			merged, err := mergeQueuedPrompt(ctx, c.Call, payload, original)
+			original = merged
+			if err != nil {
+				return replyMsg{id: id, op: "prompt", err: err, text: original, images: images, draftRevision: draftRevision}
+			}
+		}
 		data, err := c.Call(ctx, payload)
 		return replyMsg{id: id, op: "prompt", data: data, err: err, text: original, images: images, draftRevision: draftRevision}
 	}
@@ -457,7 +450,7 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 	case "new":
 		return m.open(""), true
 	case "sessions", "resume":
-		return m.listSessions(t, name == "resume"), true
+		return m.listSessions(t, false), true
 	case "model":
 		return call(t, "get_available_models", nil), true
 	case "thinking":
@@ -475,6 +468,8 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 		return nil, true
 	case "tree":
 		return call(t, "get_entries", nil), true
+	case "origin":
+		return m.requestOrigin(t), true
 	case "fork":
 		return call(t, "get_fork_messages", nil), true
 	case "compact":
@@ -505,13 +500,7 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 		return nil, true
 	case "hotkeys", "shortcuts", "help":
 		d := m.newDialog("help", "Effective keybindings", "")
-		var lines []string
-		for _, a := range m.cfg.Keys.Actions() {
-			if keys := m.cfg.Keys.Keys(a); len(keys) > 0 {
-				lines = append(lines, " "+strings.Join(keys, ", ")+"  "+a)
-			}
-		}
-		d.editor.SetValue(strings.Join(lines, "\n"))
+		d.editor.SetValue(m.hotkeysText())
 		t.dialogs = append(t.dialogs, d)
 		return nil, true
 	case "reload":
@@ -527,6 +516,12 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 			t.notify("UI config reloaded · reopen a session to reload pi extensions")
 		}
 		return nil, true
+	case "delete":
+		if arg != "" {
+			t.notify("Usage: /delete — deletes only the current session after confirmation")
+			return nil, true
+		}
+		return m.requestDeleteSession(t), true
 	case "close":
 		return m.requestCloseSession(t, true), true
 	case "quit", "exit":

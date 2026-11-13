@@ -21,13 +21,7 @@ function records(root: string, id: string): any[] {
 
 test("private bounded log preserves real messages/tools and strips only system declarations", (t) => {
  const root = temporary(t);
- const inherited = [
-  { type: "message", id: "s", parentId: null, message: { role: "system", content: "PRIVATE_SYSTEM" } },
-  { type: "message", id: "u", parentId: "s", message: { role: "user", content: "parent context" } },
-  { type: "compaction", id: "c", parentId: "u", firstKeptEntryId: "s", summary: "summary", systemMessage: { content: "PRIVATE_SYSTEM" } },
- ];
- const snapshot = { branchJsonl: inherited.map((entry) => JSON.stringify(entry)).join("\n") };
- const writer = new WorkerTranscriptWriter({ root, cwd: root, prompt: "actual task", snapshot });
+ const writer = new WorkerTranscriptWriter({ root, cwd: root, prompt: "actual task" });
  assert.match(writer.descriptor.id, /^[a-f0-9-]{36}$/);
  assert.deepEqual(Object.keys(writer.descriptor).sort(), ["id", "version"]);
  const user = { role: "user", content: "actual task", timestamp: 1 };
@@ -48,14 +42,12 @@ test("private bounded log preserves real messages/tools and strips only system d
  writer.finish("failed");
  const all = records(root, writer.descriptor.id);
  assert.equal(all[0].type, "worker_transcript_header");
- assert.equal(all[0].entries[0].parentId, null);
- assert.equal(all[0].entries[1].firstKeptEntryId, "u");
+ assert.deepEqual(all[0].entries, []);
  assert.deepEqual(all.slice(1, events.length + 1), events);
  assert.equal(all.at(-1).status, "completed");
  assert.equal(all.at(-1).complete, true);
  assert.equal(all.filter((event) => event.type === "worker_transcript_end").length, 1);
  assert.ok(!JSON.stringify(all).includes("PRIVATE_SYSTEM"));
- assert.ok(snapshot.branchJsonl.includes("PRIVATE_SYSTEM"), "does not mutate source snapshot");
  assert.equal(fs.statSync(path.join(root, "worker-transcripts")).mode & 0o777, 0o700);
  assert.equal(fs.statSync(path.join(root, "worker-transcripts", `${writer.descriptor.id}.jsonl`)).mode & 0o777, 0o600);
 });
@@ -82,9 +74,6 @@ test("size cap and unsafe/unwritable storage explicitly mark incomplete without 
  assert.equal(writer.descriptor.incomplete, true);
  assert.equal(records(root, writer.descriptor.id).at(-1).complete, false);
  assert.ok(fs.statSync(path.join(root, "worker-transcripts", `${writer.descriptor.id}.jsonl`)).size <= 4096);
- const fork = new WorkerTranscriptWriter({ root, cwd: root, prompt: "task", maxBytes: 4096, snapshot: { branchJsonl: JSON.stringify({ type: "message", id: "large", message: { role: "user", content: "x".repeat(6000) } }) } });
- assert.equal(fork.descriptor.error, "size_limit");
- assert.equal(records(root, fork.descriptor.id)[0].type, "worker_transcript_header");
  const outside = temporary(t);
  const alias = temporary(t);
  fs.symlinkSync(outside, path.join(alias, "worker-transcripts"));
@@ -114,16 +103,26 @@ test("real process pipeline publishes live descriptor and preserves UTF-8 chunks
    assert.ok(child.transcript);
    assert.ok(progress.some((patch) => patch.transcript?.id === child.transcript!.id && patch.phase !== "子进程已完成"));
    const all = records(root, child.transcript.id);
-   assert.equal(all[0].entries.length, mode === "fork" ? 1 : 0);
+   assert.deepEqual(all[0].entries, []);
+   assert.ok(!JSON.stringify(all).includes("fork-parent"));
    assert.equal(all.filter((event) => event.type === "message_end" && event.message?.role === "user").length, 1);
    assert.equal(all.find((event) => event.type === "message_update").assistantMessageEvent.delta, "中文 🧪\u2028完整");
    assert.ok(all.some((event) => event.type === "tool_execution_end"));
    assert.equal(all.at(-1).status, scenario === "complete" ? "completed" : scenario === "fail" ? "failed" : "incomplete");
    assert.ok(!JSON.stringify(all).includes("DO_NOT_LOG_SYSTEM_PROMPT"));
    if (scenario === "bad-json") assert.equal(child.transcript.error, "protocol_error");
+   assertLeaseReleased(root, child.transcript.id);
   }
  }
 });
+
+function assertLeaseReleased(root: string, id: string): void {
+ const marker = path.join(root, "worker-transcripts", `${id}.active`);
+ if (!fs.existsSync(marker)) return;
+ const owner = JSON.parse(fs.readFileSync(marker, "utf8"));
+ assert.equal(owner.pid, process.pid);
+ assert.equal(owner.finished, true, "live host must mark failed/incomplete recording finished");
+}
 
 test("cancelled child keeps a readable transcript and final descriptor", { timeout: 10000 }, async (t) => {
  const root = temporary(t);
@@ -139,6 +138,7 @@ test("cancelled child keeps a readable transcript and final descriptor", { timeo
  assert.equal(child.aborted, true);
  assert.equal(child.transcript?.id, liveID);
  assert.equal(records(root, liveID!).at(-1).status, "cancelled");
+ assertLeaseReleased(root, liveID!);
 });
 
 test("recording IO failure does not fail execution, and timeout/spawn failure close logs", { timeout: 10000 }, async (t) => {
@@ -153,21 +153,40 @@ test("recording IO failure does not fail execution, and timeout/spawn failure cl
   { owner: createWorkerOwner(), transcriptRoot: root, invocation: { command: process.execPath, args: [fixture, "wait", "actual"] } });
  assert.equal(timeout.timedOut, true);
  assert.equal(records(root, timeout.transcript!.id).at(-1).status, "timed_out");
+ assertLeaseReleased(root, timeout.transcript!.id);
  const missing = await runPiWorker(task, route, root, "system", "actual", undefined, 5000, 1, undefined,
   { owner: createWorkerOwner(), transcriptRoot: root, invocation: { command: path.join(root, "missing-executable"), args: [] } });
  assert.notEqual(missing.exitCode, 0);
  assert.equal(records(root, missing.transcript!.id).at(-1).status, "failed");
+ assertLeaseReleased(root, missing.transcript!.id);
 });
 
-test("default storage is beside the configured agent directory, not inside it", (t) => {
+test("synchronous spawn rejection releases the lease while the host remains alive", async (t) => {
+ const root = temporary(t);
+ let id: string | undefined;
+ await assert.rejects(runPiWorker(task, route, root, "system", "actual", undefined, 5000, 1,
+  (patch) => { if (patch.transcript) id = patch.transcript.id; },
+  { owner: createWorkerOwner(), transcriptRoot: root, invocation: { command: "", args: [] } }));
+ assert.ok(id);
+ assert.equal(records(root, id).at(-1).status, "failed");
+ assertLeaseReleased(root, id);
+});
+
+test("default and custom storage stay beside the resolved agent directory", (t) => {
  const root = temporary(t);
  const before = process.env.PI_CODING_AGENT_DIR;
  try {
-  process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
-  const writer = new WorkerTranscriptWriter({ cwd: root, prompt: "task" });
-  writer.finish("completed");
-  assert.equal(records(root, writer.descriptor.id)[0].cwd, root);
-  assert.equal(fs.existsSync(path.join(root, "agent", "worker-transcripts")), false);
+  for (const name of ["agent", "custom-agent"]) {
+   const agent = path.join(root, name);
+   for (const configured of [agent, path.relative(process.cwd(), agent)]) {
+    process.env.PI_CODING_AGENT_DIR = configured;
+    const writer = new WorkerTranscriptWriter({ cwd: root, prompt: "task" });
+    writer.finish("completed");
+    assert.equal(records(root, writer.descriptor.id)[0].cwd, root);
+    assert.equal(fs.existsSync(path.join(agent, "worker-transcripts")), false);
+    assertLeaseReleased(root, writer.descriptor.id);
+   }
+  }
  } finally {
   if (before === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = before;

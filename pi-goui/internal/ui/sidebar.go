@@ -21,7 +21,10 @@ func (m *Model) sidebarContext() render.SidebarContext {
 	}
 	if m.sidebarHistory.cwd == directory {
 		context.HistoryOffset = m.sidebarHistory.offset
-		for _, saved := range m.sidebarHistory.sessions {
+		list := m.sidebarSummaries()
+		for _, row := range session.ThreadRows(list) {
+			saved := list[row.Index]
+			context.HistoryDepth = append(context.HistoryDepth, row.Depth)
 			name := saved.Name
 			if name == "" {
 				name = saved.FirstMessage
@@ -53,6 +56,31 @@ func (m *Model) sidebarContext() render.SidebarContext {
 		}
 	}
 	return context
+}
+
+// Render, click and tooltip all resolve the same threaded row order.
+func (m *Model) sidebarSummaries() []session.Summary {
+	list := append([]session.Summary(nil), m.sidebarHistory.sessions...)
+	for i, saved := range list {
+		for _, t := range m.tabs {
+			if sameSessionPath(t.state.File, saved.Path) && t.state.ID == saved.ID {
+				list[i].Name = t.state.Name
+				if t.origin.ID == t.state.ID {
+					list[i].ParentSession, list[i].Fork = t.origin.ParentSession, t.origin.Fork
+				}
+				break
+			}
+		}
+	}
+	return list
+}
+func (m *Model) sidebarHistoryAt(index int) session.Summary {
+	list := m.sidebarSummaries()
+	rows := session.ThreadRows(list)
+	if index < 0 || index >= len(rows) {
+		return session.Summary{}
+	}
+	return list[rows[index].Index]
 }
 
 // Hover uses the same inner card rectangle and scroll offset as rendering.

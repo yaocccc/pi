@@ -115,14 +115,15 @@ func List(root, cwd string) ([]Summary, error) {
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
-		var header struct{ Type, ID, Cwd string }
+		var header Header
 		if json.Unmarshal(raw, &header) != nil || header.Type != "session" {
 			return nil
 		}
 		if cwd != "" && filepath.Clean(header.Cwd) != cwd {
 			return nil
 		}
-		v := Summary{ID: header.ID, Path: path, Cwd: header.Cwd, Modified: info.ModTime().UnixMilli()}
+		normalizeOrigin(&header)
+		v := Summary{ID: header.ID, Path: path, Cwd: header.Cwd, Modified: info.ModTime().UnixMilli(), ParentSession: header.ParentSession, Fork: header.Fork}
 		for !errors.Is(err, io.EOF) {
 			raw, err = readRecord(r)
 			if err != nil && !errors.Is(err, io.EOF) {

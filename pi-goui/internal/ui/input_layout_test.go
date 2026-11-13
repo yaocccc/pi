@@ -16,7 +16,7 @@ func TestInputInitialNewlineKeepsFirstLine(t *testing.T) {
 	}{
 		{"ctrl-j", "", 'j', tea.ModCtrl},
 		{"shift-enter", "", tea.KeyEnter, tea.ModShift},
-		{"remapped-ctrl-n", `{"tui.input.newLine":"ctrl+n"}`, 'n', tea.ModCtrl},
+		{"remapped-ctrl-n", `{"tui.input.newLine":"ctrl+n","app.session.new":[]}`, 'n', tea.ModCtrl},
 		{"remapped-alt-j", `{"tui.input.newLine":"alt+j"}`, 'j', tea.ModAlt},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

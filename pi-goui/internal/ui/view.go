@@ -41,8 +41,8 @@ func (m *Model) resizeEditor(t *tab) {
 	// Let Bubbles count its actual soft-wrapped rows and clamp its viewport after
 	// edits; setting a larger fixed height alone leaves the old scroll offset.
 	t.editor.Area.SetStyles(m.editorStyles())
-	t.editor.Resize(max(1, m.mainWidth()-4), max(1, min(7, m.height/4)))
-	t.editor.Area.Placeholder = "Message pi…  / for commands"
+	t.editor.Resize(max(1, m.mainWidth()-4), max(1, min(5, m.height-6)))
+	t.editor.Area.Placeholder = "Message pi…  /command  @file"
 	for _, d := range t.dialogs {
 		m.resizeDialog(d)
 	}
@@ -61,10 +61,6 @@ func (m *Model) editorStyles() textarea.Styles {
 }
 func (m *Model) extraLines(t *tab) []string {
 	var out []string
-	q := len(t.state.Steering) + len(t.state.FollowUp)
-	if q > 0 {
-		out = append(out, fmt.Sprintf("↳ queued %d · %s restores", q, m.hint("app.message.dequeue")))
-	}
 	keys := make([]string, 0, len(t.widgets))
 	for k := range t.widgets {
 		keys = append(keys, k)
@@ -76,7 +72,13 @@ func (m *Model) extraLines(t *tab) []string {
 	if len(out) > 3 {
 		out = append(out[:2], fmt.Sprintf("… %d more widget lines", len(out)-2))
 	}
-	return out
+	for i, line := range out {
+		out[i] = m.paint(fitLine(" "+render.Clean(line), m.mainWidth()), m.cfg.Theme.Muted)
+	}
+	messages := append([]string(nil), t.state.Steering...)
+	messages = append(messages, t.state.FollowUp...)
+	queue := render.Queued(messages, m.hint("app.message.dequeue"), m.mainWidth(), max(4, min(9, m.height/3)), m.cfg.Theme)
+	return append(queue, out...)
 }
 func (m *Model) transcriptHeight(t *tab) int {
 	extra := len(m.extraLines(t))
@@ -84,7 +86,7 @@ func (m *Model) transcriptHeight(t *tab) int {
 	if m.searching != "" {
 		n++
 	}
-	return max(1, m.height-transcriptTop-1-m.editorFrameHeight(t)-extra-n)
+	return max(1, m.height-m.chatTop(t)-1-m.editorFrameHeight(t)-extra-n)
 }
 func (m *Model) hint(action string) string {
 	keys := m.cfg.Keys.Keys(action)
@@ -148,17 +150,21 @@ func (m *Model) View() tea.View {
 			visible[i] = m.selectionLine(t, visible[i], offset+i)
 		}
 		m.overlayToolInspect(visible)
+		m.overlayFork(visible)
 		text := strings.Join(visible, "\n")
 		if len(t.state.Items) == 0 && !m.showStartupInfo(t) {
-			text = m.paint(welcomeText, theme.Muted)
+			text = m.welcomeView()
 		}
 		var rows []string
+		if m.chatTop(t) > 0 {
+			rows = append(rows, fitLine(m.paint(m.originTitle(t), theme.Muted), w))
+		}
 		rows = append(rows, m.transcriptViewport(t, text, len(lines), height))
 		if m.searching != "" {
 			rows = append(rows, m.paint(fitLine(" Find: "+m.search+"▏  · Enter next / Esc close", w), theme.Accent))
 		}
 		for _, line := range m.extraLines(t) {
-			rows = append(rows, m.paint(fitLine(" "+render.Clean(line), w), theme.Muted))
+			rows = append(rows, fitLine(line, w))
 		}
 		completions := m.completion(t)
 		start := max(0, min(m.completionIndex-2, len(completions)-4))
@@ -303,7 +309,7 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 		}
 		historyIndex := v.Y - layout.HistoryStart
 		if historyIndex >= 0 && historyIndex < layout.HistoryCount*render.SidebarHistoryRows && v.Y < m.height-1 && v.X >= m.mainWidth()+2 && v.X < m.width-2 {
-			return m.openRecent(m.sidebarHistory.sessions[layout.HistoryOffset+historyIndex/render.SidebarHistoryRows].Path)
+			return m.openRecent(m.sidebarHistoryAt(layout.HistoryOffset + historyIndex/render.SidebarHistoryRows).Path)
 		}
 		newStart, newWidth := render.SidebarNewButton(max(0, m.sidebarWidth()-4))
 		newX := m.mainWidth() + 2 + newStart
@@ -354,12 +360,18 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 		t.selection.dragging = false
 		return nil
 	}
+	if m.originHit(v.X, v.Y) {
+		return m.requestOrigin(t)
+	}
 	if _, rect, visible := m.latestButton(t); visible && rect.contains(v.X, v.Y) {
 		t.selection = transcriptSelection{}
 		t.noteScroll()
 		t.follow = true
 		m.clampScroll(t)
 		return nil
+	}
+	if id, rect, ok := m.forkTarget(v.X, v.Y); ok && rect.contains(v.X, v.Y) {
+		return m.requestFork(t, id)
 	}
 	if id, rect, ok := m.toolInspectTarget(v.X, v.Y); ok && rect.contains(v.X, v.Y) {
 		for _, block := range t.doc.Blocks {

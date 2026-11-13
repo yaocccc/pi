@@ -35,6 +35,9 @@ func (m *Model) filtered(d *dialog) []option {
 		return nil
 	}
 	query := strings.ToLower(d.editor.Value())
+	if d.kind == "session" {
+		query = strings.TrimSpace(query)
+	}
 	if d.kind == "confirm" || d.kind == "close" || d.kind == "resume" || d.kind == "session-delete" || d.kind == "session-send-confirm" {
 		query = ""
 	}
@@ -46,7 +49,13 @@ func (m *Model) filtered(d *dialog) []option {
 				continue
 			}
 		}
-		if !strings.Contains(strings.ToLower(o.Label+" "+o.Detail), query) {
+		search := o.Label + " " + o.Detail
+		if d.kind == "session" {
+			if s, ok := o.Data.(session.Summary); ok {
+				search += " " + s.FirstMessage + " " + s.Path
+			}
+		}
+		if !strings.Contains(strings.ToLower(search), query) {
 			continue
 		}
 		if d.kind == "session" && !d.showPath {
@@ -56,6 +65,18 @@ func (m *Model) filtered(d *dialog) []option {
 	}
 	if d.reverseSort {
 		sort.SliceStable(options, func(i, j int) bool { return options[i].Label < options[j].Label })
+	} else if d.kind == "session" && query == "" {
+		list := make([]session.Summary, len(options))
+		for i, o := range options {
+			list[i], _ = o.Data.(session.Summary)
+		}
+		threaded := make([]option, 0, len(options))
+		for _, row := range session.ThreadRows(list) {
+			o := options[row.Index]
+			o.Label = session.ThreadPrefix(row.Depth) + o.Label
+			threaded = append(threaded, o)
+		}
+		return threaded
 	}
 	return options
 }
@@ -79,7 +100,18 @@ func (m *Model) sessionDialog(t *tab, list []session.Summary, hideCurrent ...boo
 		if other == t {
 			status = "current"
 		}
-		d.options = append(d.options, option{Label: label + "  [" + status + "]", Detail: other.state.File, Value: fmt.Sprintf("@%d", other.id), Data: session.Summary{ID: other.state.ID, Name: other.state.Name, Path: other.state.File}})
+		summary := summaryOf(other)
+		summary.Name = other.state.Name
+		for _, saved := range list {
+			if sameSessionPath(saved.Path, summary.Path) && saved.ID == summary.ID {
+				summary.Modified, summary.FirstMessage = saved.Modified, saved.FirstMessage
+				// The selector was just read from disk. A matching cached header
+				// can still have stale ancestry, so prefer the fresh relationship.
+				summary.ParentSession, summary.Fork = saved.ParentSession, saved.Fork
+				break
+			}
+		}
+		d.options = append(d.options, option{Label: label + "  [" + status + "]", Detail: other.state.File, Value: fmt.Sprintf("@%d", other.id), Data: summary})
 	}
 	for _, s := range list {
 		if seen[s.Path] {
@@ -115,6 +147,10 @@ func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 			return m.cancelWorkerSettings(t, d)
 		}
 		m.restoreTheme(d)
+		if d.kind == "branch-loading" {
+			m.branchEpoch++
+			t.originJump = nil
+		}
 		t.dialogs = t.dialogs[1:]
 		return tea.Batch(respond(t, d, map[string]any{"cancelled": true}), m.focus(t))
 	}
@@ -131,18 +167,10 @@ func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 			d.reverseSort = !d.reverseSort
 			d.selected = 0
 			return nil
-		case match("app.session.delete") || match("app.session.deleteNoninvasive"):
+		case match("app.session.delete"):
 			return m.requestSessionAction(t, d, "delete")
 		case match("app.session.rename"):
 			return m.requestSessionAction(t, d, "rename")
-		}
-	}
-	if d.kind == "tree" {
-		for _, action := range m.cfg.Keys.Actions() {
-			if strings.HasPrefix(action, "app.tree.") && match(action) {
-				d.message = "This RPC tree is read only; filtering, labels and in-place navigation are unavailable. Use /fork to branch."
-				return nil
-			}
 		}
 	}
 	options := m.filtered(d)
@@ -161,7 +189,7 @@ func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 			t.dialogs = t.dialogs[1:]
 			return m.focus(t)
 		}
-		d.selected = min(d.selected, max(0, len(strings.Split(d.editor.Value(), "\n"))-page))
+		d.selected = min(d.selected, max(0, len(popupHelpLines(d, m.popupGeometry(d).inner))-page))
 		return nil
 	}
 	multiline := d.kind == "editor"
@@ -188,7 +216,7 @@ func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 	if match("tui.select.confirm") || match("tui.input.submit") {
 		return m.confirmDialog(t, d)
 	}
-	if d.kind == "confirm" || d.kind == "close" || d.kind == "resume" || d.kind == "session-delete" || d.kind == "session-send-confirm" {
+	if d.kind == "confirm" || d.kind == "close" || d.kind == "resume" || d.kind == "session-delete" || d.kind == "session-send-confirm" || d.kind == "branch-loading" {
 		return nil
 	}
 	for _, action := range m.cfg.Keys.Actions() {
@@ -271,6 +299,10 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 		return call(t, "set_model", map[string]any{"provider": model.Provider, "modelId": model.ID})
 	case "thinking":
 		return call(t, "set_thinking_level", map[string]any{"level": value})
+	case "branch-loading":
+		m.branchEpoch++
+		t.originJump = nil
+		return nil
 	case "fork":
 		return m.requestFork(t, value)
 	case "name":

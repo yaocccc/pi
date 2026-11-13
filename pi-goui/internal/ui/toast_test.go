@@ -60,7 +60,7 @@ func TestToastLayoutExpiryAndIsolation(t *testing.T) {
 		original := fitBox(strings.Repeat("x", m.mainWidth())+"\n", m.mainWidth(), m.height)
 		out := m.overlayToast(first, original, now)
 		rows := strings.Split(out, "\n")
-		if ansi.Cut(ansi.Strip(rows[box.y+1]), box.x, box.x+box.width) != "│ Copied │" {
+		if ansi.Cut(ansi.Strip(rows[box.y+1]), box.x, box.x+box.width) != "│ Copied"+strings.Repeat(" ", box.width-10)+" │" {
 			t.Fatalf("bad toast placement: %q", rows[box.y+1])
 		}
 		if box.x+box.width >= m.mainWidth() || box.y+box.height > m.transcriptHeight(first) {
@@ -74,6 +74,16 @@ func TestToastLayoutExpiryAndIsolation(t *testing.T) {
 		if first.offset != 7 || first.follow || first.dirty {
 			t.Fatal("toast changed document/scroll")
 		}
+		if toastLifetime != 5*time.Second {
+			t.Fatal("notification lifetime must be five seconds")
+		}
+		if _, ok = m.toastBox(first, now.Add(4999*time.Millisecond)); !ok {
+			t.Fatal("toast disappeared before five seconds")
+		}
+		if box.width != 10 || ansi.Strip(box.rows[0]) != "╭────────╮" {
+			t.Fatal("notification must retain the original compact frame")
+		}
+		assertNoBackground(t, strings.Join(box.rows, ""))
 		if _, ok = m.toastBox(first, now.Add(toastLifetime)); ok {
 			t.Fatal("toast did not expire")
 		}
@@ -117,6 +127,30 @@ func TestToastSafeTextAndDismissDoesNotFold(t *testing.T) {
 		}
 	}
 }
+func TestToastUsesAccentTextAndBorderWithoutBackground(t *testing.T) {
+	m := testModel(t, "")
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.cfg.Theme.Background = "#112233"
+	m.cfg.Theme.Text = "#ddeeff"
+	m.cfg.Theme.Accent = "#aabbcc"
+	now := time.Now()
+	m.current().notifyAt("Saved", now)
+	box, ok := m.toastBox(m.current(), now)
+	if !ok {
+		t.Fatal("missing notification")
+	}
+	styled := strings.Join(box.rows, "\n")
+	assertNoBackground(t, styled)
+	if !strings.Contains(box.rows[1], m.paint("Saved", m.cfg.Theme.Accent)) {
+		t.Fatal("notification text must use the accent color")
+	}
+	for _, row := range box.rows {
+		if !strings.Contains(row, "38;2;170;187;204") {
+			t.Fatal("notification border must use the accent color")
+		}
+	}
+}
+
 func TestToastNotificationsRemainSessionScoped(t *testing.T) {
 	m := testModel(t, "")
 	first := m.current()

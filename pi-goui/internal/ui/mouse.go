@@ -111,7 +111,7 @@ func copySelection(t *tab, text string) tea.Cmd {
 	return tea.SetClipboard(text)
 }
 func (m *Model) transcriptPoint(t *tab, x, y int) textPoint {
-	row := t.offset + min(max(0, y-transcriptTop), max(0, m.transcriptHeight(t)-1))
+	row := t.offset + min(max(0, y-m.chatTop(m.current())), max(0, m.transcriptHeight(t)-1))
 	lineCount := len(t.selection.lines)
 	if lineCount == 0 || t.selection.document != t.doc.Text {
 		lineCount = strings.Count(t.doc.Text, "\n") + 1
@@ -122,11 +122,11 @@ func (m *Model) transcriptPoint(t *tab, x, y int) textPoint {
 func (m *Model) beginSelection(t *tab, v tea.Mouse) {
 	m.inspector.selection = transcriptSelection{}
 	t.selection = transcriptSelection{}
-	if m.height < 8 || v.Mod&tea.ModShift != 0 || v.X < 0 || v.X >= m.mainWidth() || v.Y < transcriptTop || v.Y >= m.transcriptHeight(t)+transcriptTop {
+	if m.height < 8 || v.Mod&tea.ModShift != 0 || v.X < 0 || v.X >= m.mainWidth() || v.Y < m.chatTop(m.current()) || v.Y >= m.transcriptHeight(t)+m.chatTop(m.current()) {
 		return
 	}
 	lines := strings.Split(t.doc.Text, "\n")
-	if v.Y-transcriptTop+t.offset >= len(lines) {
+	if v.Y-m.chatTop(m.current())+t.offset >= len(lines) {
 		return // Blank viewport rows are not the last message's fold target.
 	}
 	point := m.transcriptPoint(t, v.X, v.Y)
@@ -150,9 +150,9 @@ func (m *Model) mouseMotion(v tea.Mouse) {
 	if v.Button != tea.MouseLeft {
 		return
 	}
-	if v.Y < transcriptTop {
+	if v.Y < m.chatTop(m.current()) {
 		m.scroll(t, -1)
-	} else if v.Y >= m.transcriptHeight(t)+transcriptTop {
+	} else if v.Y >= m.transcriptHeight(t)+m.chatTop(m.current()) {
 		m.scroll(t, 1)
 	}
 	point := m.transcriptPoint(t, v.X, v.Y)
@@ -201,7 +201,7 @@ func (m *Model) mouseRelease(v tea.Mouse) tea.Cmd {
 	// never alter its layout before the selected text has been copied.
 	row := point.line
 	t.selection = transcriptSelection{}
-	if v.X < 0 || v.X >= m.mainWidth() || v.Y < transcriptTop || v.Y >= m.transcriptHeight(t)+transcriptTop {
+	if v.X < 0 || v.X >= m.mainWidth() || v.Y < m.chatTop(m.current()) || v.Y >= m.transcriptHeight(t)+m.chatTop(m.current()) {
 		return nil
 	}
 	for _, link := range t.doc.ImageLinks {

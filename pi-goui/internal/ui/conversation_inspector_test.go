@@ -203,6 +203,34 @@ func TestConversationStreamInvalidationAndUnknownEvents(t *testing.T) {
 		t.Fatal("next delta stale")
 	}
 }
+func TestConversationNestedSummaryFallbackReturns(t *testing.T) {
+	m, w := conversationFixture(t)
+	w.expanded = true
+	w.revision++
+	m.inspectorRows()
+	var id string
+	for _, b := range w.doc.Blocks {
+		if b.InspectorTask != "" {
+			id = b.ID
+			break
+		}
+	}
+	if id == "" {
+		t.Fatal("no nested task target")
+	}
+	if m.openConversationDetail(id) != nil || m.inspector.worker != nil || m.inspector.parent == nil || m.inspector.fallbackReason == "" {
+		t.Fatal("missing nested log did not open summary")
+	}
+	plain := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	if !strings.Contains(plain, "Nested task") || !strings.Contains(plain, "简要详情") {
+		t.Fatal("nested task summary missing")
+	}
+	m.backInspector()
+	if m.inspector.worker != w || len(m.tabs) != 1 {
+		t.Fatal("summary return changed parent conversation")
+	}
+}
+
 func TestConversationThinkingKeysAndNestedReturn(t *testing.T) {
 	m, w := conversationFixture(t)
 	parent := m.current()

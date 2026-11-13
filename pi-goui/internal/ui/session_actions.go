@@ -59,6 +59,21 @@ func (m *Model) reservedSession(path string) bool {
 	}
 	return false
 }
+
+// Reuse the selector's identity checks and confirmation without opening a
+// session list. The target is captured now, not when deletion finishes.
+func (m *Model) requestDeleteSession(t *tab) tea.Cmd {
+	selector := m.newDialog("session", "", "")
+	selector.options = []option{{
+		Label: m.sessionLabel(t), Value: fmt.Sprintf("@%d", t.id), Data: summaryOf(t),
+	}}
+	cmd := m.requestSessionAction(t, selector, "delete")
+	if selector.message != "" {
+		t.notify(selector.message)
+	}
+	return cmd
+}
+
 func (m *Model) requestSessionAction(origin *tab, selector *dialog, kind string) tea.Cmd {
 	options := m.filtered(selector)
 	if len(options) == 0 {

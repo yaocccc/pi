@@ -250,9 +250,9 @@ func TestScopedDialogKeysAndTitles(t *testing.T) {
 		t.Fatal("Ctrl+N not scoped to session filter")
 	}
 	first.dialogs = []*dialog{m.newDialog("tree", "Tree", "")}
-	press(m, 'd', tea.ModCtrl, "")
-	if !strings.Contains(first.dialogs[0].message, "read only") {
-		t.Fatal("unsupported tree binding silently fell through")
+	press(m, 'o', tea.ModCtrl, "")
+	if first.dialogs[0].message != "" || len(m.cfg.Keys.Keys("app.tree.filter.cycleForward")) != 0 {
+		t.Fatal("removed tree binding remains active")
 	}
 }
 func TestViewportBoundsAndFoldOffsets(t *testing.T) {

@@ -48,6 +48,7 @@ type SidebarContext struct {
 	History        []string
 	HistoryHovered []bool
 	HistoryOffset  int
+	HistoryDepth   []int
 	Todo           []session.PlanStep
 	TodoScroll     int // Rows back from the latest steps; zero follows the end.
 	TodoFrame      int // Shared working-message animation frame.
@@ -332,7 +333,11 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 		if scrollbar {
 			contentWidth -= 2
 		}
-		line := sidebarHistoryRow(ctx.History[i], contentWidth, hovered)
+		depth := 0
+		if i < len(ctx.HistoryDepth) {
+			depth = ctx.HistoryDepth[i]
+		}
+		line := sidebarHistoryRow(ctx.History[i], contentWidth, hovered, depth)
 		if hovered {
 			line = SidebarHoverText(line)
 		}
@@ -384,8 +389,8 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 				}
 				line = paint(" "+mark+" "+number+" "+oneLine(step.Goal), dim)
 				if step.Status == "in_progress" {
-					// Keep the circle at rest; sweep only the number and task.
-					line = " " + paint(mark, "#888888") + " " + animateTodoText(number+" "+oneLine(step.Goal), ctx.TodoFrame)
+					// Keep the marker and number dim; sweep only the task text.
+					line = paint(" "+mark+" "+number+" ", dim) + animateTodoText(oneLine(step.Goal), ctx.TodoFrame)
 				}
 			}
 			line = fit(line, contentWidth)

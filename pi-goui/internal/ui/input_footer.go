@@ -37,6 +37,8 @@ func (m *Model) compactKey(action, preferred string) string {
 		return "↵"
 	case "shift+enter":
 		return "⇧↵"
+	case "escape":
+		return "esc"
 	}
 	return strings.ReplaceAll(key, "ctrl+", "^")
 }
@@ -48,11 +50,7 @@ func (m *Model) inputFooter(t *tab) editorFooter {
 	if width == 0 {
 		return footer
 	}
-	exit := "quit"
-	if len(m.tabs) > 1 {
-		exit = "close"
-	}
-	help := m.compactKey("tui.input.submit", "") + " send  " + m.compactKey("tui.input.newLine", "ctrl+j") + " 换行  " + m.compactKey("app.exit", "") + " " + exit
+	help := m.compactKey("tui.input.submit", "") + " send  " + m.compactKey("tui.input.newLine", "ctrl+j") + " 换行"
 	model := t.state.Model.ID
 	if model == "" {
 		model = t.state.Model.Name
@@ -101,7 +99,19 @@ func (m *Model) editorFrame(t *tab) string {
 	width := m.mainWidth()
 	inside := max(1, width-4)
 	// Keep a dedicated spacer above the footer, independent of editable rows.
-	body := fitBox(render.StyleImageReferences(t.editor.Area.View(), len(t.images)), inside, m.editorContentHeight(t)) + "\n\n" + m.inputFooter(t).text
-	frame := strings.Join(frames.Box("input", strings.Split(body, "\n"), width, m.cfg.Theme), "\n")
-	return fitBox(frame, width, m.editorFrameHeight(t))
+	body := fitBox(render.StyleImageReferences(t.editor.View(), len(t.images)), inside, m.editorContentHeight(t)) + "\n\n" + m.inputFooter(t).text
+	rows := frames.Box("input", strings.Split(body, "\n"), width, m.cfg.Theme)
+	if offset, total, _ := t.editor.ScrollPosition(); total > m.editorContentHeight(t) && width >= 4 {
+		height := m.editorContentHeight(t)
+		thumb := max(1, height*height/total)
+		start := offset * (height - thumb) / (total - height)
+		for i := 0; i < height && i+1 < len(rows); i++ {
+			if i >= start && i < start+thumb {
+				// Keep the frame's per-row gradient and change only the glyph.
+				edge := ansi.Cut(rows[i+1], width-1, width)
+				rows[i+1] = ansi.Cut(rows[i+1], 0, width-1) + strings.Replace(edge, "│", "┃", 1)
+			}
+		}
+	}
+	return fitBox(strings.Join(rows, "\n"), width, m.editorFrameHeight(t))
 }

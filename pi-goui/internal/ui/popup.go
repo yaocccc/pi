@@ -30,8 +30,12 @@ func popupFilter(d *dialog) bool {
 	if d.questionnaire != nil {
 		return d.questionnaire.Input
 	}
-	return d.kind != "confirm" && d.kind != "close" && d.kind != "resume" && d.kind != "help" && d.kind != "session-delete" && d.kind != "session-send-confirm"
+	return d.kind != "confirm" && d.kind != "close" && d.kind != "resume" && d.kind != "help" && d.kind != "session-delete" && d.kind != "session-send-confirm" && d.kind != "branch-loading"
 }
+func popupHelpLines(d *dialog, width int) []string {
+	return strings.Split(ansi.Wrap(render.Clean(d.editor.Value()), max(1, width), ""), "\n")
+}
+
 func (m *Model) popupGeometry(d *dialog) popupLayout {
 	p := popupLayout{width: min(72, max(1, m.mainWidth()-4)), help: d.kind == "help", textOnly: popupTextOnly(d), framed: true}
 	available := max(0, m.height-5)
@@ -47,7 +51,7 @@ func (m *Model) popupGeometry(d *dialog) popupLayout {
 		p.optionY = p.y
 		total := len(m.filtered(d))
 		if p.help {
-			total = len(strings.Split(d.editor.Value(), "\n"))
+			total = len(popupHelpLines(d, p.inner))
 		}
 		p.start = min(max(0, d.selected), max(0, total-1))
 		p.count = min(1, p.height)
@@ -87,7 +91,7 @@ func (m *Model) popupGeometry(d *dialog) popupLayout {
 		budget := max(1, maxHeight-fixed-1) // one row for position/filter guidance
 		wanted := len(d.options)
 		if p.help {
-			wanted = len(strings.Split(d.editor.Value(), "\n"))
+			wanted = len(popupHelpLines(d, p.inner))
 		}
 		p.count = min(8, min(budget, max(1, wanted)))
 		p.height = fixed + 1 + p.count
@@ -129,7 +133,7 @@ func (m *Model) popupRows(d *dialog, p popupLayout) []string {
 		} else if len(options) > 0 {
 			text = "› " + render.Clean(options[p.start].Label)
 		} else if p.help {
-			lines := strings.Split(render.Clean(d.editor.Value()), "\n")
+			lines := popupHelpLines(d, p.inner)
 			text = strings.Join(lines[p.start:], "\n")
 		}
 		return strings.Split(fitBox(text, p.width, p.height), "\n")
@@ -152,7 +156,7 @@ func (m *Model) popupRows(d *dialog, p popupLayout) []string {
 		body = append(body, strings.Split(fitBox(a.View(), p.inner, p.inputRows), "\n")...)
 	}
 	if !p.textOnly {
-		helpLines := strings.Split(render.Clean(d.editor.Value()), "\n")
+		helpLines := popupHelpLines(d, p.inner)
 		for n := 0; n < p.count; n++ {
 			i := p.start + n
 			line := ""
@@ -167,8 +171,19 @@ func (m *Model) popupRows(d *dialog, p popupLayout) []string {
 				}
 				o := options[i]
 				label := strings.Join(strings.Fields(render.Clean(o.Label)), " ")
-				if o.Detail != "" {
-					label += " · " + strings.Join(strings.Fields(render.Clean(o.Detail)), " ")
+				if d.kind == "session" && strings.TrimSpace(d.editor.Value()) == "" && !d.reverseSort && strings.HasPrefix(strings.TrimLeft(o.Label, " "), "↳ ") {
+					label = strings.Repeat(" ", min(6, len(o.Label)-len(strings.TrimLeft(o.Label, " ")))) + label
+				}
+				detail := strings.Join(strings.Fields(render.Clean(o.Detail)), " ")
+				if d.kind == "fork" && detail != "" {
+					// Keep full text in the options for filtering; shorten only
+					// their presentation so question and reply are visible.
+					budget := max(1, (p.inner-5)/2)
+					label = ansi.Truncate(label, budget, "…")
+					detail = ansi.Truncate(detail, budget, "…")
+				}
+				if detail != "" {
+					label += " · " + detail
 				}
 				line = m.paint(mark+label, color)
 			} else if n == 0 {

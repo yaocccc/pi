@@ -39,12 +39,17 @@ type transcriptItemKey struct {
 	id, role, text, thinking, toolID, toolName, arguments, details string
 	running, failed, hasResult                                     bool
 	estimatedTokens, messageIndex, imageCount                      int
+	compaction                                                     session.CompactionMetrics
+	hasCompaction                                                  bool
 }
 
 func itemKeys(items []session.Item) []transcriptItemKey {
 	keys := make([]transcriptItemKey, len(items))
 	for i, it := range items {
-		keys[i] = transcriptItemKey{it.ID, it.Role, it.Text, it.Thinking, it.ToolID, it.ToolName, string(it.Arguments), string(it.Details), it.Running, it.Error, it.HasResult, it.EstimatedTokens, it.MessageIndex, len(it.Images)}
+		keys[i] = transcriptItemKey{it.ID, it.Role, it.Text, it.Thinking, it.ToolID, it.ToolName, string(it.Arguments), string(it.Details), it.Running, it.Error, it.HasResult, it.EstimatedTokens, it.MessageIndex, len(it.Images), session.CompactionMetrics{}, it.Compaction != nil}
+		if it.Compaction != nil {
+			keys[i].compaction = *it.Compaction
+		}
 	}
 	return keys
 }

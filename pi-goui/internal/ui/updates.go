@@ -90,7 +90,40 @@ func (m *Model) receiveUpdateCheck(msg updateCheckMsg) {
 	}
 }
 
-const welcomeText = "\n  A quiet place to work.\n\n  Ask pi a question, or use / to explore commands.\n  Create a second session with /new; both can run in parallel."
+func (m *Model) welcomeText() string {
+	modelKey := m.compactKey("app.model.select", "")
+	if modelKey == "^l" {
+		modelKey = "^L"
+	}
+	thinkingKey := m.compactKey("app.thinking.cycle", "")
+	if thinkingKey == "shift+tab" {
+		thinkingKey = "Shift+Tab"
+	}
+	lines := []string{
+		"A quiet place to work.",
+		"",
+		modelKey + " model  ·  " + thinkingKey + " thinking  ·  /hotkeys more",
+	}
+	text := strings.Join(lines, "\n")
+	text = ansi.Wrap(text, max(1, m.mainWidth()-4), "")
+	return "\n  " + strings.ReplaceAll(text, "\n", "\n  ")
+}
+
+func (m *Model) welcomeView() string {
+	lines := strings.Split(m.welcomeText(), "\n")
+	title := true
+	for i, line := range lines {
+		if i > 1 && strings.TrimSpace(line) == "" {
+			title = false
+		}
+		color := m.cfg.Theme.Muted
+		if title {
+			color = m.cfg.Theme.Text
+		}
+		lines[i] = m.paint(line, color)
+	}
+	return strings.Join(lines, "\n")
+}
 
 func (m *Model) releaseNotesCommand() tea.Cmd {
 	cfg := m.updateConfig()
@@ -109,11 +142,11 @@ func (m *Model) receiveReleaseNotes(msg releaseNotesMsg) {
 }
 
 func (m *Model) showStartupInfo(t *tab) bool {
-	return t.newSession && len(t.state.Items) == 0 && (m.updates.notice != "" || m.updates.notes.Markdown != "")
+	return t.newSession && len(t.state.Items) == 0
 }
 
 func (m *Model) startupDocument(t *tab) render.Document {
-	text := m.paint(welcomeText, m.cfg.Theme.Muted)
+	text := m.welcomeView()
 	if m.updates.notice != "" {
 		// Wrap with the same transcript width; no footer/banner or popup.
 		notice := ansi.Wrap(m.updates.notice+"\nRun `pi update` to update.", max(1, m.mainWidth()-4), "")

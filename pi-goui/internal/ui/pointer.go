@@ -116,8 +116,14 @@ func (m *Model) pointerShapeAt(x, y int) string {
 	if _, rect, visible := m.latestButton(t); visible && rect.contains(x, y) {
 		return "pointer"
 	}
-	if m.height >= 8 && y >= transcriptTop && y < transcriptTop+m.transcriptHeight(t) {
-		row := y - transcriptTop + t.offset
+	if m.originHit(x, y) {
+		return "pointer"
+	}
+	if _, rect, ok := m.forkTarget(x, y); ok && rect.contains(x, y) {
+		return "pointer"
+	}
+	if m.height >= 8 && y >= m.chatTop(m.current()) && y < m.chatTop(m.current())+m.transcriptHeight(t) {
+		row := y - m.chatTop(m.current()) + t.offset
 		if row >= strings.Count(t.doc.Text, "\n")+1 {
 			return "text"
 		}

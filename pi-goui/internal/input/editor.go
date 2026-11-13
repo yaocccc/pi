@@ -273,6 +273,8 @@ func (m *Editor) piWordEdit(action string, before piEditorSnapshot) {
 // piEdit accepts semantic actions; the caller owns bindings and history-edge
 // navigation. Unbound control/Alt keys never reach Bubbles' legacy key map.
 func (m *Editor) Update(action string, msg tea.Msg) tea.Cmd {
+	m.scrollBrowsing = false
+	m.scrollRows = nil
 	key, isKey := msg.(tea.KeyPressMsg)
 	if isKey && key.Text == "" && key.Code >= 32 && key.Code <= utf8.MaxRune && key.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModSuper|tea.ModMeta|tea.ModHyper) == 0 {
 		key.Text = string(key.Code)
@@ -452,8 +454,11 @@ func piEditorActionKey(action string) (tea.KeyPressMsg, bool) {
 }
 
 type Editor struct {
-	Area  textarea.Model
-	state piEditorState
+	Area           textarea.Model
+	state          piEditorState
+	scrollRows     []string
+	scrollOffset   int
+	scrollBrowsing bool
 }
 
 func New() Editor {
@@ -474,6 +479,8 @@ func New() Editor {
 // MaxHeight is enabled only during this layout pass: leaving it set in fixed-
 // height mode would also cap editable content in Bubbles' legacy behavior.
 func (m *Editor) Resize(width, heightLimit int) {
+	m.scrollBrowsing = false
+	m.scrollRows = nil
 	dynamic, maximum := m.Area.DynamicHeight, m.Area.MaxHeight
 	m.Area.DynamicHeight = true
 	m.Area.MaxHeight = max(1, heightLimit)
@@ -493,6 +500,8 @@ func (m *Editor) Resize(width, heightLimit int) {
 
 func (m *Editor) Value() string { return m.Area.Value() }
 func (m *Editor) SetValue(v string) {
+	m.scrollBrowsing = false
+	m.scrollRows = nil
 	m.Area.SetValue(v)
 	m.state = piEditorState{kills: m.state.kills}
 }

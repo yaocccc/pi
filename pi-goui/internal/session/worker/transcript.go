@@ -31,6 +31,7 @@ type Cursor struct {
 	tail, anchor []byte
 	file         os.FileInfo
 	header       bool
+	primary      bool // Never fall back to an older copy after opening the new location.
 }
 type Batch struct {
 	Reset   bool
@@ -50,40 +51,61 @@ func (c Cursor) Read(agentDir string, d Transcript) (Cursor, Batch, error) {
 	if err != nil {
 		return c, batch, err
 	}
-	path := filepath.Join(filepath.Dir(agentPath), "worker-transcripts")
-	info, err := os.Lstat(path)
-	if err != nil {
-		return c, batch, err
+	f, actual, err := openTranscript(filepath.Join(filepath.Dir(agentPath), "worker-transcripts"), d.ID)
+	primary := err == nil
+	if errors.Is(err, os.ErrNotExist) && !c.primary {
+		// Compatibility only: new writers and retention never touch this root.
+		f, actual, err = openTranscript(filepath.Join(agentPath, "worker-transcripts"), d.ID)
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return c, batch, errors.New("unsafe Worker transcript directory")
-	}
-	root, err := os.OpenRoot(path)
-	if err != nil {
-		return c, batch, err
-	}
-	defer root.Close()
-	actual, err := root.Stat(".")
-	if err != nil || !os.SameFile(info, actual) {
-		return c, batch, errors.New("Worker transcript directory changed")
-	}
-	name := d.ID + ".jsonl"
-	info, err = root.Lstat(name)
-	if err != nil {
-		return c, batch, err
-	}
-	if !info.Mode().IsRegular() {
-		return c, batch, errors.New("Worker transcript is not a regular file")
-	}
-	f, err := root.Open(name)
 	if err != nil {
 		return c, batch, err
 	}
 	defer f.Close()
+	c.primary = primary
+	return c.readFile(f, actual, d)
+}
+
+// Only a missing root/file permits fallback. An existing but unsafe, unreadable
+// or invalid new record must never be bypassed by a same-ID legacy recording.
+func openTranscript(path, id string) (*os.File, os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, nil, errors.New("unsafe Worker transcript directory")
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot open Worker transcript directory: %v", err)
+	}
+	defer root.Close()
+	actual, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, actual) {
+		return nil, nil, errors.New("Worker transcript directory changed")
+	}
+	name := id + ".jsonl"
+	info, err = root.Lstat(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, errors.New("Worker transcript is not a regular file")
+	}
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot open Worker transcript file: %v", err)
+	}
 	actual, err = f.Stat()
 	if err != nil || !os.SameFile(info, actual) {
-		return c, batch, errors.New("Worker transcript file changed")
+		f.Close()
+		return nil, nil, errors.New("Worker transcript file changed")
 	}
+	return f, actual, nil
+}
+
+func (c Cursor) readFile(f *os.File, actual os.FileInfo, d Transcript) (Cursor, Batch, error) {
+	var batch Batch
 	if actual.Size() > transcriptLimit {
 		return c, batch, errors.New("Worker transcript exceeds recording limit")
 	}
@@ -94,7 +116,7 @@ func (c Cursor) Read(agentDir string, d Transcript) (Cursor, Batch, error) {
 		reset = n != len(buf) || !bytes.Equal(buf, c.anchor)
 	}
 	if reset {
-		c = Cursor{}
+		c = Cursor{primary: c.primary}
 		batch.Reset = true
 	}
 	c.file = actual

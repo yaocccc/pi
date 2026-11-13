@@ -1,51 +1,51 @@
 {
-  "lastChangelogVersion": "1.5.2",
-  "editorPaddingX": 1,
-  "outputPad": 1,
-  "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
-  "hideThinkingBlock": true,
-  "enabledModels": [
-    "gpt-6-astra",
-    "gpt-6.1-sol"
-  ],
-  "theme": "system",
-  "showHardwareCursor": true,
-  "transport": "auto",
+  "defaultProjectTrust": "ask",
+  "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
   "defaultTools": [
     "+codemode"
   ],
-  "packages": [
-    "npm:pi-web-access"
-  ],
-  "treeFilterMode": "all",
-  "enableInstallTelemetry": true,
-  "quietStartup": true,
-  "images": {
-    "blockImages": false
-  },
-  "steeringMode": "one-at-a-time",
-  "followUpMode": "one-at-a-time",
-  "doubleEscapeAction": "none",
-  "warnings": {
-    "anthropicExtraUsage": false
-  },
-  "enableSkillCommands": false,
-  "markdown": {
-    "mermaid": "streaming"
-  },
-  "defaultProjectTrust": "ask",
-  "tuiMode": "fullscreen",
-  "fullscreenScrollbar": "auto",
-  "fullscreenCopyOnSelect": true,
-  "fullscreenExitOutput": "transcript",
-  "fullscreenWheelScrollLines": "auto",
   "deviceId": "ce4f1b70-29b7-4f8f-ba53-9c6c02dd296b",
+  "doubleEscapeAction": "none",
+  "editorPaddingX": 1,
+  "enableInstallTelemetry": true,
+  "enableSkillCommands": false,
+  "enabledModels": [
+    "gpt-6-astra",
+    "gpt-6.1-sol"
+  ],
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0"
   },
+  "followUpMode": "one-at-a-time",
+  "fullscreenCopyOnSelect": true,
+  "fullscreenExitOutput": "transcript",
+  "fullscreenScrollbar": "auto",
+  "fullscreenWheelScrollLines": "auto",
+  "hideThinkingBlock": true,
+  "images": {
+    "blockImages": false
+  },
+  "lastChangelogVersion": "1.5.2",
+  "markdown": {
+    "mermaid": "streaming"
+  },
+  "outputPad": 1,
+  "packages": [
+    "npm:pi-web-access"
+  ],
+  "quietStartup": true,
+  "showHardwareCursor": true,
+  "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false
+  },
+  "theme": "system",
+  "transport": "auto",
+  "treeFilterMode": "all",
+  "tuiMode": "fullscreen",
+  "warnings": {
+    "anthropicExtraUsage": false
   }
 }

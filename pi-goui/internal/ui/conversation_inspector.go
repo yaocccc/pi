@@ -157,27 +157,31 @@ func (m *Model) openConversationDetail(id string) tea.Cmd {
 		}
 	}
 	var child *workerSession
-	title := ""
+	title, fallbackReason := "", ""
 	if key != "" {
 		for _, item := range w.visible {
 			if item.ID == itemID {
-				d, t, _, ok := workerDescriptor(item, key)
-				if !ok {
-					m.current().notify("该任务没有可用会话记录")
+				selected, t, found := render.WorkerTaskResult(item, key)
+				if !found {
 					return nil
 				}
 				title = t
-				child = &workerSession{descriptor: d, replay: worker.Replay{Status: "正在读取"}, revision: 1, showThinking: w.showThinking}
+				d, _, valid := selectedWorkerDescriptor(selected)
+				if valid {
+					child = &workerSession{descriptor: d, replay: worker.Replay{Status: "正在读取"}, revision: 1, showThinking: w.showThinking}
+				} else {
+					fallbackReason = workerMissingRecordingReason(selected)
+				}
 				break
 			}
 		}
-		if child == nil {
+		if child == nil && fallbackReason == "" {
 			return nil
 		}
 	}
 	old := m.inspector
 	old.selection = transcriptSelection{}
-	m.inspector = toolInspector{tabID: old.tabID, itemID: itemID, taskKey: key, taskTitle: title, worker: child, parent: &old}
+	m.inspector = toolInspector{tabID: old.tabID, itemID: itemID, taskKey: key, taskTitle: title, worker: child, fallbackReason: fallbackReason, parent: &old}
 	return m.pollWorkerSession(time.Now())
 }
 func (m *Model) backInspector() {

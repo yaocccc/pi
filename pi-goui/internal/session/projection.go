@@ -40,7 +40,7 @@ func (r *record) project() *recordProjection {
 		p.blocks = append(p.blocks, projectedBlock{item: t, busy: busy, tool: true})
 	}
 	if r.summary != "" {
-		add(Item{ID: r.id, Role: "system", Text: r.summary}, false, false)
+		add(Item{ID: r.id, Role: "system", Text: r.summary, Compaction: r.compaction}, false, false)
 		return p
 	}
 	if m.Role == "user" {

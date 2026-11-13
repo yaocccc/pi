@@ -33,6 +33,7 @@ func TestFuzzyCommandsExecuteOnFirstEnter(t *testing.T) {
 	if record["message"] != "/codex-fast extra argument" {
 		t.Fatalf("lost canonical command/arguments: %v", record)
 	}
+	m.reply(tab, msg)
 	tab.setValue("/ cpt")
 	msg = commandResult(m.key(tea.KeyPressMsg{Code: tea.KeyEnter})).(replyMsg)
 	if msg.op != "compact" {
@@ -46,8 +47,13 @@ func TestFuzzyCommandsExecuteOnFirstEnter(t *testing.T) {
 	}
 	tab.setValue("/zzzz-no-match")
 	m.completionHidden = false
-	if cmd := m.key(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatal("unknown command was sent")
+	msg = commandResult(m.key(tea.KeyPressMsg{Code: tea.KeyEnter})).(replyMsg)
+	if msg.op != "prompt" || msg.err != nil {
+		t.Fatalf("unknown command was not submitted: %+v", msg)
+	}
+	records := wireRecords(t, wire, 3)
+	if records[2]["message"] != "/zzzz-no-match" {
+		t.Fatalf("unknown command was changed: %v", records)
 	}
 	for _, pair := range [][2]string{{"工具搜索", "工索"}, {"compact", "cpt"}, {"codex-fast", "FAST"}} {
 		if _, ok := fuzzyScore(pair[0], pair[1]); !ok {
@@ -319,13 +325,6 @@ func TestFilePasteAndEscapeDismissDoNotSubmitSelections(t *testing.T) {
 	}
 	tab.setValue("@missing-ref")
 	m.completionHidden = false
-	if cmd := m.key(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatal("missing reference unexpectedly submitted")
-	}
-	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if !m.completionHidden {
-		t.Fatal("empty file choices could not be dismissed")
-	}
 	reply := commandResult(m.key(tea.KeyPressMsg{Code: tea.KeyEnter})).(replyMsg)
 	if reply.op != "prompt" {
 		t.Fatal(reply.op)

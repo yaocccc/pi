@@ -163,6 +163,165 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 		t.Fatal("close affected parent")
 	}
 }
+func TestWorkerSummaryFallbackLifecycle(t *testing.T) {
+	m, parent, path := workerPageFixture(t)
+	beforeTabs, beforeOffset := len(m.tabs), parent.offset
+	snapshot := func(reversed bool, transcript string, summary string) {
+		t.Helper()
+		a := `{"index":0,"title":"TASK_A","objective":"ONLY_A_GOAL","mode":"implement","status":"completed","resolvedPreset":"deep","allowedPaths":["SECRET_CONTRACT"],"activities":[{"id":"SECRET_ID","at":123,"detail":"SECRET_ACTIVITY"}],"result":{"summary":["` + summary + `"],"validation":[{"command":"go test ./...","result":"passed"}],"risks":["ONLY_A_RISK"],"execution":{"internal":"SECRET_EXECUTION"}}` + transcript + `}`
+		b := `{"index":1,"title":"ONLY_B_PRIVATE","result":{"summary":["ONLY_B_RESULT"]}}`
+		tasks := a + "," + b
+		if reversed {
+			tasks = b + "," + a
+		}
+		parent.state.Items[0].Details = json.RawMessage(`{"kind":"worker-ui","batchId":"batch","tasks":[` + tasks + `]}`)
+	}
+	snapshot(false, "", "FIRST_SUMMARY")
+	if m.openWorkerSession(parent, "w", "index:batch:0") != nil || m.inspector.worker != nil {
+		t.Fatal("old snapshot started a recording read")
+	}
+	plain := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	for _, want := range []string{"简要详情", "完整会话记录不可用", "未保存", "ONLY_A_GOAL", "FIRST_SUMMARY", "go test", "ONLY_A_RISK", "deep"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("missing %q in %s", want, plain)
+		}
+	}
+	for _, secret := range []string{"SECRET_", "ONLY_B_", "Activity"} {
+		if strings.Contains(plain, secret) {
+			t.Fatalf("leaked %q", secret)
+		}
+	}
+	rows := m.inspector.rows
+	m.inspectorRows()
+	if &rows[0] != &m.inspector.rows[0] {
+		t.Fatal("unchanged fallback rebuilt")
+	}
+	snapshot(true, "", "UPDATED_SUMMARY")
+	plain = ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	if !strings.Contains(plain, "UPDATED_SUMMARY") || strings.Contains(plain, "ONLY_B_") {
+		t.Fatal("reorder or live summary failed")
+	}
+	if m.current() != parent || len(m.tabs) != beforeTabs || parent.offset != beforeOffset || parent.client != nil {
+		t.Fatal("fallback changed parent/session")
+	}
+	// A later descriptor upgrades only on explicit re-open, never hot polling.
+	snapshot(true, `,"transcript":{"version":1,"id":"`+workerPageID+`"}`, "UPDATED_SUMMARY")
+	if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
+		t.Fatal("fallback hot polling")
+	}
+	appendWorkerLog(t, path, workerLiveEvents)
+	receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
+	if m.inspector.worker == nil || m.inspector.fallbackReason != "" || len(m.inspector.worker.visible) == 0 {
+		t.Fatal("reopen did not upgrade to real recording")
+	}
+	m.closeInspector()
+	snapshot(false, "", "FINAL")
+	m.openWorkerSession(parent, "w", "index:batch:0")
+	parent.state.Items[0].Details = json.RawMessage(`{"kind":"worker-ui","tasks":[]}`)
+	m.document(parent)
+	if m.inspectorOpen() {
+		t.Fatal("removed task kept summary open")
+	}
+}
+
+func TestWorkerFallbackReadFailuresAndRecovery(t *testing.T) {
+	for _, kind := range []string{"invalid-id", "malformed", "permission", "missing"} {
+		t.Run(kind, func(t *testing.T) {
+			m, parent, path := workerPageFixture(t)
+			switch kind {
+			case "invalid-id":
+				parent.state.Items[0].Details = json.RawMessage(strings.ReplaceAll(string(parent.state.Items[0].Details), workerPageID, "../../private"))
+			case "malformed":
+				if err := os.WriteFile(path, []byte("not-json\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "missing":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := m.openWorkerSession(parent, "w", "index:batch:0")
+			if kind == "invalid-id" {
+				if cmd != nil {
+					t.Fatal("unsafe descriptor attempted disk read")
+				}
+			} else if kind == "permission" {
+				m.receiveWorkerTranscript(workerTranscriptMsg{owner: m.inspector.worker, err: &os.PathError{Op: "open", Path: "/PRIVATE/PATH", Err: os.ErrPermission}})
+			} else {
+				receiveWorkerCommand(t, m, cmd)
+			}
+			if !m.inspectorOpen() || m.inspector.worker != nil || m.inspector.fallbackReason == "" {
+				t.Fatal("failure did not open summary")
+			}
+			plain := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+			if !strings.Contains(plain, "简要详情") || strings.Contains(plain, "PRIVATE") || strings.Contains(plain, "../../") {
+				t.Fatal("bad or unsafe summary")
+			}
+			if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
+				t.Fatal("failure hot loop")
+			}
+		})
+	}
+}
+
+func TestWorkerDescriptorChangeRejectsPendingRecording(t *testing.T) {
+	m, parent, path := workerPageFixture(t)
+	appendWorkerLog(t, path, workerLiveEvents)
+	cmd := m.openWorkerSession(parent, "w", "index:batch:0")
+	parent.state.Items[0].Details = json.RawMessage(strings.ReplaceAll(string(parent.state.Items[0].Details), workerPageID, "22345678-1234-4234-8234-123456789abc"))
+	receiveWorkerCommand(t, m, cmd)
+	if m.inspector.worker != nil || !strings.Contains(m.inspector.fallbackReason, "关联已变化") {
+		t.Fatal("old pending record displayed under new descriptor")
+	}
+}
+
+func TestWorkerRecordingErrorRetainsReadMessages(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		m, parent, path := workerPageFixture(t)
+		appendWorkerLog(t, path, workerLiveEvents)
+		receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
+		w := m.inspector.worker
+		m.inspectorRows()
+		var before []string
+		for _, item := range w.visible {
+			before = append(before, item.Text)
+		}
+		if replacement {
+			if err := os.WriteFile(path, []byte("invalid replacement\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			appendWorkerLog(t, path, "invalid tail\n")
+		}
+		w.next = time.Time{}
+		receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
+		m.inspectorRows()
+		var after []string
+		for _, item := range w.visible {
+			after = append(after, item.Text)
+		}
+		if m.inspector.worker != w || strings.Join(before, "\n") != strings.Join(after, "\n") || !strings.Contains(w.replay.Status, "保留已读取内容") {
+			t.Fatalf("read failure discarded real conversation replacement=%v before=%q after=%q status=%s", replacement, before, after, w.replay.Status)
+		}
+		if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
+			t.Fatal("partial failure hot loop")
+		}
+		// Explicit re-open retries a repaired log with a fresh response owner.
+		header := `{"type":"worker_transcript_header","version":1,"id":"` + workerPageID + `","entries":[]}` + "\n"
+		if err := os.WriteFile(path, []byte(header+workerLiveEvents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
+		if m.inspector.worker == w || m.inspector.fallbackReason != "" {
+			t.Fatal("read failure could not be retried")
+		}
+		m.receiveWorkerTranscript(workerTranscriptMsg{owner: w, err: os.ErrNotExist})
+		if m.inspector.fallbackReason != "" {
+			t.Fatal("stale failure downgraded reopened recording")
+		}
+	}
+}
+
 func TestWorkerConversationStaleReadAndMissingRecording(t *testing.T) {
 	m, parent, path := workerPageFixture(t)
 	cmd := m.openWorkerSession(parent, "w", "index:batch:0")
@@ -177,14 +336,14 @@ func TestWorkerConversationStaleReadAndMissingRecording(t *testing.T) {
 	m.closeInspector()
 	_ = os.Remove(path)
 	receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
-	if !m.inspector.worker.replay.Stopped || !strings.Contains(m.inspector.worker.replay.Status, "不可用") {
+	if m.inspector.worker != nil || !m.inspectorOpen() || !strings.Contains(m.inspector.fallbackReason, "不存在") {
 		t.Fatal("missing file not reported")
 	}
 	if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
 		t.Fatal("missing file hot loop")
 	}
 	m.closeInspector()
-	if cmd := m.openWorkerSession(parent, "w", "index:batch:1"); cmd != nil || m.inspectorOpen() || len(m.tabs) != 1 {
+	if cmd := m.openWorkerSession(parent, "w", "index:batch:1"); cmd != nil || !m.inspectorOpen() || m.inspector.worker != nil || len(m.tabs) != 1 {
 		t.Fatal("legacy task used fake activity")
 	}
 }

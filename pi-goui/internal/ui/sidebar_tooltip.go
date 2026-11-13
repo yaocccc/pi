@@ -37,7 +37,7 @@ func (m *Model) sidebarHistoryTooltip(t *tab) (sidebarTooltip, bool) {
 	name := strings.Join(strings.Fields(render.Clean(ctx.History[index])), " ")
 	nameRows := strings.Split(ansi.Hardwrap(name, inner, false), "\n")
 	stamp := "—"
-	if modified := m.sidebarHistory.sessions[index].Modified; modified > 0 {
+	if modified := m.sidebarHistoryAt(index).Modified; modified > 0 {
 		stamp = time.UnixMilli(modified).Local().Format("2006-01-02 15:04:05")
 	}
 	stampRows := strings.Split(ansi.Hardwrap(stamp, inner, false), "\n")

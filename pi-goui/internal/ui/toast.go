@@ -8,7 +8,7 @@ import (
 	"pi-goui/internal/render"
 )
 
-const toastLifetime = 2 * time.Second
+const toastLifetime = 5 * time.Second
 
 type toastState struct {
 	text    string
@@ -44,7 +44,11 @@ func (m *Model) toastBox(t *tab, now time.Time) (toastBox, bool) {
 	text := ansi.Truncate(t.toast.text, width-4, "…")
 	width = ansi.StringWidth(text) + 4
 	color := m.cfg.Theme.Accent
-	rows := []string{m.paint("╭"+strings.Repeat("─", width-2)+"╮", color), m.paint("│", color) + " " + m.paint(text, m.cfg.Theme.Text) + " " + m.paint("│", color), m.paint("╰"+strings.Repeat("─", width-2)+"╯", color)}
+	rows := []string{
+		m.paint("╭"+strings.Repeat("─", width-2)+"╮", color),
+		m.paint("│", color) + " " + m.paint(text, color) + " " + m.paint("│", color),
+		m.paint("╰"+strings.Repeat("─", width-2)+"╯", color),
+	}
 	return toastBox{x: m.mainWidth() - width - 1, y: transcriptTop, width: width, height: 3, rows: rows}, true
 }
 func (m *Model) overlayToast(t *tab, view string, now time.Time) string {

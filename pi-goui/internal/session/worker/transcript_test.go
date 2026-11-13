@@ -108,6 +108,108 @@ func TestWorkerTranscriptSecurityAndLargeRecords(t *testing.T) {
 		t.Fatal("foreign header accepted")
 	}
 }
+func TestWorkerTranscriptLegacyFallbackAndPromotion(t *testing.T) {
+	for _, agentName := range []string{"agent", "custom-agent"} {
+		t.Run(agentName, func(t *testing.T) {
+			base := t.TempDir()
+			agent := filepath.Join(base, agentName)
+			legacy := filepath.Join(agent, "worker-transcripts", transcriptTestID+".jsonl")
+			primary := filepath.Join(base, "worker-transcripts", transcriptTestID+".jsonl")
+			if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+				t.Fatal(err)
+			}
+			d := Transcript{Version: 1, ID: transcriptTestID}
+			putTranscript(t, legacy, transcriptHeader()+`{"type":"message_end","message":{"role":"user","content":"legacy"}}`+"\n")
+			c, b, err := (Cursor{}).Read(agent, d)
+			if err != nil || len(b.Records) != 2 || c.primary {
+				t.Fatalf("legacy root fallback failed: %+v %v", b, err)
+			}
+			if err := os.Mkdir(filepath.Dir(primary), 0700); err != nil {
+				t.Fatal(err)
+			}
+			_, b, err = c.Read(agent, d)
+			if err != nil || len(b.Records) != 0 {
+				t.Fatalf("missing new file did not continue legacy cursor: %v", err)
+			}
+			putTranscript(t, primary, transcriptHeader()+`{"type":"message_end","message":{"role":"user","content":"primary"}}`+"\n")
+			c, b, err = c.Read(agent, d)
+			if err != nil || !b.Reset || !c.primary || len(b.Records) != 2 || !strings.Contains(string(b.Records[1]), "primary") {
+				t.Fatalf("new record did not replace legacy: %+v %v", b, err)
+			}
+			if err := os.Remove(primary); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = c.Read(agent, d); !os.IsNotExist(err) {
+				t.Fatalf("deleted new record fell back to obsolete legacy copy: %v", err)
+			}
+			if _, err := os.Stat(legacy); err != nil {
+				t.Fatalf("reader changed legacy storage: %v", err)
+			}
+		})
+	}
+}
+
+func TestWorkerTranscriptUnsafePrimaryNeverFallsBack(t *testing.T) {
+	for _, kind := range []string{"invalid", "symlink", "directory", "unreadable", "root-symlink", "root-unreadable", "legacy-symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			agent, primary, d := transcriptFixture(t)
+			legacy := filepath.Join(agent, "worker-transcripts", d.ID+".jsonl")
+			if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+				t.Fatal(err)
+			}
+			putTranscript(t, legacy, transcriptHeader())
+			switch kind {
+			case "invalid":
+				putTranscript(t, primary, "invalid JSON\n")
+			case "symlink":
+				if err := os.Symlink(legacy, primary); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(primary, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable":
+				putTranscript(t, primary, transcriptHeader())
+				if err := os.Chmod(primary, 0000); err != nil {
+					t.Fatal(err)
+				}
+				if f, err := os.Open(primary); err == nil {
+					f.Close()
+					t.Skip("process can bypass file permissions")
+				}
+			case "root-symlink":
+				if err := os.Remove(filepath.Dir(primary)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Dir(legacy), filepath.Dir(primary)); err != nil {
+					t.Fatal(err)
+				}
+			case "root-unreadable":
+				if err := os.Chmod(filepath.Dir(primary), 0000); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(filepath.Dir(primary), 0700) })
+				if _, err := os.Stat(primary); os.IsNotExist(err) {
+					t.Skip("process can bypass directory permissions")
+				}
+			case "legacy-symlink":
+				outside := filepath.Join(t.TempDir(), "record")
+				putTranscript(t, outside, transcriptHeader())
+				if err := os.Remove(legacy); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, legacy); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, _, err := (Cursor{}).Read(agent, d); err == nil {
+				t.Fatal("unsafe/unreadable primary or legacy bypassed by fallback")
+			}
+		})
+	}
+}
+
 func TestWorkerTranscriptRealChildEvents(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

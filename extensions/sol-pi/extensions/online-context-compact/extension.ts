@@ -28,6 +28,8 @@ import { registerOnlineTools, type PlanUpdateInput } from "./tools.ts";
 
 /** Planning estimate, used unchanged for both the economic gate and committed debt. */
 export const DEFAULT_NATIVE_SUMMARY_TOKEN_ESTIMATE = 1_000;
+/** Display-only facts tied to a committed checkpoint; never added to model context. */
+export const ONLINE_METRICS_ENTRY = "sol-pi-online-context-metrics-v1";
 /** Heuristic, NOT a measured/model-specific cache price. */
 export const DEFAULT_CACHE_WRITE_READ_RATIO = 12.5;
 export const BOUNDARY_COMPACTION_INSTRUCTIONS =
@@ -102,7 +104,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			const branch = ctx.sessionManager.getBranch();
 			const anchor = branch.findIndex(entry => entry.id === submittedSummary?.leafId);
 			const index = branch.findIndex((entry, i) => i > anchor && entry.type === "compaction" && entry.summary === submittedSummary?.summary);
-			if (ctx.hasUI && anchor >= 0 && index >= 0) {
+			if (anchor >= 0 && index >= 0) {
 				// Compare the same committed history on both sides, not an old snapshot
 				// against a newer conversation. Include our continuation reminder, but no later messages.
 				let end = index + 1;
@@ -114,10 +116,16 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				// Use one content estimator on both sides; provider usage can be stale after compaction.
 				const estimate = (entries: typeof branch) => buildSessionProjection(entries).messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 				const before = estimate(branch.slice(0, index)), after = estimate(branch.slice(0, end));
-				notifyFrontendEvent(ctx, { name: "context.applied", data: {
+				const metrics = {
+					version: 1, compactionId: branch[index].id, estimated: true,
 					beforeTokens: before, afterTokens: after, generationMs: submittedSummary.generationMs,
 					durationMs: performance.now() - submittedSummary.startedAt,
-				} });
+				};
+				// Persist only after the native boundary really committed. This also
+				// makes historical RPC views independent of ephemeral UI notifications.
+				submittedSummary = undefined;
+				pi.appendEntry(ONLINE_METRICS_ENTRY, metrics);
+				if (ctx.hasUI) notifyFrontendEvent(ctx, { name: "context.applied", data: metrics });
 			}
 			submittedSummary = undefined;
 		};

@@ -2,6 +2,8 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"reflect"
 	"slices"
 	"strings"
@@ -68,16 +70,21 @@ func (m *Model) openWorkerSession(parent *tab, itemID, key string) tea.Cmd {
 		if item.ID != itemID {
 			continue
 		}
-		d, title, _, valid := workerDescriptor(item, key)
-		if !valid {
-			parent.notify("该任务没有可用会话记录 · 旧任务无法恢复完整会话")
+		selected, title, found := render.WorkerTaskResult(item, key)
+		if !found {
 			return nil
 		}
-		if m.inspector.worker != nil && m.inspector.tabID == parent.id && m.inspector.itemID == itemID && m.inspector.taskKey == key && m.inspector.worker.descriptor.ID == d.ID {
+		d, _, valid := selectedWorkerDescriptor(selected)
+		if valid && m.inspector.fallbackReason == "" && m.inspector.worker != nil && m.inspector.tabID == parent.id && m.inspector.itemID == itemID && m.inspector.taskKey == key && m.inspector.worker.descriptor.ID == d.ID {
 			return m.pollWorkerSession(time.Now())
 		}
 		m.finishPanelResize()
-		m.inspector = toolInspector{tabID: parent.id, itemID: itemID, taskKey: key, taskTitle: title, worker: &workerSession{descriptor: d, replay: worker.Replay{Status: "正在读取"}, revision: 1, showThinking: parent.showThinking}}
+		m.inspector = toolInspector{tabID: parent.id, itemID: itemID, taskKey: key, taskTitle: title}
+		if valid {
+			m.inspector.worker = &workerSession{descriptor: d, replay: worker.Replay{Status: "正在读取"}, revision: 1, showThinking: parent.showThinking}
+		} else {
+			m.inspector.fallbackReason = workerMissingRecordingReason(selected)
+		}
 		parent.footerHover.active = ""
 		m.codexFastHover = false
 		m.resizeEditor(parent)
@@ -100,7 +107,7 @@ func (m *Model) pollWorkerSession(now time.Time) tea.Cmd {
 }
 func (m *Model) pollWorkerPage(page *toolInspector, now time.Time) tea.Cmd {
 	w := page.worker
-	if w == nil || w.pending || now.Before(w.next) {
+	if w == nil || page.fallbackReason != "" || w.pending || now.Before(w.next) {
 		return nil
 	}
 	item, ok := m.inspectorItem(page)
@@ -110,7 +117,7 @@ func (m *Model) pollWorkerPage(page *toolInspector, now time.Time) tea.Cmd {
 	if w.descriptorDetails != string(item.Details) {
 		d, status, valid := selectedWorkerDescriptor(item)
 		if !valid || d.ID != w.descriptor.ID {
-			m.closeInspector()
+			m.workerRecordingUnavailable(page, "记录关联已变化，请重新查看")
 			return nil
 		}
 		w.descriptor, w.taskStatus = d, status
@@ -118,7 +125,7 @@ func (m *Model) pollWorkerPage(page *toolInspector, now time.Time) tea.Cmd {
 	}
 	d, status := w.descriptor, w.taskStatus
 	if !d.Valid() {
-		m.closeInspector()
+		m.workerRecordingUnavailable(page, "记录标识无效")
 		return nil
 	}
 	w.descriptor = d
@@ -145,25 +152,78 @@ func (m *Model) receiveWorkerTranscript(msg workerTranscriptMsg) tea.Cmd {
 			break
 		}
 	}
-	if page == nil || !m.inspectorOpen() {
+	if page == nil || page.fallbackReason != "" || !m.inspectorOpen() {
 		return nil
 	}
 	w := page.worker
 	w.pending = false
+	if item, ok := m.inspectorItem(page); ok && w.descriptorDetails != string(item.Details) {
+		if d, _, valid := selectedWorkerDescriptor(item); !valid || d.ID != w.descriptor.ID {
+			m.workerRecordingUnavailable(page, "记录关联已变化，请重新查看")
+			return nil
+		}
+	}
+	if msg.err != nil && msg.batch.Reset && len(w.visible) > 0 {
+		m.workerRecordingUnavailable(page, workerRecordingErrorReason(msg.err))
+		return nil
+	}
 	if w.replay.Apply(worker.ReplayRead{
 		Batch: msg.batch, Descriptor: w.descriptor, Err: msg.err, Partial: msg.cursor.Partial(),
 		TaskEnded: !w.settled.IsZero() && time.Since(w.settled) > 3*time.Second,
 	}) {
 		w.refreshVisibleMessages(w.replay.View())
 	}
+	if msg.err != nil {
+		m.workerRecordingUnavailable(page, workerRecordingErrorReason(msg.err))
+		return nil
+	}
 	w.cursor = msg.cursor
-	w.draining = msg.batch.More && msg.err == nil
+	w.draining = msg.batch.More
 	w.next = time.Now().Add(500 * time.Millisecond)
 	if w.draining {
 		w.next = time.Time{}
 		return m.pollWorkerSession(time.Now())
 	}
 	return nil
+}
+
+// Missing recordings use the existing isolated task inspector, not a fake
+// conversation. Keep already-read task messages if a later read fails.
+func (m *Model) workerRecordingUnavailable(page *toolInspector, reason string) {
+	page.fallbackReason = reason
+	if w := page.worker; w != nil && len(w.visible) > 0 {
+		if w.replay.Apply(worker.ReplayRead{Err: errors.New(reason)}) {
+			w.refreshVisibleMessages(w.replay.View())
+		}
+		w.replay.Status = "记录不完整 · " + reason + " · 保留已读取内容"
+		w.pending, w.draining = false, false
+		return
+	}
+	page.worker = nil
+	page.rows = nil
+	page.cache = inspectorKey{}
+	page.selection = transcriptSelection{}
+}
+
+func workerMissingRecordingReason(item session.Item) string {
+	var data struct{ Tasks []map[string]json.RawMessage }
+	if json.Unmarshal(item.Details, &data) == nil && len(data.Tasks) == 1 {
+		if raw, ok := data.Tasks[0]["transcript"]; !ok || string(raw) == "null" {
+			return "该任务未保存会话记录"
+		}
+	}
+	return "记录标识无效"
+}
+
+func workerRecordingErrorReason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "记录文件不存在或已清理"
+	case errors.Is(err, fs.ErrPermission):
+		return "无权读取会话记录"
+	default:
+		return "会话记录读取失败或格式无效"
+	}
 }
 
 // Cache an owned display snapshot; replay owns the conversation boundary.

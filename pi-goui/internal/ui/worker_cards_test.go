@@ -199,11 +199,11 @@ func TestLegacyWorkerTaskViewShowsUnavailable(t *testing.T) {
 	rect := workerTaskButton(t, m, "index:batch:0")
 	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: rect.x, Y: rect.y})
 	m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: rect.x, Y: rect.y})
-	if m.current() != parent || m.inspectorOpen() || len(m.tabs) != 1 {
-		t.Fatal("legacy task opened a fake transcript")
+	if m.current() != parent || !m.inspectorOpen() || m.inspector.worker != nil || len(m.tabs) != 1 {
+		t.Fatal("legacy task did not open isolated summary")
 	}
-	if !strings.Contains(parent.toast.text, "没有可用会话记录") {
-		t.Fatal("missing unavailable notice")
+	if !strings.Contains(strings.Join(m.inspectorRows(), "\n"), "简要详情") {
+		t.Fatal("missing summary notice")
 	}
 }
 
@@ -220,7 +220,7 @@ func TestWorkerBodyClickFoldsAndInspectorTakesPriority(t *testing.T) {
 		click := tea.Mouse{Button: tea.MouseLeft, X: rect.x, Y: rect.y}
 		m.mouse(click)
 		m.mouseRelease(click)
-		if m.inspectorOpen() || tab.folds["w"] == false && len(tab.folds) > 0 {
+		if !m.inspectorOpen() || tab.folds["w"] == false && len(tab.folds) > 0 {
 			t.Fatalf("inspector click folded worker running=%v", running)
 		}
 		m.closeInspector()
