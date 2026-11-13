@@ -6,7 +6,9 @@
 
 ## 演示视频
 
-[观看演示视频](pi-coding-agent-demo.mp4)
+https://github.com/user-attachments/assets/37766643-9320-4af4-a068-c3702b6a8467
+
+[查看原始 MP4 文件](pi-coding-agent-demo.mp4)
 
 ## 功能概览
 
