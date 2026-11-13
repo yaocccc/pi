@@ -90,7 +90,7 @@ func TestForkNewestFirstAndIndependentTab(t *testing.T) {
 	if string(originalBytes) != string(after) {
 		t.Fatal("source file mutated")
 	}
-	if fork.state.ID == source.state.ID || fork.state.File == source.state.File || fork.state.Name != "Original" || fork.editor.Value() != "" {
+	if fork.state.ID == source.state.ID || fork.state.File == source.state.File || fork.state.Name != "[1]Original" || fork.editor.Value() != "" {
 		t.Fatal("fork identity/name/draft wrong")
 	}
 	var texts []string

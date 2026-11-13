@@ -121,13 +121,15 @@ type sidebarHistoryState struct {
 	cwd                string
 	sessions           []session.Summary
 	pending            bool
+	generation         uint64
 	checked            time.Time
 }
 
 type sidebarHistoryMsg struct {
-	cwd      string
-	sessions []session.Summary
-	err      error
+	generation uint64
+	cwd        string
+	sessions   []session.Summary
+	err        error
 }
 
 func (m *Model) requestSidebarHistory(now time.Time) tea.Cmd {
@@ -138,10 +140,12 @@ func (m *Model) requestSidebarHistory(now time.Time) tea.Cmd {
 	}
 	h.pending = true
 	h.checked = now
+	h.generation++
+	generation := h.generation
 	root := m.cfg.AgentDir
 	return func() tea.Msg {
 		list, err := session.List(root, cwd)
-		return sidebarHistoryMsg{cwd: cwd, sessions: list, err: err}
+		return sidebarHistoryMsg{generation: generation, cwd: cwd, sessions: list, err: err}
 	}
 }
 

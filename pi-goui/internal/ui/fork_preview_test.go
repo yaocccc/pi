@@ -162,8 +162,8 @@ func TestForkHoverClickAndCopyIsolation(t *testing.T) {
 		t.Fatal("direct fork changed dialogs or copy text")
 	}
 	m.forkCreated(result)
-	if m.current() == source || m.current().state.Name != source.state.Name {
-		t.Fatal("direct click did not open the independent same-name fork")
+	if m.current() == source || m.current().state.Name != "[1]"+source.state.Name {
+		t.Fatal("direct click did not open the independent numbered fork")
 	}
 }
 

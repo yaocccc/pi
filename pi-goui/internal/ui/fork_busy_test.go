@@ -67,7 +67,7 @@ func TestForkCompletedHistoryWhileRunning(t *testing.T) {
 				t.Fatal("source history was changed")
 			}
 			fork := m.current()
-			if len(m.tabs) != 2 || fork == source || fork.state.Name != "Original" || source.forkPending {
+			if len(m.tabs) != 2 || fork == source || fork.state.Name != "[1]Original" || source.forkPending {
 				t.Fatal("fork did not finish independently")
 			}
 			data, err := os.ReadFile(fork.state.File)

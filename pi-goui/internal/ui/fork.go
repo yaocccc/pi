@@ -108,8 +108,9 @@ func (m *Model) forkSnapshot(v forkSnapshotMsg) tea.Cmd {
 			return nil
 		}
 	}
+	root := m.cfg.AgentDir
 	return func() tea.Msg {
-		fork, err := session.CreateFork(v.path, v.sourceID, v.cwd, v.name, v.selected, v.entries)
+		fork, err := session.CreateNumberedFork(root, v.path, v.sourceID, v.cwd, v.name, v.selected, v.entries)
 		return forkCreatedMsg{id: v.id, fork: fork, err: err}
 	}
 }
@@ -158,5 +159,25 @@ func (m *Model) forkCreated(v forkCreatedMsg) tea.Cmd {
 	state, _ := json.Marshal(map[string]any{"sessionId": v.fork.ID, "sessionFile": v.fork.Path, "sessionName": v.fork.Name, "cwd": v.fork.Cwd})
 	_ = fork.state.LoadState(state)
 	_ = fork.state.LoadEntries(v.fork.Entries)
-	return tea.Batch(m.activate(len(m.tabs)-1), m.start(fork))
+	// Publish the durable file immediately, without waiting for RPC startup or
+	// the five-second history poll. Invalidate any pre-creation scan in flight.
+	h := &m.sidebarHistory
+	h.generation++
+	h.pending = false
+	h.checked = time.Time{}
+	cwd := m.tabDirectory(fork)
+	if h.cwd != cwd {
+		h.sessions = nil
+		h.offset = 0
+	}
+	h.cwd = cwd
+	saved := session.Summary{ID: v.fork.ID, Path: v.fork.Path, Name: v.fork.Name, Cwd: v.fork.Cwd, Modified: time.Now().UnixMilli(), ParentSession: v.fork.Origin.ParentSession, Fork: v.fork.Origin.Fork}
+	list := []session.Summary{saved}
+	for _, previous := range h.sessions {
+		if !sameSessionPath(previous.Path, saved.Path) {
+			list = append(list, previous)
+		}
+	}
+	h.sessions = list
+	return tea.Batch(m.activate(len(m.tabs)-1), m.start(fork), m.requestSidebarHistory(time.Now()))
 }

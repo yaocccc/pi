@@ -82,8 +82,11 @@ func readRecord(r *bufio.Reader) ([]byte, error) {
 // List reads native session metadata without changing sessions or following
 // symlinked directories/files. Missing session directories are normal.
 func List(root, cwd string) ([]Summary, error) {
+	return listSessions(filepath.Join(root, "sessions"), cwd)
+}
+
+func listSessions(dir, cwd string) ([]Summary, error) {
 	var result []Summary
-	dir := filepath.Join(root, "sessions")
 	if cwd != "" {
 		abs, err := filepath.Abs(cwd)
 		if err != nil {

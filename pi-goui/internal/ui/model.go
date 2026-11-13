@@ -600,6 +600,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.reply(t, v))
 	case sidebarHistoryMsg:
+		if v.generation != m.sidebarHistory.generation {
+			return m, nil
+		}
 		m.sidebarHistory.pending = false
 		if m.sidebarHistory.cwd != v.cwd {
 			m.sidebarHistory.offset = 0
