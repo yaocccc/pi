@@ -46,7 +46,7 @@ export default function (pi: ExtensionAPI) {
             saveConfig(nextConfig);
             config = nextConfig;
             // Observers cannot turn a successful commit into a reported failure.
-            try { pi.events.emit(CODEX_FAST_CHANGED, { ...config }); } catch {}
+            try { pi.events.emit(CODEX_FAST_CHANGED, Object.freeze({ ...config })); } catch {}
             return { ...config };
         },
     };

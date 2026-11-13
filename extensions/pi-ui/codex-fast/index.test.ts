@@ -40,7 +40,10 @@ async function setup(t: TestContext, initial: unknown) {
             on: (name: string, handler: (data: any) => void) => { bus.on(name, handler); return () => { bus.off(name, handler); }; },
         },
         registerCommand: (name: string, command: any) => commands.set(name, command),
-        on: (name: string, handler: any) => handlers.set(name, handler),
+        on: (name: string, handler: any) => {
+            const previous = handlers.get(name);
+            handlers.set(name, (...args: any[]) => { previous?.(...args); return handler(...args); });
+        },
     } as unknown as ExtensionAPI;
     // Resolve services at use time, not adapter installation time.
     registerCodexFastUI(pi);
@@ -53,6 +56,7 @@ async function setup(t: TestContext, initial: unknown) {
         file, commands, notifications, request, pi, handlers,
         open: (select: Select, hasUI = true) => commands.get('codex-fast').handler('', {
             hasUI,
+            sessionManager: { getSessionId: () => 'session' },
             ui: { select, notify: (message: string, level: string) => notifications.push({ message, level }) },
         }),
         saved: (): Config => JSON.parse(readFileSync(file, 'utf8')),
@@ -237,17 +241,17 @@ test('new level precedence, strict legacy booleans, malformed values, and missin
     }
 });
 
-for (const protocol of ['PI_UI_PROTOCOL', 'PI_GOUI_PROTOCOL']) for (const answer of [undefined, 'fast', 'invalid']) {
-    test(`${protocol} settings protocol: ${answer ?? 'cancel'}`, async (t) => {
+for (const answer of [undefined, 'fast', 'invalid']) {
+    test(`RPC settings without protocol flags: ${answer ?? 'cancel'}`, async (t) => {
         const fixture = await setup(t, { level: 'normal' });
         const previous = { PI_UI_PROTOCOL: process.env.PI_UI_PROTOCOL, PI_GOUI_PROTOCOL: process.env.PI_GOUI_PROTOCOL };
         for (const name of Object.keys(previous)) delete process.env[name];
-        process.env[protocol] = '1';
         t.after(() => { for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
         const events: any[] = [];
         const counts = trackSaves(t, fixture.file);
         await fixture.commands.get('codex-fast').handler('', {
             mode: 'rpc', hasUI: true,
+            sessionManager: { getSessionId: () => 'session' },
             ui: {
                 select: () => assert.fail('Go owns the settings menu'),
                 input: async (title: string, payload: string) => {
@@ -277,6 +281,7 @@ test('native mode does not select Go protocol even with capability environment',
     t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
     await fixture.commands.get('codex-fast').handler('', {
         mode: 'tui', hasUI: true,
+        sessionManager: { getSessionId: () => 'session' },
         ui: { select: async (_title: string, options: string[]) => options[1], input: () => assert.fail('native must not use Go protocol'), notify: () => {} },
     });
     assert.deepEqual(fixture.saved(), { level: 'fast' });
@@ -291,6 +296,7 @@ test('Go save failure emits data error and retains persisted configuration', asy
     const events: any[] = [];
     await fixture.commands.get('codex-fast').handler('', {
         mode: 'rpc', hasUI: true,
+        sessionManager: { getSessionId: () => 'session' },
         ui: { input: async () => 'fast', notify: (message: string) => events.push(JSON.parse(message.slice('pi-goui:event:v1:'.length))) },
     });
     assert.deepEqual(fixture.saved(), { level: 'normal' });
@@ -306,7 +312,7 @@ test('direct capability saves and RPC saves share committed facts', async (t) =>
     t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
     const h = await setup(t, { level: 'normal' });
     const messages: string[] = [];
-    const ctx = { mode: 'rpc', hasUI: true, ui: { notify: (message: string) => messages.push(message) } };
+    const ctx = { mode: 'rpc', hasUI: true, sessionManager: { getSessionId: () => 'session' }, ui: { notify: (message: string) => messages.push(message) } };
     h.handlers.get('session_start')({}, ctx);
     const service = getCapability<CodexFastService>(h.pi, CODEX_FAST_CAPABILITY)!;
     service.setLevel('fast');
@@ -328,3 +334,124 @@ test('direct capability saves and RPC saves share committed facts', async (t) =>
     assert.equal(messages.filter(message => message.includes('codex.settings-saved')).length, 2);
     h.handlers.get('session_shutdown')({});
 });
+
+test('Codex dialog lifecycle is isolated between adapter instances', async (t) => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    const old = await setup(t, { level: 'normal' });
+    const current = await setup(t, { level: 'normal' });
+    t.after(() => {
+        if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previous;
+    });
+    const oldNotices: string[] = [];
+    const currentNotices: string[] = [];
+    const answer = deferred<string | undefined>();
+    const ctx = {
+        mode: 'rpc', hasUI: true, sessionManager: { getSessionId: () => 'same-id' },
+        ui: { input: () => answer.promise, notify: (message: string) => oldNotices.push(message) },
+    };
+    const pending = old.commands.get('codex-fast').handler('', ctx);
+    old.handlers.get('session_shutdown')({});
+    await current.commands.get('codex-fast').handler('', {
+        ...ctx, ui: { input: async () => 'fast', notify: (message: string) => currentNotices.push(message) },
+    });
+    answer.resolve('fast');
+    await pending;
+    assert.deepEqual(old.saved(), { level: 'normal' });
+    assert.deepEqual(oldNotices, []);
+    assert.deepEqual(current.saved(), { level: 'fast' });
+    assert.equal(currentNotices.length, 1);
+});
+
+for (const method of ['codex-fast.get', 'codex-fast.set']) {
+    test(`${method} cannot leave a stale menu able to overwrite the current owner`, async (t) => {
+        const h = await setup(t, { level: 'normal' });
+        const counts = trackSaves(t, h.file);
+        const answer = deferred<string | undefined>();
+        const oldNotices: string[] = [];
+        const notices: string[] = [];
+        const ctx = {
+            mode: 'rpc', hasUI: true, sessionManager: { getSessionId: () => 'origin' },
+            ui: { input: () => answer.promise, notify: (message: string) => oldNotices.push(message) },
+        };
+        const pending = h.commands.get('codex-fast').handler('', ctx);
+        await h.commands.get('pi-ui-rpc').handler(JSON.stringify({ id: 'read', method, params: { level: 'normal' } }), {
+            ...ctx,
+            sessionManager: { getSessionId: () => method.endsWith('.get') ? 'replacement' : 'origin' },
+            ui: { notify: (message: string) => notices.push(message) },
+        });
+        answer.resolve('fast');
+        await pending;
+        assert.deepEqual(h.saved(), { level: 'normal' });
+        assert.deepEqual(oldNotices, []);
+        assert.deepEqual(counts, method.endsWith('.set') ? { writes: 1, renames: 1 } : { writes: 0, renames: 0 });
+        assert.equal(notices.filter(message => message.includes('codex.settings-saved')).length, method.endsWith('.set') ? 1 : 0);
+    });
+}
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+    return { promise, resolve, reject };
+}
+
+for (const mode of ['rpc', 'tui'] as const) {
+    for (const change of ['session_start', 'session_shutdown', 'session-id'] as const) {
+        for (const rejected of [false, true]) {
+            test(`${mode}: ${change} ignores late ${rejected ? 'errors' : 'answers'}`, async (t) => {
+                const h = await setup(t, { level: 'normal' });
+                const counts = trackSaves(t, h.file);
+                const notices: string[] = [];
+                let sessionId = 'origin';
+                let answer = deferred<string | undefined>();
+                const ctx = {
+                    mode, hasUI: true,
+                    sessionManager: { getSessionId: () => sessionId },
+                    ui: {
+                        input: () => answer.promise, select: () => answer.promise,
+                        notify: (message: string) => notices.push(message),
+                    },
+                };
+                const pending = h.commands.get('codex-fast').handler('', ctx);
+                if (change === 'session-id') sessionId = 'replacement';
+                else h.handlers.get(change)({}, ctx);
+                if (rejected) answer.reject(new Error('late dialog failure'));
+                else answer.resolve('fast');
+                await pending;
+                assert.deepEqual(h.saved(), { level: 'normal' });
+                assert.deepEqual(counts, { writes: 0, renames: 0 });
+                assert.deepEqual(notices, [], 'stale dialogs must not emit saved/error notices');
+                // A fresh request remains usable after lifecycle invalidation.
+                h.handlers.get('session_start')({}, ctx);
+                answer = deferred<string | undefined>();
+                answer.resolve('fast');
+                await h.commands.get('codex-fast').handler('', ctx);
+                assert.deepEqual(h.saved(), { level: 'fast' });
+                assert.deepEqual(counts, { writes: 1, renames: 1 });
+                assert.equal(notices.length, 1);
+            });
+        }
+    }
+
+    test(`${mode}: a newer dialog supersedes an earlier response`, async (t) => {
+        const h = await setup(t, { level: 'normal' });
+        const counts = trackSaves(t, h.file);
+        const notices: string[] = [];
+        const old = deferred<string | undefined>();
+        let answer = old;
+        const ctx = {
+            mode, hasUI: true, sessionManager: { getSessionId: () => 'origin' },
+            ui: { input: () => answer.promise, select: () => answer.promise, notify: (message: string) => notices.push(message) },
+        };
+        const pending = h.commands.get('codex-fast').handler('', ctx);
+        answer = deferred<string | undefined>();
+        answer.resolve(mode === 'rpc' ? 'normal' : 'normal · 当前');
+        await h.commands.get('codex-fast').handler('', ctx);
+        old.resolve('fast');
+        await pending;
+        assert.deepEqual(h.saved(), { level: 'normal' });
+        assert.deepEqual(counts, { writes: 1, renames: 1 });
+        assert.equal(notices.length, 1);
+    });
+}

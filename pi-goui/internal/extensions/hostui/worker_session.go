@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"pi-goui/internal/config"
+	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/render"
+	"pi-goui/internal/core/rpc"
+	"pi-goui/internal/core/session"
+	"pi-goui/internal/extensions/toolrender/detail"
 	"pi-goui/internal/extensions/worker"
-	"pi-goui/internal/render"
-	"pi-goui/internal/rpc"
-	"pi-goui/internal/session"
 	"reflect"
 	"slices"
 	"strings"
@@ -60,7 +61,7 @@ func SelectedWorkerDescriptor(item session.Item) (worker.Transcript, string, boo
 	return task.Transcript, task.Status, task.Transcript.Valid()
 }
 func WorkerDescriptor(item session.Item, key string) (worker.Transcript, string, string, bool) {
-	selected, title, ok := render.WorkerTaskResult(item, key)
+	selected, title, ok := detail.WorkerTaskResult(item, key)
 	if !ok {
 		return worker.Transcript{}, "", "", false
 	}

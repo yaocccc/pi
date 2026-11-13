@@ -2,92 +2,37 @@
 
 [English](AGENTS_EN.md)
 
-本指南适用于本目录，同时遵守仓库上级 `AGENTS.md`。动手前检查工作区，保留无关修改；未经要求不要提交。
+适用于本目录，同时遵守上级 `AGENTS.md`。先检查工作区并保留无关修改；未经要求不提交。使用说明见 [README](README.md)，扩展设计与接入规则见[扩展指南](internal/extensions/README.md)。
 
-## 项目定位
+## 修改约束
 
-Pi Go UI 是独立的 Go / Bubble Tea 前端，通过**标准 Pi RPC**启动并连接 Pi 后端。它不嵌入 TypeScript 扩展，不要求特定仓库位置、模型、凭据或作者的个人设置。仓库旁边提供的扩展是**可选第三方集成**，不是 Pi 后端的内置功能。
-
-项目与架构说明统一在 `README.md`。接入扩展前阅读 `internal/extensions/README.md`、`internal/extensions/hostui/README.md` 和 `internal/extensions/toolrender/README.md`。不要再新增独立 DESIGN 文档；给 AI 的修改指导放在本 AGENTS 文档中。中文为默认文档，英文使用同名 `_EN.md`，两者顶部互链。
-
-## 代码归属
-
-以下路径均相对 `pi-goui/`：
-
-| 路径 | 职责 |
-| --- | --- |
-| `cmd/pi-goui/` | 程序入口及 CLI |
-| `internal/rpc/` | 标准 Pi 传输、请求关联、生命周期与通用扩展 RPC 信封 |
-| `internal/session/` | 通用会话/消息投影；可选投影通过薄集成文件接入 |
-| `internal/ui/` | 宿主 Model、事件循环、通用布局/输入、标签与查看器所有权、薄适配绑定 |
-| `internal/render/` | 通用渲染、换行、内容净化、边框、完整值格式化 |
-| `internal/extensionapi/` | 小型中立渲染契约，不包含第三方业务 |
-| `internal/extensions/<name>/` | 扩展 wire 类型、类型化 RPC 客户端、纯解码与只读投影 |
-| `internal/extensions/hostui/` | 扩展表单、控件、查看器、交互及展示状态的**实际实现** |
-| `internal/extensions/toolrender/cards/` | 扩展紧凑卡片的**实际实现** |
-| `internal/extensions/toolrender/detail/` | 扩展完整工具结果视图的**实际实现** |
-| `internal/extensions/dialogs.go`、`notices.go` | 可选协议识别与事实通知展示 |
-
-不要把第三方实现散放在核心 UI/render 包后仅加 `extension_*.go` 前缀。核心现有文件是薄绑定：定位原标签/查看器、传递中立输入、调度 `tea.Cmd`、关闭/聚焦对话框、拒绝迟到结果。扩展行为实现在 `internal/extensions/`。
-
-### 依赖方向
-
-- `hostui` 不得导入 `internal/ui`，也不得接收或复制整个 Model；传递小型状态、回调或所有者句柄。允许复用通用 `internal/render` API。
-- `toolrender/cards`、`toolrender/detail` 不得导入父 `internal/render`、`internal/render/tooldetail` 或 `internal/ui`；使用 `extensionapi` 回调，按需复用通用 `render/frame`、`render/tooldata`、`config`、`session`。
-- 核心 renderer 的 `extensions.go` 只绑定通用回调与路由，不是另一份扩展实现。
-- 回调必须按实例绑定；不得建立可变全局渲染注册表、跨后端共享视图状态，或为搬文件暴露宿主内部类型。
-- 通用会话投影不能反向依赖 Worker 回放；Worker 适配可以使用通用会话投影。
-
-## 接入第三方扩展
-
-1. **先确认后端契约。** 阅读扩展自己的 README：发现方式、请求/响应、版本、生命周期、取消与不可用语义。不能从工具名猜接口。本仓库能力各自的 `../extensions/<name>/README.md` 是独立接入指南。
-2. **选择最小接口。** 足够时使用标准工具结果、对话框与通知；只在 `internal/extensions/<name>/` 添加必要的专项协议/投影，业务规则留在后端。
-3. **展示放入独立目录。** 控件与表单进入 `hostui`，卡片进入 `toolrender/cards`，完整详情进入 `toolrender/detail`。复用通用换行、净化与完整值展示，不复制整个 renderer。
-4. **连接薄宿主路由。** 对话框扩展 `internal/extensions/dialogs.go` 识别及 `hostui` 分派，沿用小型 `DialogHost` 桥；完整详情扩展 `detail.Render`，未知工具仍返回 false 并走通用视图；卡片通过 renderer facade 返回通用命中区块。Model 只增加必要的事件/生命周期绑定。
-5. **保持可选。** 未安装、未知版本、格式错误、未知载荷和断连不能破坏普通 Pi 交互；隐藏不可用控件，或显示已有结果/普通对话框。不能把看似协议的用户文本当成命令。
-6. **补测试与文档。** 覆盖无扩展路径、生命周期及所有权，而非只验证成功专项视图；更新对应 README 及变更的后端指南。
-
-### 权威逻辑属于后端
-
-执行、权限、调度、权威校验、持久化、迁移、记录授权及私有存储归扩展后端。Go 不得读写第三方配置、猜测私有日志路径、从模型名重建设置，或悄悄替代后端执行。
-
-这**不是禁止前端所有本地 I/O**：通用会话浏览、剪贴板/编辑器、图片、Git、额度、更新及前端偏好仍由前端负责。
-
-本仓库 TypeScript 能力支持仅复制 `<模块>/` 与 `ui/<模块>/`（来自 `extensions/pi-ui/<模块>/`），允许使用者自行注册原生 UI。这是后端安装选项，**不是 Go 源码/运行依赖**，不得让 Go 搜索这些目录或读取其文件。
-
-## RPC 与生命周期规则
-
-- 可选方法桥使用 `Client.CallExtension(ctx, method, params)`，先通过 `get_commands` 发现 `name:"pi-ui-rpc", source:"extension"`。不能发送未发现的斜杠命令，否则可能触发模型。
-- 桥操作结果是前缀 `pi-ui:rpc:v1:` 的 notify，内层为 `{id,result}` 或 `{id,error:{code,message}}`；外层 prompt 响应不是操作结果。保留普通通知。
-- 对话框使用标准 `extension_ui_request` / `extension_ui_response` 并匹配对话 ID；取消是 `cancelled:true`，不是伪造答案或默认同意。
-- 历史 `pi-goui:*:v1` 标题与事实前缀 `pi-goui:event:v1:` 是兼容 wire 标识，不要求客户端是 Go。后端支持中立 `PI_UI_PROTOCOL=1`，不要随意重命名 wire 常量。
-- 当前方法仅有 `codex-fast.get`、`codex-fast.set`、`worker.transcript`。记录参数使用 **`descriptor`** 和可选后端不透明 cursor；没有公开的 `worker.start`、`worker.cancel` 或远程 Worker 设置方法。`/worker_settings` 是对话命令，`worker` 是 Agent 工具。
-- 本地超时/取消仅停止等待，不撤销已保存写入。忽略迟到回复，关闭时释放定时器/监听器，后端退出时清理待处理请求。
-- 异步工作捕获原后端、标签/查看器及 revision，不能应用到“当前激活标签”。不要在 goroutine 修改 UI 状态，通过事件循环返回消息/命令。
-- 缺少记录时回退已保存任务结果；保留部分记录并标记不完整。没有 end 记录不等于成功。逻辑判断使用 `phaseCode` 等稳定码，不解析翻译文案。
-- 后端文本是不可信内容，使用通用安全渲染。除明确需要外，不在用户摘要暴露协议 ID/私有载荷；不自动访问结果里的路径或执行其中的文本。
+- 保持独立分发：不依赖作者目录、个人配置或相邻 TypeScript 源码。显式指定的 Pi 失败时不得静默回退；启动不复制凭据、注入扩展或改写原始设置。
+- `internal/` 只含 `core/` 与 `extensions/`。Pi 默认工具、codemode 和通用宿主逻辑属于 core；第三方实现及专项测试属于 extensions。遵守扩展指南中的单入口、接口注入与依赖方向，不添加兼容转发层或测试专用生产 API。
+- 每个可写会话只有一个后端进程。异步操作捕获原后端、标签/查看器、页面及 revision；忽略过期响应，不使用“当前激活标签”代替拥有者。goroutine 通过事件循环返回结果，不直接修改 UI。
+- 切换/恢复会话保留草稿、排队输入、任务和待处理对话；丢弃需确认。重命名/删除绑定选中目标并防止应用内并发修改；直接操作原生历史时校验路径、格式、文件身份并拒绝符号链接。退出回收子进程、监听器与等待者。
+- 以 `agent_settled` 而非 prompt 确认结束 busy。优先通过 `get_entries` 加载当前完整分支；压缩不替换原始记录，消息序号不按屏幕行计算。历史刷新失败不能污染既有状态。
+- 渲染只消费展示副本，不读当前磁盘文件补造 diff/历史，不修改能力状态。保留未知字段、原始空行与完整详情，卡片预览限制不能截断保存数据或详情；缺失记录、失败和不完整状态不得伪装成成功。
+- 后端文本不可信，复用通用净化与 ANSI/Unicode 安全绘制。布局和命中几何保持一致、窄屏不溢出；图片字节不进入摘要。缓存覆盖内容、宽度、折叠、Provider 身份和查看器版本，拖动/选择期间冻结显示，结束后刷新。
+- 用户键位重映射及空数组禁用优先于组件默认键。保留真实终端光标和输入法定位。弹窗及详情优先处理 Esc；无模态拦截时，有活动/待处理提示的中止优先于补全。
+- 执行、权限、调度、权威校验与私有存储归后端；前端不按模型名推测业务配置、不访问第三方私有文件。通用会话浏览、剪贴板、图片、Git、额度和前端偏好等本地 I/O 不受此禁令影响；额度请求仍需凭据隔离、目标限制和超时。
+- 文档只维护三组双语入口：根 README 讲使用，AGENTS 讲修改约束，`internal/extensions/README` 讲接入。中文默认、英文 `_EN.md`，顶部互链；避免新增包级说明、设计副本、逐像素规范或历史验证流水账，类型细节链接源码。
 
 ## 验证
 
-在 `pi-goui/` 内运行，迭代时优先专项检查：
+在 `pi-goui/` 内运行；迭代优先受影响包的测试，跨模块修改执行：
 
-~~~sh
-go test ./internal/extensions/... ./internal/render/... ./internal/ui
-~~~
-
-跨模块修改交付前：
-
-~~~sh
+```sh
 go test ./...
 go vet ./...
+go build ./...
 GORACE=atexit_sleep_ms=0 go test -race ./... -timeout=90s
 git diff --check
-~~~
+```
 
-修改的 Go 文件运行 `gofmt`。边界测试约束依赖方向；宿主集成测试覆盖完整输出、ANSI 安全、宽度、折叠、动画与路由，适配器行为测试放在实现旁。异步功能覆盖过期所有者、标签/会话切换、取消与断连；明确测试能力/桥缺失和未知协议降级。
+修改的 Go 文件运行 `gofmt`。专项协议/格式化/生命周期测试紧邻实现，核心只留真实宿主集成；覆盖空能力、未知协议、失败/取消、迟到响应、跨标签隔离及通用回退，不删断言来迁就实现。
 
-涉及分发/可移植性时，构建二进制，在无关临时项目及独立 HOME、`PI_CODING_AGENT_DIR` 中运行 `--check --no-session`，不复制作者 settings/models/auth。此检查只验证传输启动，不代表真实模型推理或终端交互。
+涉及交互时运行 `python3 script/test-ui.py`（临时二进制、隔离 HOME、假 RPC）。可选 `python3 script/test-ui.py --real-only --real-pi "$(command -v pi)"` 通过 [tests/real_rpc_guard.py](tests/real_rpc_guard.py) 仅允许只读查询，禁止模型/工具操作。
 
-修改配套 TypeScript 时，运行 `npm --prefix ../extensions run typecheck` 及 `npm --prefix ../extensions test`。可复制 helper 以源码随目录提供，维护者用 `npm --prefix ../extensions run sync:portable` 同步模板；使用者不得被要求执行生成步骤。
+涉及可移植性时，在仓库外临时目录与独立 HOME、`PI_CODING_AGENT_DIR` 下验证二进制 `--check --no-session`；不要复制个人 settings/models/auth。配套 TypeScript 的修改遵守其自身开发及验证指南。
 
-如实报告验证范围。单元测试不能代表真实终端、跨平台或全仓成功。历史 PTY/SoL-Pi runner 兼容问题与 Go 套件分开归因，不弱化测试或扩大无关改动。
+如实报告实际运行的检查、失败与未验证项；单元测试不代表终端、模型或跨平台验收，历史基线失败不得描述为通过。文档修改检查双语一致性、本地链接及删除引用，不必为纯文字变更运行整套应用测试。

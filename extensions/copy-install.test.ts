@@ -81,7 +81,7 @@ export default function(pi) {
  }});
 }
 `);
-		const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: agent, PI_UI_PROTOCOL: "1" };
+		const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: agent };
 		for (const key of ["PATH", "SystemRoot", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM"]) if (process.env[key] !== undefined) env[key] = process.env[key];
 		const args = [cli, "--mode", "rpc", "--no-session", "--no-extensions", ...selected.flatMap(name => ["-e", join(target, name, "index.ts")]), "-e", join(target, "my-ui.ts"), "-e", join(target, "probe.ts")];
 		const child = spawn(process.execPath, args, { cwd, env, stdio: "pipe" });

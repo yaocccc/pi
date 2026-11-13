@@ -12,10 +12,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/config"
-	"pi-goui/internal/rpc"
-	"pi-goui/internal/session"
-	"pi-goui/internal/ui"
+	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/rpc"
+	"pi-goui/internal/core/session"
+	"pi-goui/internal/core/ui"
 )
 
 func run() error {

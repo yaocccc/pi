@@ -3,7 +3,7 @@ package detail
 import (
 	"strings"
 
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/session"
 )
 
 // webEnable reflects activation results; availability is not inferred from the

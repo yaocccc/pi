@@ -14,12 +14,6 @@ cp -R "$SRC/codex-fast/." "$DEST/codex-fast/"
 cp -R "$SRC/pi-ui/codex-fast/." "$DEST/ui/codex-fast/"
 ~~~
 
-~~~text
-my-extensions/
-├── codex-fast/index.ts        # 能力及目录内全部文件
-└── ui/codex-fast/index.ts     # 可选 UI 及目录内全部文件
-~~~
-
 **原生 Pi：直接加载两个入口：**
 
 ~~~sh
@@ -38,32 +32,29 @@ export default function (pi: ExtensionAPI) {
 
 此时加载能力入口与 `my-ui.ts`，不要再加载上述 UI 入口或整包适配器；若能力已自动发现，只补 UI 注册。能力缺少 UI 仍负责执行/校验，不支持的交互应返回不可用，不能默认同意。
 
-RPC 使用同一组入口，增加 `PI_UI_PROTOCOL=1` 与 `--mode rpc`；完整消息格式见下文。Worker/Codex UI 各自附带可选方法桥，组合时只注册一次，其他模块不凭空增加方法。
+RPC 在上述入口命令增加 `--mode rpc`；见下方 wire 示例及[通用 RPC 契约](../pi-ui/README.md)。 可选方法桥只注册一次，与 Worker UI 组合时也不重复注册。
 
-Pi 1.5.2 提供 SDK、`pi-tui`、`typebox`，这两个目录运行不需要复制本仓库的 `node_modules`。认证、模型与能力配置仍由使用者自行设置，复制源码不代表零配置。保持上述目录名和相对层级，改变布局须自行调整导入。辅助文件同步仅供仓库维护者使用，**使用者无需生成代码**。
+Pi 1.5.2 提供 SDK、`pi-tui`、`typebox`，这两个目录运行不需要复制本仓库的 `node_modules`。认证、模型与能力配置仍由使用者自行设置，复制源码不代表零配置。保持上述目录名和相对层级，改变布局须自行调整导入。
 
-能力独立于 UI，负责配置校验、旧布尔值迁移、原子保存与 provider 请求的 `service_tier` 映射。缺省为 normal；不会改变不适用的 provider。使用自己的认证与模型，不需要作者的配置。
+## 配置与接口
 
-`codex-fast.json` 位于当前 Pi agent 目录。新配置形如 `{"level":"fast"}`，支持 normal / fast / ultrafast；模型不支持最高档时请求映射由能力层处理，显示仍反映配置档位。
+能力独立于 UI，负责配置校验、旧 `fast`/`ultrafast` 布尔值迁移、原子保存与 provider 请求的 `service_tier` 映射。缺省为 normal；不会改变不适用的 provider。使用自己的认证与模型，不需要作者的配置。
+
+`codex-fast.json` 位于当前 Pi agent 目录，新配置形如 `{"level":"fast"}`，支持 normal / fast / ultrafast。仅处理 provider=openai-codex、api=openai-codex-responses 且载荷为非数组对象的请求：normal 不修改载荷（也不移除已有 service_tier）；fast 使用 priority；ultrafast 仅在模型 ID 精确等于 gpt-6-astra 时使用 ultrafast，其他模型回退 priority。显示始终反映配置档位。
 
 通过 `getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY)` 发现服务：
 
 - `getConfig()` 重新读取持久化状态，返回独立快照。
 - `levels` 提供不可变的支持档位列表。
-- `setLevel(unknown)` 校验并原子保存；无效档位抛出 `invalid-level`，保存失败不更新已提交内存状态。
+- `setLevel(unknown)` 校验并原子保存，返回独立状态；无效档位抛出 `invalid-level`，保存失败不更新已提交内存状态。
 - 成功保存发布 `codex-fast:changed` 的 `{level}` 事实。外部文件变化在下一次读取/请求时加载，不视为服务保存事件。
 
-可选 pi-ui 提供 `/codex-fast`、原生菜单与 Go RPC 兼容。通用扩展 RPC 方法 `codex-fast.get` / `codex-fast.set` 分别读取能力状态和提交档位；Go 前端不读写此配置。缺少适配器不影响能力请求处理，缺少能力时前端应隐藏入口。
+可选 pi-ui 提供 `/codex-fast`、原生菜单与 Go RPC 兼容。通用扩展 RPC 方法 `codex-fast.get` / `codex-fast.set` 分别读取能力状态和提交档位；Go 前端不读写此配置。缺少适配器不影响能力请求处理，缺少能力时前端应隐藏入口。服务在使用时发现，以容忍安装顺序。
 
 ## 第三方 UI 快速接入（独立指南）
 
 ### 启动与发现
-~~~sh
-PI_UI_PROTOCOL=1 pi --mode rpc --no-extensions \
-  -e /path/to/my-extensions/codex-fast/index.ts \
-  -e /path/to/my-extensions/ui/codex-fast/index.ts
-~~~
-使用自己的 Pi 认证与设置。保留两个复制目录内的全部文件，不要只复制 index.ts。基线为 Node 22.19+ 与当前验证过的 Pi 1.5.2。PI_UI_PROTOCOL=1 启用结构化扩展 UI；兼容历史 PI_GOUI_PROTOCOL=1 别名及 pi-goui:* 消息名称，不需要 Go 前端。旧版适配器若尚不识别 PI_UI_PROTOCOL，可把该环境变量替换为 PI_GOUI_PROTOCOL=1，以下消息格式完全相同。
+要求 Node 22.19+、Pi 1.5.2。RPC 默认输出结构化消息，无需协议环境变量；`pi-goui:*` 名称不要求 Go 前端。
 
 先发送标准 Pi 请求，以 id 匹配响应：
 
@@ -139,7 +130,7 @@ PI_UI_PROTOCOL=1 pi --mode rpc --no-extensions \
 也可走标准对话框：发现命令后发送 `/codex-fast`。结构化模式会收到 `extension_ui_request`，`method:"input"`、标题 `pi-goui:codex-fast:v1`，`placeholder` 是 `{"level":"normal"}` 的 JSON 字符串（仅当前档位）。v1 档位为 `normal`、`fast`、`ultrafast`；`codex-fast.get` API 还会提供受支持的 `levels` 数组。回复匹配对话 ID 的 `extension_ui_response`，`value` 为普通字符串 `"fast"`，不是再次 JSON 编码的字符串；`cancelled:true` 不保存。未启用结构化模式时使用标准 select/notify。
 
 ### 生命周期、版本与进程内替代方案
-命令/通知协议使用 v1 标记。未知协议仍保留普通 Pi 对话和通知，只隐藏无法支持的专属控件。后端退出时清理待处理 id，本地取消后忽略迟到回复。停止客户端等待不会撤销已提交保存，因此应重新查询，不猜回滚。
+命令/通知协议使用 v1 标记。未知协议仍保留普通 Pi 对话和通知，只隐藏无法支持的专属控件。后端退出时清理待处理 id，本地取消后忽略迟到回复。适配器在会话启动/关闭、所属会话变化、新设置对话框或显式远程保存后丢弃旧对话框的迟到回答/错误，不再写入或提示；新请求不受影响。停止客户端等待不会撤销已提交保存，因此应重新查询，不猜回滚。
 
 同一 Pi 进程内的 TypeScript 扩展可跳过传输：
 ~~~ts

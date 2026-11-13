@@ -1,6 +1,6 @@
 package detail
 
-import "pi-goui/internal/session"
+import "pi-goui/internal/core/session"
 
 // fetchContent preserves readable/raw/answer outputs exactly as received. A
 // source may be stored remotely rather than included in this result.

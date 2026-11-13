@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"pi-goui/internal/config"
+	"pi-goui/internal/core/config"
 )
 
 var workerThinkingHeading = regexp.MustCompile(`\*\*[^*]+\*\*`)

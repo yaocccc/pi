@@ -1,270 +1,130 @@
-# SoL-Pi 中文概览
+# SoL-Pi
 
-[English / 完整说明](README_EN.md) · [安装](../README.md)
+[English](README_EN.md) · [安装总览](../README.md)
 
-## 只复制本模块与对应 UI
+提供大工具结果的 ObservationPack 打包/召回，以及基于计划安全边界的后台 Online Context Compact（OCC）。不替换原生文件工具；Action Fusion、Reducer 和上游全局配置加载器未安装。来源：[NVlabs/SoL-Pi](https://github.com/NVlabs/SoL-Pi)（原始提交 `1559b5cb`，选择性移植至 `e1a586af`）；见 [MIT 许可](LICENSE)。
 
-仅需复制以下**两个完整目录**并保持相对布局，不需要 `shared/`、整个仓库、顶层 `pi-ui/index.ts` 或构建步骤；必要的薄协议辅助代码已随目录附带。
+## 安装：两个完整目录
 
+无需 `shared/`、整个仓库、顶层 UI 入口或生成步骤。保持相对目录布局，勿仅复制 index.ts：
 ~~~sh
 SRC=/path/to/repository/extensions
 DEST=/path/to/my-extensions
 mkdir -p "$DEST/sol-pi" "$DEST/ui/sol-pi"
 cp -R "$SRC/sol-pi/." "$DEST/sol-pi/"
 cp -R "$SRC/pi-ui/sol-pi/." "$DEST/ui/sol-pi/"
-~~~
-
-~~~text
-my-extensions/
-├── sol-pi/index.ts        # 能力及目录内全部文件
-└── ui/sol-pi/index.ts     # 可选 UI 及目录内全部文件
-~~~
-
-**原生 Pi：直接加载两个入口：**
-
-~~~sh
 pi --no-extensions -e "$DEST/sol-pi/index.ts" -e "$DEST/ui/sol-pi/index.ts"
 ~~~
 
-**也可由使用者自行注册原生 UI**，例如在 `$DEST/my-ui.ts` 中：
-
+也可在 `$DEST/my-ui.ts` 显式注册 UI：
 ~~~ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerUI from "./ui/sol-pi/index.ts";
 export default function (pi: ExtensionAPI) {
-  registerUI(pi); // 不注册或替换能力本身
+  registerUI(pi);
 }
 ~~~
 
-此时加载能力入口与 `my-ui.ts`，不要再加载上述 UI 入口或整包适配器；若能力已自动发现，只补 UI 注册。能力缺少 UI 仍负责执行/校验，不支持的交互应返回不可用，不能默认同意。
+此时加载能力入口和 my-ui.ts，**不要再加载 UI 入口或整包适配器**。自动发现能力时也不要重复加载能力。UI 不注册/替换能力；缺少 UI 时执行与校验仍归能力，不支持的交互不能视为同意。
 
-RPC 使用同一组入口，增加 `PI_UI_PROTOCOL=1` 与 `--mode rpc`；完整消息格式见下文。Worker/Codex UI 各自附带可选方法桥，组合时只注册一次，其他模块不凭空增加方法。
+RPC 在上述命令添加 `--mode rpc`，默认使用结构化 UI，无需协议环境变量。安装基线为 Node 22.19+ / Pi 1.5.2，SDK、pi-tui、typebox 由 Pi 提供；无需仓库 node_modules。模型、认证与配置仍由用户提供；**安装可用不代表 OCC 已通过该 SDK 的兼容验证**，见下文。
 
-Pi 1.5.2 提供 SDK、`pi-tui`、`typebox`，这两个目录运行不需要复制本仓库的 `node_modules`。认证、模型与能力配置仍由使用者自行设置，复制源码不代表零配置。保持上述目录名和相对层级，改变布局须自行调整导入。辅助文件同步仅供仓库维护者使用，**使用者无需生成代码**。
+## 工具与数据
 
-SoL-Pi 提供大工具结果归档和 Online Context Compact 在线上下文压缩。只加载 `sol-pi/index.ts`，不要重复加载内部入口。它不依赖 Go 前端；原生隐藏工具卡片与通知由可选 pi-ui 提供。
+- `update_plan` 每次提交完整 `steps`，保留稳定 ID 和顺序；状态为 `pending|in_progress|completed`，最多一个 in_progress。可选 `progress` 含 `files_changed/verification/decisions` 三个字符串数组。先登记未完成步骤，再报告完成；全新 completed 步骤只作历史。完整 schema 见 [tools.ts](extensions/online-context-compact/tools.ts)。
+- ObservationPack 只打包 **超过 10 KiB、纯文本、非错误**工具结果；前 **两次 provider 请求**保留全文，之后替换为稳定 ID、首尾和召回引用。短结果、错误、混合媒体、`obs_recall` 结果不打包。存储失败 fail-open，保留原结果。
+- `obs_recall` 按 **UTF-8 字节偏移**分页返回原文；从 offset=0 开始，严格跟随 next_offset，不能假设每页固定 4096 字节。不得作为任意文件读取器；受当前会话归档及分页限制约束。
+- 归档原文和追加式 ledger 位于会话目录的 `sol-pi/<session-id>/observation-pack/{objects,ledger.jsonl}`；不改写历史。无会话/内存会话使用私有随机临时根，同进程会话共享；退出不自动删除，重启不恢复临时根映射。删除归档后无法召回；归档可能包含敏感工具输出，应按会话数据保护并自行清理。
+- 内置适配器隐藏这两个工具的调用/结果（含进度和错误）及计划提醒，不改变模型可见结果；原生 edit/write 展示不变。第三方 UI 可以按普通工具显示。
 
-## 使用前
+## 配置与默认语义
 
-- 配置自己的 Pi 模型与认证；不要复制作者 settings、auth 或模型 ID。
-- 在线压缩会调用模型，成本和触发行为由模型、缓存经济参数及配置共同决定。
-- 归档记录可能含敏感工具输出，保存在本地，不会自动删除；请自行制定保留策略。
-- `obs_recall` 用于召回已归档结果，`update_plan` 维护计划；能力返回结构化结果，不负责终端渲染。
-- 配置键、成本与安全限制见下文；不要把摘要估计值当作账单或保证节省。
+OCC 要求持久化 `getSessionFile()` 和有效 compaction 配置。无会话时隐藏/停用 update_plan；`PI_WORKER_DEPTH > 0` 不注册 OCC 工具或处理器，ObservationPack 独立运行。
 
-## 工作机制与成本
+[settings.ts](extensions/online-context-compact/settings.ts) 默认只读 agent 目录 settings.json，以及**受信任项目**的 .pi/settings.json，使用 Pi 的有效 compaction/retry 设置，不落盘迁移。SDK 的内存 SettingsManager、自定义 agent 目录或运行期覆盖须向 `createOnlineContextCompactExtension` 注入 `resolveSettings`，返回 `{compaction: settingsManager.getCompactionSettings(ctx.model), retry: settingsManager.getRetrySettings()}`；默认解析器不能读取不可见的内存覆盖。
 
-ObservationPack 对**大于 10 KiB** 的纯文本非错误工具结果，先保留前**两次 provider 请求**的完整正文，再投影为稳定 ID、开头和结尾。`obs_recall` 使用 `{"id":"obs_…","offset":0}` 按 `next_offset` 分页召回准确字节内容；短结果、错误、混合媒体及召回自身结果不压缩。归档与追加式 ledger 位于会话目录的 `sol-pi/<session-id>/observation-pack/{objects,ledger.jsonl}`；内存/无会话模式使用进程内会话共享的随机私有临时目录，退出后不删除，但重启不会恢复映射。不重写历史，删除归档将失去召回能力。
-
-`update_plan` 替换完整计划，步骤含 `id`、`goal` 及 `pending/in_progress/completed`，可选 progress 含 `files_changed/verification/decisions` 数组。只有本轮成功完成**此前登记的未完成步骤**且仍有剩余工作，才可能成为 OCC 安全边界；新建的 completed 只是历史，重复/重编号不会重置预测，全部完成不触发。经济条件可延后压缩。
-
-合法 `turn_end` 冻结快照，用任务时认证及原生 compact 提示/重试通过 `ctx.modelRegistry.streamSimple()` 后台生成，不等待它完成。后续 `turn_end/agent_before_settle` 原子提交摘要和最新计划，保留后台期间追加的消息；仅在剩余工作存在时加隐藏提醒及 `continue:true`，不 abort 主会话、不 await ctx.compact、不借 sendMessage 重启。
-
-嵌套 update_plan（包括 codemode）必须匹配本轮自身更新 ID 与 SDK 最终 nestedCalls 记录，外层及所有中间调用成功才授权。缺失/截断记录、失败/blocked、取消轮次均不授权，父调用失败前已保存的计划仍可能存在。完成计划后的新外部任务重置任务预测，但保留累计缓存债务和最后压缩时间；排队输入采用本轮有界匹配，来源混杂、重复或变形时保守不重置。Pi 1.0.2 不提供来源/输入 ID，直接由 SDK 注入的同文用户消息无法可靠区分。
-
-- OCC 要求持久化 `getSessionFile()`；无会话时隐藏/停用 update_plan，`PI_WORKER_DEPTH > 0` 不注册 OCC 工具/处理器，ObservationPack 不受此限制。
-- SDK 的内存 SettingsManager、自定义目录或运行时覆盖需向 factory 注入 `resolveSettings: ctx => ({ compaction: settingsManager.getCompactionSettings(ctx.model), retry: settingsManager.getRetrySettings() })`；默认 resolver 无法读取宿主私有内存设置。
-- `cacheWriteReadRatio` 默认 **12.5**，接受非负数或 null（不估算价格），是启发式而非供应商实测价格或节省保证。估计 1,000-token 摘要、剩余请求预测、首次倍率、后续裕量和累计债务共同决策；原生可移除前缀含 split turn/被替换摘要，并按可见投影上限约束。重压缩有冷却，窗口保护可绕过它但沿用有效 reserve tokens；决策与债务使用估计摘要而非实际账单。
-- 总上下文以原生 usage 为锚点。Responses API 中唯一匹配、未改变、同模型的加密推理可按该 assistant 消息 usage.reasoning 给可移除前缀记账，每消息一次并扣除已计可见 thinking；不对密文长度分词。移除/保留推理共享「当前 usage 减可见投影」预算；不匹配、无签名、跨模型或无效/失效 usage 不记信用，未归因用量留在保留成本中。这是回放成本代理，不是精确输入计费或保证界限；不重跑 OP 状态 hook，不改变原生摘要输入。
-- 每次选中边界需**一或两次额外模型请求**及配置的重试，split turn 与前缀摘要分别校验。摘要禁用缓存写入（cacheRetention:none），压缩也会使主提示缓存前缀失效。
-- 持久化 requestCount 与偿债/请求预测按主 Agent 的 turn_start 计数（含 OCC 继续轮），不是传输尝试；轮内重试不额外计，派发前取消仍可能已计。上下文增长在轮起始采样，摘要请求和 CacheWarmer 重放不计入；旧计数不追溯修正。
-- 成功摘要 usage 写入压缩记录；失败、取消、重试或随后丢弃仍可能计费，成功记录不能代表全部成本。这不是账本或预算上限。
-
-## 兼容与安全边界
-
-原生准备函数不公开导出。`native-preparation.ts` 是 Pi 0.87.1 的**仅准备逻辑移植**，已针对 1.0.2 调整、在 1.0.4 做差分验证，保留其 [MIT 许可](extensions/online-context-compact/LICENSE.pi)。使用公开投影 API 与真实活动分支，保留 context edits、split turns、工具配对、旧摘要及累计文件列表（含嵌套文件调用）。稳定的 `sol-pi-occ-native-0.87.1` 标记保留旧 fromHook 文件列表；生产只导入公开 API，私有对照仅用于测试。升级 Pi 必须重新验证，不以仓库本地依赖版本代替历史固定目标。
-
-边界 draft 提交**不触发 session_before_compact/session_compact 或原生压缩失败 hook**。依赖这些 hook 拦截所有压缩的扩展无法拦截 OCC；需要时关闭压缩/OCC。手动压缩仍用原生 hook 并协调去重。状态在同一 draft batch 提议，不预先生效，后续从已提交分支重建；之前纯 custom draft 保留，之前改变上下文/custom-message/compaction 的 draft 会让 OCC 跳过，后续扩展可替换/删除 batch 并对自己改动负责。
-
-中止、延后、空、截断或调用工具的摘要不会成为检查点。纠正输入、取消边界、会话/树/切换/fork/关闭、模型变化、原生压缩均会使任务失效；提交前检查会话、完整快照前缀、generation 和主模型。普通追加消息/元数据保留，冲突 context edits、其他压缩或分支摘要使任务失效，迟到结果不能覆盖新任务。异步回调先检查取消/generation，reload/替换/SDK释放后不再访问失效 ctx，不写诊断日志。OCC 不删除原历史，但摘要仍会损失细节，可查看原会话或用 obs_recall 召回归档。
-
-OCC 不注册 before_provider_request 计量 hook：Pi 1.0.2 CacheWarmer 复用主请求 onPayload，重放不追加 OCC 状态、不偿债、不通过 OCC 改变 leaf。原生预热自身的 usage 记录可与普通追加消息/元数据一起保留，冲突上下文修改仍使摘要失效；用户预热设置及原生 usage 计量不变。
-
-历史 1.0.2 审核确认投影/空历史、usage有效性、切点/恢复后缀、重复压缩选择不变；文件追踪适配 nestedCalls，允许记录失败/未结束调用中已知路径，但这只是尝试记录，不证明写入成功。仅本模块稳定标记补充 fromHook 文件列表，未知 hook 排除。公开 compact 参数保持兼容，认证、重试、取消、无缓存、原子 draft 与原提示继续有历史测试，嵌套授权按最终记录及成功祖先判断。
-
-上游 `e1a586af0ad8956f42ae5b26bba20e48fbf30e00` 是选择性移植来源，并非整树复制：包含压缩后缓存成本、实际可移除前缀、累计债务、最终计划/progress 语义与临时归档修复，另加本地投影定价及排队任务处理。不引入上游 abort/restart 继续方式、宣传 UI 或已移除的 AF。对应原生 UI 适配只隐藏 obs_recall/update_plan 的调用/结果（含进度/错误）及继续提醒，不改模型可见结果、原生 edit/write 或执行行为；只加载能力时不会覆盖 renderer。
-
-## 后台压缩配置
-
-`~/.pi/agent/online-compact-settings.json`（也可位于自定义 `PI_CODING_AGENT_DIR`）：
-
+后台模型设置位于 `~/.pi/agent/online-compact-settings.json`（或 `PI_CODING_AGENT_DIR` 下），每个任务开始重新读取并固定：
 ```json
-{
-  "model": "auto",
-  "thinking": "auto",
-  "service_tier": "auto"
-}
+{"model":"auto","thinking":"auto","service_tier":"auto"}
 ```
 
-`auto` 分别沿用任务启动时主会话的模型和思考强度。指定模型使用 `provider/model-id`（模型 ID 可包含 `/`）；`thinking` 可设为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，具体取决于模型。每个任务重新读取并固定配置，不改主会话；缺省为 `auto`，无效值跳过本次优化并提示。SDK 宿主可注入 `resolveSummarySettings` 指定自己的来源。
+- 缺省均为 auto；model/thinking 分别继承主会话当时设置。显式 model 为 `provider/model-id`（ID 可含 /）；thinking 支持 `off|minimal|low|medium|high|xhigh|max`，仍受模型支持限制。无效配置警告并跳过优化；SDK 可注入 `resolveSummarySettings`。
+- service_tier 为 `auto|priority|fast|ultrafast`；auto 不附加字段，其余原样传给后台摘要，不检查/转换 provider 支持，不影响主会话或原生 /compact。不支持时可能失败。
+- 工厂 `cacheWriteReadRatio` 默认 **12.5**，允许非负数或 null（无经济价格估计），不是上述 JSON 设置。基于 1,000-token 预计摘要、请求期望、可移除前缀、累计缓存债务和冷却门控；窗口保护可绕过冷却，沿用有效 reserve-token 设置。详见 [economics.ts](extensions/online-context-compact/economics.ts)。
+- 每次选中边界增加 **1–2 次模型请求及配置重试**；摘要禁止缓存写入，压缩也使主提示缓存前缀失效。价格、节省和 UI token 差均为估计，不是计费、预算上限或保证。成功 checkpoint usage 不包含所有失败/取消/丢弃的收费工作。
+- requestCount/偿债按主 agent `turn_start` 计数（含继续轮次，派发前中止也可能计入），不按网络重试计数；摘要和缓存预热回放不计入。旧计数不追溯校正。同模型且唯一匹配的签名加密 reasoning 可获受 usage 限额约束的前缀信用；不按密文长度估 token，未知 usage 留作保留成本，这仍只是回放成本代理。
 
-`service_tier` 支持 `auto`（默认）、`priority`、`fast`、`ultrafast`。`auto` 不附加该字段；其他值原样加入后台摘要 payload，不进行值映射或模型/供应商检查。不影响主会话或原生 `/compact`；服务端不支持该参数时本次后台摘要可能失败。
+## 触发、回放与安全
 
-不显示原生压缩进度、不阻塞对话，也不接管 `/compact` 或 overflow 恢复。通知区分「摘要就绪」与「实际提交」，分别报告生成时间、token 变化和含安全边界等待的总耗时。空闲时完成的摘要等待下一安全边界，不自行开启对话或写会话。失效/取消的任务不报失败；实际失败显示耗时与简短原因，不报告成功。
+只有**当前轮成功的 update_plan 将已登记未完成步骤变为完成，且仍有剩余工作**才可授权边界；重复/改号、全新 completed 或全计划完成均不触发，经济门控可延期。嵌套调用依据 SDK 最终 `nestedCalls` 和本轮更新 ID，外层及所有父调用必须成功；不信任输出文本/details。截断、失败、阻塞或取消不授权；父调用失败前计划可能已持久化。
 
-失败原因仅取异常消息，排除堆栈和序列化请求，移除终端控制字符、尽力脱敏常见凭证及 URL，最多保留 300 字符另加省略号，不保存原始错误日志。没有 OCC 诊断日志或仅为日志运行的逐轮经济性评估；经济判断仍在合法边界执行，加密推理计量修复保留。
+符合条件的 turn_end 冻结快照，后台使用 `ctx.modelRegistry.streamSimple()`、请求时认证及原生 compact 提示/重试；后续 turn_end / agent_before_settle 原子提交摘要与最新计划，保留期间追加消息。仅剩余工作时添加隐藏提醒及 continue:true，不中止主会话、不等待 ctx.compact、不用 sendMessage 重启；空闲结果只等后续边界，不自行写会话或开对话。
 
-token 变化使用同一估算法比较实际提交边界前后的会话投影，包含后台期间新增消息与本次继续提醒，排除提交之后的新消息。它不是供应商实测/计费用量，不含会话外系统提示、工具定义或后续 OP 转换，可能不同于界面计数；摘要变大时如实报告增加。
+- 保留计划/预测历史；完成后新外部任务可重置任务预测，但保留债务与上次压缩时间。输入匹配有界且仅本次运行；旧 SDK 无来源/输入 ID，混合、重复或变形输入保守跳过重置，绕过 input 注入的相同裸消息无法可靠区分。
+- 边界 draft **不触发 session_before_compact、session_compact 或原生失败钩子**；依赖钩子否决/观察所有压缩时须关闭 compaction/OCC。手动 /compact 和溢出恢复仍为原生流程。
+- 状态与摘要同批提案，提交后从分支重建；之前纯 custom draft 可保留，已有上下文编辑、custom-message 或 compaction draft 则跳过。后续扩展仍可替换/丢弃提案并负责其修改。
+- 更正、取消、session/tree/switch/fork/shutdown、模型变化或原生压缩使后台工作取消/失效；提交前核对会话、完整捕获前缀、generation、主模型。普通追加消息/元数据保留，分支摘要、上下文编辑及其他压缩使任务失效；晚到结果不能覆盖新任务。失效 SDK context 不再访问，脱离后台失败不写诊断。
+- 空、截断、tool-calling、失败或取消摘要不形成 checkpoint，不破坏现有调度；原始历史不删除，但摘要仍可能丢细节，可查原会话或召回归档。
+- OCC 无 before_provider_request 计费钩子；CacheWarmer 回放不追加 OCC 状态、不偿债。原生预热仍可写 usage 并移动 leaf，守卫允许捕获前缀后的这类记录，但不放过冲突上下文变化；用户预热设置不变。
+- 通知区分 ready 与 applied；失败只报短原因/耗时，过期任务静默。错误仅用消息，清终端控制符、尽力脱敏凭据/URL，最多 300 字符加省略号；不存原始错误或 OCC 诊断日志。token 差用同一提交前后投影估计，含等待期间消息/继续提醒，不含会话外系统提示、工具定义及后续 OP 变换；增长不报成节省。
 
-## 验证限制
+实现入口：[extension.ts](extensions/online-context-compact/extension.ts)、[观测打包](extensions/observation-pack/index.ts)、[运行路径](runtime-paths.ts)。
 
-历史隔离验证器 `tests/run-global.mjs` 固定全局 Pi **1.0.4**，不安装依赖。当前扩展包使用 1.5.x SDK；SoL-Pi 完整 .mjs 套件在当前宿主下存在已复现的基线失败，不能宣称全套通过。
+## 第三方 UI：只观察，不控制压缩
 
-扩展包 `npm test` 只运行 TypeScript 测试，不包含该 .mjs 套件。在 agent 目录运行历史独立验证器：
+通用传输见 [pi-ui](../pi-ui/README.md)。历史 `pi-goui:*` 名称不要求 Go 前端。没有 `sol-pi.compact`、`plan.get/set`、`observation.read` 远程方法；标准 Pi compact 是独立宿主操作。`get_commands` 不列工具/服务，不能用于探测存在；不要发送 /update_plan、/obs_recall 或为探测而发模型提示。未看到识别的状态前维持普通视图。
 
-```sh
+成功 `tool_execution_end` 的 toolName=update_plan 时读取 result.details（历史成功 toolResult 读取 details）：
+```json
+{"boundary":true,"completed_step_ids":["inspect"],"progress_recorded":true,"task_status":"active","plan":[{"id":"inspect","goal":"Inspect inputs","status":"completed"},{"id":"apply","goal":"Apply change","status":"in_progress"}]}
+```
+
+plan 为完整替换，勿排序或以错误调用参数覆盖已提交计划。boundary 等是转换事实；task_status=active **不表示全部完成时关闭会话**。
+
+初始化/恢复查询历史（响应为最小示例，真实状态还有内部字段）：
+```json
+{"id":"history-1","type":"get_entries"}
+```
+```json
+{"type":"response","id":"history-1","command":"get_entries","success":true,"data":{"leafId":"entry-plan","entries":[{"id":"entry-plan","parentId":null,"type":"custom","customType":"sol-pi-online-context-state-v1","data":{"version":1,"plan":[{"id":"inspect","goal":"Inspect inputs","status":"completed"},{"id":"apply","goal":"Apply change","status":"in_progress"}]}}]}}
+```
+
+从 leafId 沿 parentId 找活动分支，只投影其最新 version=1 状态，不按全树时间戳挑选、不写回。entry_appended 可带同类状态；替换会话/fork/树导航须重建。未知版本、缺失/非法数据降级通用视图，不编造计划，忽略其他内部字段。
+
+RPC UI 加载后通知示例：
+```json
+{"type":"extension_ui_request","id":"notice-1","method":"notify","notifyType":"info","message":"pi-goui:event:v1:{\"name\":\"context.applied\",\"data\":{\"beforeTokens\":12000,\"afterTokens\":7000,\"generationMs\":2400,\"durationMs\":8000}}"}
+```
+
+去掉精确前缀 `pi-goui:event:v1:` 后解析 {name,data}：
+- context.ready: {generationMs}，仅生成完成；
+- context.applied: {beforeTokens,afterTokens,generationMs,durationMs}，估计可增可减，毫秒生成耗时与总耗时不同；
+- context.failed: {durationMs,reason}，保留上下文/计划，可显示警告。
+
+这些事实不需 extension_ui_response，不是持久确认，也无统一严重度；忽略多余字段、未知/畸形消息。缺少通知不证明失败。持久指标在活动分支 `sol-pi-online-context-metrics-v1` custom entry，含 estimated:true 及 applied 指标；不要将历史指标重放为新 toast。
+
+obs_recall 的工具参数及返回 details 示例（原文在 content）：
+```json
+{"id":"obs_0123456789abcdef01234567","offset":0}
+```
+```json
+{"id":"obs_0123456789abcdef01234567","offset":0,"bytes":4096,"lines":80,"nextOffset":4096,"eof":false}
+```
+
+details 使用 nextOffset/eof；文本头为 next_offset/eof，eof=true 时停止。无专用 RPC 点击取片段接口，不要隐式发模型提示或用 UI 任意读宿主路径；ID 未找到、会话改变、偏移非法或归档删除显示普通工具错误。渲染中和未来新增工具先按普通工具回退，勿把内部 details 当授权来源。
+
+## 兼容性与验证
+
+[native-preparation.ts](extensions/online-context-compact/native-preparation.ts) 是 Pi 0.87.1 的 preparation-only 移植，已适配 1.0.2，并曾对 **1.0.4** 跑差分验证；保留 `sol-pi-occ-native-0.87.1` checkpoint 标记以恢复历史文件列表（[许可](extensions/online-context-compact/LICENSE.pi)）。使用活动分支投影，保留工具配对、split turns、旧摘要/累计文件；嵌套文件记录代表尝试，不保证写入成功。生产只用公开导入，测试可用私有比较 API；升级 SDK 须重新验证，不能把本地依赖当受支持验证目标。
+
+历史 runner 固定 **Pi 1.0.4**，曾记录 174/174 及严格类型检查通过，**不是当前 1.5.x 通过声明**；当前宿主完整 .mjs 套件已复现基线失败。`extensions/npm test` 只涵盖 TypeScript 测试，不包含此套件。
+
+~~~sh
+# 从 agent 目录运行；要求现有全局 Pi 1.0.4
 node extensions/sol-pi/tests/run-global.mjs
 node extensions/sol-pi/tests/run-global.mjs --typecheck
-```
-
-验证器隔离 HOME，只复制本扩展到临时目录并链接**已有**全局依赖，不改 node_modules、manifest、lockfile，不安装编译器。`SOL_PI_GLOBAL_ROOT` 可覆盖 npm root -g；类型检查使用现有全局 TypeScript 或 ts-node 附带编译器。
-
-历史固定 **Pi 1.0.4** 的记录为 10 文件 **174/174 通过**及严格类型检查通过，**不是当前 1.5.x 的结果**。覆盖 OP 字节准确 UTF-8 召回/存储 fail-open、OCC 非阻塞生成/安全提交、计划与经济边界、模型设置、原生准备差分、nestedCalls 祖先、排队输入、取消/重试和生命周期；真实 AgentSession 配合认证伪 provider，不调用远程模型。三项 CacheWarmer 回归通过仅测试可见的私有 refresh 验证 idle/streaming 重放与债务隔离、摘要提交/主轮计数、预热 usage 后的冲突 context edits 拒绝。
-
-这些检查不使用真实凭据、不修改全局设置，也不证明真实计费或完整交互 UI。请区分历史通过记录、当前基线失败与未验证交互。
-
-## 第三方 UI 快速接入（独立指南）
-
-### 加载并观察，不在 UI 实现压缩
-~~~sh
-PI_UI_PROTOCOL=1 pi --mode rpc --no-extensions \
-  -e /path/to/my-extensions/sol-pi/index.ts \
-  -e /path/to/my-extensions/ui/sol-pi/index.ts
-~~~
-使用自己的 Pi 认证与设置。保留两个复制目录内的全部文件，不要只复制 index.ts。基线为 Node 22.19+ 与当前验证过的 Pi 1.5.2。PI_UI_PROTOCOL=1 启用结构化扩展 UI；兼容历史 PI_GOUI_PROTOCOL=1 别名及 pi-goui:* 消息名称，不需要 Go 前端。旧版适配器若尚不识别 PI_UI_PROTOCOL，可把该环境变量替换为 PI_GOUI_PROTOCOL=1，以下消息格式完全相同。
-
-Online Context Compact 需要启用配置和持久化主会话（不是 Worker），模型/认证由用户配置。ObservationPack 是独立归档行为，无持久化会话时可能使用临时存储。UI 是**只读观察者**：没有 sol-pi.compact、plan.get/set、observation.read 远程扩展方法。标准 Pi compact 是宿主的另一项操作，不是 OCC 控制接口。
-
-get_commands 是标准发现请求（{"id":"commands-1","type":"get_commands"}），但只列命令，不列工具/服务。不要据此判断 SoL-Pi 是否存在，也不要发送 /update_plan 或 /obs_recall：它们是工具名，不是扩展命令。在有效计划/结果/事实到来之前保留普通 Pi 视图，不显示可选计划/进度组件。不要为了探测能力而调用模型。
-
-### 实时与历史计划
-成功的 toolName="update_plan" 的 tool_execution_end 从 result.details 读取计划（历史成功 toolResult 则读取 details），例如：
-~~~json
-{
-  "boundary": true,
-  "completed_step_ids": [
-    "inspect"
-  ],
-  "progress_recorded": true,
-  "task_status": "active",
-  "plan": [
-    {
-      "id": "inspect",
-      "goal": "Inspect inputs",
-      "status": "completed"
-    },
-    {
-      "id": "apply",
-      "goal": "Apply change",
-      "status": "in_progress"
-    }
-  ]
-}
 ~~~
 
-plan 是完整替换，不是增量 patch。每步有 id、goal、status（pending/in_progress/completed）；保留 ID 与给定顺序，不自行排序。boundary/completed_step_ids/progress_recorded 说明已记录的转换；当前 task_status 为 active，**不能**把所有步骤 completed 当成关闭 Agent 会话的信号。工具错误不能用 proposed arguments 覆盖已提交计划。
+[runner](tests/run-global.mjs) 隔离 HOME、复制到临时目录并链接现有全局依赖；可用 SOL_PI_GLOBAL_ROOT 指定 npm 全局根，类型检查要求已有 TypeScript。不安装依赖、不改全局设置，不调用远程模型；覆盖细节见 [tests/](tests/)，不代表真实计费或完整交互 UI 认证。
 
-初次打开/恢复时发送 {"id":"history-1","type":"get_entries"}。以下为最小示意响应，真实状态记录还包含其他字段：
-~~~json
-{
-  "type": "response",
-  "id": "history-1",
-  "command": "get_entries",
-  "success": true,
-  "data": {
-    "leafId": "entry-plan",
-    "entries": [
-      {
-        "id": "entry-plan",
-        "parentId": null,
-        "type": "custom",
-        "customType": "sol-pi-online-context-state-v1",
-        "data": {
-          "version": 1,
-          "plan": [
-            {
-              "id": "inspect",
-              "goal": "Inspect inputs",
-              "status": "completed"
-            },
-            {
-              "id": "apply",
-              "goal": "Apply change",
-              "status": "in_progress"
-            }
-          ]
-        }
-      }
-    ]
-  }
-}
-~~~
-
-从 leafId 沿 parentId 识别活动分支，只投影该分支最新的已识别 version=1 custom state，不能取整棵树中时间最近的状态。UI 不应修改或写回记录。实时 entry_appended 也可带相同 custom state；会话替换、fork、树导航后需重建显示。未知版本或缺失/无效状态使用通用回退，不伪造计划。其他状态字段属内部实现，UI 投影应忽略。
-
-### 进度事实及准确传输格式
-启用 pi-ui 与结构化标记后，标准 notify 消息携带事实：
-~~~json
-{
-  "type": "extension_ui_request",
-  "id": "notice-1",
-  "method": "notify",
-  "notifyType": "info",
-  "message": "pi-goui:event:v1:{\"name\":\"context.applied\",\"data\":{\"beforeTokens\":12000,\"afterTokens\":7000,\"generationMs\":2400,\"durationMs\":8000}}"
-}
-~~~
-
-剥离精确 pi-goui:event:v1: 前缀后解析 {name,data}：
-- context.ready：{generationMs}，摘要生成完成，**不等于已经应用**。
-- context.applied：{beforeTokens,afterTokens,generationMs,durationMs}；token 估算可能增大或减少，生成耗时与总耗时不同，单位都是毫秒。
-- context.failed：{durationMs,reason}；保留现有上下文/计划，可显示警告，不假定发生破坏性失败。
-
-忽略新增字段。事实不是持久化确认，不需要回复 extension_ui_response，也可以完全不展示；没有通用严重级别，文案和视觉策略由 UI 决定。
-
-~~~js
-// event is one JSON object decoded from Pi stdout (JSONL), not a whole chunk.
-function contextFact(event) {
-  if (event.type !== "extension_ui_request" || event.method !== "notify") return;
-  const prefix = "pi-goui:event:v1:";
-  if (typeof event.message !== "string" || !event.message.startsWith(prefix)) return;
-  try {
-    const fact = JSON.parse(event.message.slice(prefix.length));
-    if (["context.ready", "context.applied", "context.failed"].includes(fact.name)) {
-      return fact; // Render in your own UI; no extension_ui_response is sent.
-    }
-  } catch {} // Ignore malformed/unknown extension payloads.
-}
-~~~
-
-已保存的应用指标位于活动分支 customType="sol-pi-online-context-metrics-v1" 的 custom entry，data 含 estimated:true 及上述应用指标。不要把每条历史事实都重新弹成通知；缺少事实也不代表失败，适配器或通知传输可能没有加载。
-
-### ObservationPack 展示
-观察普通 obs_recall 工具输出，其 details 为：
-~~~json
-{
-  "id": "ID_FROM_TOOL_RESULT",
-  "offset": 0,
-  "bytes": 512,
-  "lines": 12,
-  "nextOffset": 512,
-  "eof": false
-}
-~~~
-
-id 不透明，offset/nextOffset/bytes 按字节计，lines 为行数，eof 标识归档结束。使用 details，不解析展示文本中的头；真实片段在 content。UI 可显示归档占位符和片段，但不能构造路径或自行读取归档。Agent 授权召回仍使用既有工具，没有 UI 直接召回方法。缺少/未知 details 或工具错误保留普通输出。归档可能敏感且不可信，不能作为 UI 指令执行。计划视图可以隐藏成功的后台工具卡片，同时保留完整历史/详情，这是展示策略。
-
-### 进程内观察者与生命周期
-同一 Pi 进程内的 TypeScript 适配器不加载 pi-ui 也能订阅：
-~~~ts
-import { FRONTEND_EVENT, type FrontendEventMessage } from "/path/to/my-extensions/sol-pi/frontend.ts";
-const stop = pi.events.on(FRONTEND_EVENT, (raw: unknown) => {
-  const { context, event } = raw as FrontendEventMessage;
-  if (event.name.startsWith("context.")) {
-    // 用 context.sessionManager.getSessionId() 关联会话，再由自己的UI展示。
-  }
-});
-~~~
-
-此进程内回调接收 {context,event}；远程客户端只收到上述传输中的 {name,data}。目前没有用于修改计划的公共 Sol-Pi getCapability 服务。按源后端/会话隔离更新，切换时清理过期组件，销毁时解除监听；取消和生成生命周期归能力负责。远程 UI 关闭进度组件不会取消 OCC 工作。
-
-**最小接入：**普通工具/历史查看器 → 活动分支计划投影 → 可选事实通知 → 片段 details。不需要专属控制项、答案格式或修改响应。v1 entry/prefix 名称表示已支持结构；不能假定未知未来版本兼容。
+卸载时移除能力目录及对应 UI 注册并重载；归档需另行清理，勿误删其他扩展。

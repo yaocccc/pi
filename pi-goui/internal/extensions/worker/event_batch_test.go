@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/session"
 )
 
 func TestWorkerEventBatchProjectionEquivalence(t *testing.T) {

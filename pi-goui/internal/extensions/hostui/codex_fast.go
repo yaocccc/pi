@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/config"
-	"pi-goui/internal/extensions"
+	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/extension"
+	"pi-goui/internal/core/render"
+	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/extensions/codexfast"
-	"pi-goui/internal/render"
-	"pi-goui/internal/rpc"
+	"pi-goui/internal/extensions/internal/protocol"
+	"pi-goui/internal/extensions/toolrender/cards"
 	"strings"
 	"time"
 )
@@ -70,7 +72,7 @@ func (c *CodexState) Mode(dead bool) string {
 	}
 	return ""
 }
-func (c *CodexState) Request(id int, client *rpc.Client, dead bool, level string, now time.Time) tea.Cmd {
+func (c *CodexState) Request(id int, client extension.Client, dead bool, level string, now time.Time) tea.Cmd {
 	if client == nil || dead || c.Pending {
 		return nil
 	}
@@ -109,7 +111,7 @@ func (c *CodexState) Apply(v CodexResult, dead bool, notify func(string)) {
 	}
 }
 func (c *CodexState) Event(message string, notify func(string)) bool {
-	event, handled := extensions.DecodeEvent(message)
+	event, handled := protocol.DecodeEvent(message)
 	if !handled {
 		return false
 	}
@@ -127,7 +129,7 @@ func (c *CodexState) Event(message string, notify func(string)) bool {
 			}
 		}
 	}
-	if text := extensions.Notice(event); text != "" {
+	if text := protocol.Notice(event); text != "" {
 		notify(text)
 	}
 	return true
@@ -149,7 +151,7 @@ func (v CodexView) Geometry() (Rect, Rect, bool) {
 	if y < 0 || y >= v.Height-1 {
 		return Rect{}, Rect{}, false
 	}
-	value, offset := render.SidebarModeValue(v.State.Level, v.SidebarWidth-4)
+	value, offset := render.SidebarModeValue(cards.CodexModeLabel(v.State.Level), v.SidebarWidth-4)
 	target := Rect{X: v.MainWidth + 2 + offset, Y: y, Width: ansi.StringWidth(value)}
 	width := min(24, v.SidebarWidth-4)
 	height := len(v.State.Levels) + 4
@@ -193,7 +195,7 @@ func (v CodexView) Overlay(view string, backdrop func(string, int, int) string) 
 		if level == v.State.Level {
 			prefix = "› "
 		}
-		rows = append(rows, prefix+render.CodexModeLabel(level))
+		rows = append(rows, prefix+cards.CodexModeLabel(level))
 	}
 	framed := render.SidebarDetailFrame(rows, []string{"Click to set"}, box.Width, v.Theme)
 	hover := v.PointerY - box.Y - 1

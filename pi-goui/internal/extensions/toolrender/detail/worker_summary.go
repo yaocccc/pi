@@ -2,8 +2,8 @@ package detail
 
 import (
 	"encoding/json"
-	"pi-goui/internal/config"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/session"
 )
 
 // WorkerTaskResult resolves a stable task key against the latest saved snapshot.

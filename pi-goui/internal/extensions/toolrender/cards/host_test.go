@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"pi-goui/internal/config"
-	"pi-goui/internal/extensionapi"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/extensionapi"
+	"pi-goui/internal/core/session"
 )
 
 func TestCardHostPrimitivesAreInstanceLocal(t *testing.T) {

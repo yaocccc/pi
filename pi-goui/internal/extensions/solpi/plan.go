@@ -2,14 +2,13 @@
 // context, mutates plans, or reads the extension's private configuration.
 package solpi
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"pi-goui/internal/core/extensionapi"
+)
 
 // Step is a read-only projection of SoL-Pi's current working plan.
-type Step struct {
-	ID     string `json:"id"`
-	Goal   string `json:"goal"`
-	Status string `json:"status"`
-}
+type Step = extensionapi.PlanStep
 
 const EntryType = "sol-pi-online-context-state-v1"
 const UpdatePlanTool = "update_plan"

@@ -3,7 +3,7 @@ package detail
 import (
 	"fmt"
 
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/session"
 )
 
 // webSearch uses Details from buildSearchReturn, not structuredContent (which

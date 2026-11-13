@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { DEFAULT_OPTIONS, PRESETS, THINKING_LEVELS, loadRoutingConfig, resolveRoute, validateConfig, validateTask } from "./config.ts";
+import { DEFAULT_OPTIONS, loadRoutingConfig, resolveRoute, validateConfig, validateTask } from "./config.ts";
+import { PRESETS, THINKING_LEVELS } from "./api.ts";
 import type { RoutingConfig, Thinking, WorkerTask } from "./types.ts";
 
 const settings = (thinking: Thinking = "high"): RoutingConfig => ({

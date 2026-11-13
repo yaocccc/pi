@@ -21,7 +21,7 @@ test("local package installs and exposes RPC from an unrelated user directory; v
 	for (const [name, value] of Object.entries(process.env)) {
 		if (!name.startsWith("PI_") && !name.startsWith("HERDR_") && !/API_KEY|TOKEN|SECRET|PASSWORD/.test(name)) env[name] = value;
 	}
-	Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, ".config"), PI_CODING_AGENT_DIR: agent, PI_UI_PROTOCOL: "1" });
+	Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, ".config"), PI_CODING_AGENT_DIR: agent });
 	try {
 		const installed = spawnSync(process.execPath, [cli, "install", pkg], { cwd, env, encoding: "utf8", timeout: 20_000 });
 		assert.equal(installed.status, 0, installed.stderr || installed.stdout);

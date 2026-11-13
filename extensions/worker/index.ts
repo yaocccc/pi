@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
-import { MODES, PRESETS, SESSION_MODES, agentDir, loadRoutingConfig, supportedThinking, validateTask } from "./config.ts";
+import { MODES, SESSION_MODES, agentDir, loadRoutingConfig, supportedThinking, validateTask } from "./config.ts";
 import { WORKER_USAGE_EVENT, type WorkerUsageSnapshot } from "./events.ts";
 import { registerWorkerWriteGuard } from "./guard.ts";
 import { captureWorkerSession, type WorkerSessionSnapshot } from "./session.ts";
@@ -13,7 +13,7 @@ import { saveWorkerSettings } from "./settings.ts";
 import { registerCapability } from "./capabilities.ts";
 import { WorkerTranscriptReader } from "./transcript-reader.ts";
 import { notifyFrontendEvent } from "./frontend.ts";
-import { WORKER_CAPABILITY, type WorkerCapability, type WorkerSessionView, type WorkerStateChange } from "./api.ts";
+import { PRESETS, WORKER_CAPABILITY, type WorkerCapability, type WorkerSessionView, type WorkerStateChange } from "./api.ts";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
 import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, sanitizeStructuredValue, serializePayload } from "./data.ts";
 import { WorkerRuntime, type Batch } from "./runtime.ts";
@@ -110,7 +110,8 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 		const listeners = new Set<(change: WorkerStateChange) => void>();
 		let closed = false;
 		const publish = (change: WorkerStateChange) => {
-			for (const listener of listeners) present(() => listener(change));
+			const snapshot = Object.freeze({ ...change });
+			for (const listener of listeners) present(() => listener(snapshot));
 		};
 		const runtime = new WorkerRuntime((left, right) => workerTaskScopesConflict(left.task, left.cwd, right.task, right.cwd), () => {
 			publish({ type: "changed" });
@@ -239,7 +240,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 			};
 			const emitTaskUsage = (task: WorkerUiDetails["tasks"][number]) => {
 				const snapshot: WorkerUsageSnapshot = { taskId: `${toolCallId}:${task.index}`, input: task.usage.input, output: task.usage.output };
-				present(() => pi.events.emit(WORKER_USAGE_EVENT, snapshot));
+				present(() => pi.events.emit(WORKER_USAGE_EVENT, Object.freeze(snapshot)));
 			};
 			// Admission and start are synchronous: no second invocation can slip between this
 			// check and start, including reentrant calls from configuration/UI callbacks.

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/session"
 )
 
 // updatePlan uses the recorded plan, never promotes an argument preview to a result.

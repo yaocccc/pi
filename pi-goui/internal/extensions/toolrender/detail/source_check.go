@@ -1,6 +1,6 @@
 package detail
 
-import "pi-goui/internal/session"
+import "pi-goui/internal/core/session"
 
 // sourceCheck follows the ResearchArtifact embedded in Details by the web
 // extension. It never invents a verdict from source counts or search success.

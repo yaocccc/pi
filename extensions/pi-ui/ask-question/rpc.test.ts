@@ -14,11 +14,11 @@ test('the adapter registers only presentation and leaves unrelated renderer reso
     assert.equal(resolver('ask_question', () => { throw new Error('should resolve locally'); }), nativeRenderers);
 });
 
-for (const capability of ['PI_UI_PROTOCOL', 'PI_GOUI_ASK_QUESTION', 'PI_GOUI_PROTOCOL']) {
+for (const capability of [undefined, 'PI_UI_PROTOCOL', 'PI_GOUI_ASK_QUESTION', 'PI_GOUI_PROTOCOL']) {
 test(`${capability}: structured questionnaire RPC sends all questions and returns confirmed answers`, async () => {
     const previous = { PI_UI_PROTOCOL: process.env.PI_UI_PROTOCOL, PI_GOUI_ASK_QUESTION: process.env.PI_GOUI_ASK_QUESTION, PI_GOUI_PROTOCOL: process.env.PI_GOUI_PROTOCOL };
     for (const name of Object.keys(previous)) delete process.env[name];
-    process.env[capability] = '1';
+    if (capability) process.env[capability] = '1';
     try {
         let tool: any;
         const pi = { events: new EventEmitter(), registerTool: (value: any) => { tool = value; }, registerToolRenderer() {}, on() {} };
@@ -70,7 +70,7 @@ test(`${capability}: structured questionnaire RPC sends all questions and return
 });
 }
 
-test('ordinary RPC keeps business choices distinct from the custom-input action', async (t) => {
+test('basic UI keeps business choices distinct from the custom-input action', async (t) => {
     const previous = { PI_UI_PROTOCOL: process.env.PI_UI_PROTOCOL, PI_GOUI_ASK_QUESTION: process.env.PI_GOUI_ASK_QUESTION, PI_GOUI_PROTOCOL: process.env.PI_GOUI_PROTOCOL };
     for (const name of Object.keys(previous)) delete process.env[name];
     t.after(() => {
@@ -85,7 +85,7 @@ test('ordinary RPC keeps business choices distinct from the custom-input action'
             let selectedIndex: number | undefined = 0;
             let inputResult: string | undefined = '  自定义答案  ';
             let inputCalls = 0;
-            const ctx = { mode: 'rpc', ui: {
+            const ctx = { mode: 'print', ui: {
                 select: async (title: string, choices: string[], dialog?: { signal?: AbortSignal }) => {
                     assert.equal(title, '选择');
                     assert.equal(dialog?.signal, controller.signal);

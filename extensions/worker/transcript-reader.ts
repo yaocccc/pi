@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import type { TranscriptReadRequest, TranscriptReadResult } from "./api.ts";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LIMIT = 65 << 20;
@@ -8,18 +9,6 @@ const CHUNK = 4 << 20;
 const MAX_CURSORS = 32;
 const MAX_AGE = 5 * 60_000;
 
-export interface TranscriptReadRequest {
-	descriptor: { version: 1; id: string };
-	/** Opaque, backend-owned continuation token. No paths or byte offsets. */
-	cursor?: string;
-}
-export interface TranscriptReadResult {
-	cursor: string;
-	reset: boolean;
-	records: Record<string, unknown>[];
-	more: boolean;
-	partial: boolean;
-}
 interface Position {
 	id: string; root: string; device: number; inode: number;
 	offset: number; tail: Buffer; anchor: Buffer; header: boolean; primary: boolean; touched: number;

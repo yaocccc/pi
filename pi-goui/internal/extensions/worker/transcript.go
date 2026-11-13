@@ -8,7 +8,7 @@ import (
 	"errors"
 	"regexp"
 
-	"pi-goui/internal/rpc"
+	"pi-goui/internal/core/rpc"
 )
 
 // Transcript is an opaque recording identifier, never a filesystem path.

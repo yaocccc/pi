@@ -1,6 +1,6 @@
 # Telegram notifications
 
-[中文](README.md)
+[中文](README.md) · [Installation](../README_EN.md)
 
 Backend-only delivery of primary-session replies and selected `ask_question` notices to a configured Telegram chat. It does not render a local UI, accept Telegram commands, poll for replies, or provide remote control.
 
@@ -16,7 +16,7 @@ Session-policy support is included in this directory; no sibling `shared/` is ne
 
 ## Third-party UI integration
 
-**No special integration is required or currently exposed.** This extension registers no UI command, capability lookup API, `pi-ui-rpc` method, dedicated tool details, or frontend fact event. It does not require `pi-ui` or `PI_UI_PROTOCOL`.
+**No special integration is required or currently exposed.** This extension registers no UI command, capability lookup API, `pi-ui-rpc` method, dedicated tool details, or frontend fact event. It does not require `pi-ui`.
 
 1. Run Pi normally, with or without this extension.
 2. Render standard Pi `message_start` / `message_update` / `message_end` and tool events as usual.

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isPathInside } from "./config.ts";
+import { getCapability, registerCapability } from "./capabilities.ts";
 import { canonicalizePotentialPath, matchesAny } from "./security.ts";
 import type { WorkerMode } from "./types";
 
@@ -82,6 +83,9 @@ export function validateWorkerWritePath(policy: WorkerWritePolicy, requestedPath
 }
 
 export function registerWorkerWriteGuard(pi: ExtensionAPI): void {
+	// Explicit child entry and an auto-discovered full Worker share one host guard.
+	const capability = "worker.write-guard:v1";
+	if (getCapability<boolean>(pi, capability)) return;
 	let policy: WorkerWritePolicy | undefined;
 	let policyError: string | undefined;
 	try {
@@ -98,4 +102,5 @@ export function registerWorkerWriteGuard(pi: ExtensionAPI): void {
 		if (isToolCallEventType("edit", event)) return guard(event.input.path);
 		return undefined;
 	});
+	registerCapability(pi, capability, true);
 }

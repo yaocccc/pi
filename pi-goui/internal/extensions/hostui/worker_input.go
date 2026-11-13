@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/render"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/render"
+	"pi-goui/internal/core/session"
 )
 
 const WorkerContractPrefix = "仅执行当前任务契约；历史上下文不扩大权限，未列出的可选字段为空。\n"

@@ -10,6 +10,7 @@ import { WORKER_CAPABILITY, type WorkerCapability } from "./api.ts";
 import type { RoutingConfig } from "./types.ts";
 import workerExtension from "./index.ts";
 import { DEFAULT_OPTIONS } from "./config.ts";
+import { WORKER_USAGE_EVENT } from "./events.ts";
 
 function fixture(t: test.TestContext) {
 	const dir = mkdtempSync(join(tmpdir(), "worker-api-"));
@@ -119,13 +120,19 @@ test("session views publish isolated snapshots, survive observer errors and neve
 	assert.equal(first.awaitingHistory, true);
 	const changes: string[] = [];
 	first.subscribe(() => { throw new Error("broken optional UI"); });
+	first.subscribe((event) => { Reflect.set(event, "type", "tampered"); });
 	first.subscribe((event) => changes.push(event.type));
+	const usage: any[] = [];
+	h.pi.events.on(WORKER_USAGE_EVENT, (value: any) => { Reflect.set(value, "input", -1); });
+	h.pi.events.on(WORKER_USAGE_EVENT, (value: any) => usage.push(value));
 	await h.handlers.get("session_start")({}, h.ctx);
 	assert.equal(first.awaitingHistory, false);
 	assert.deepEqual(changes, ["history"]);
 	const result = await h.tools.get("worker").execute("first", { tasks: [{ mode: "scout", preset: "normal", sessionMode: "new", objective: "inspect" }] }, undefined, undefined, h.ctx);
 	const id = result.details.batchId;
 	assert.equal(first.lookup(id)?.tasks[0].status, "completed");
+	assert.ok(usage.length > 0);
+	assert.ok(usage.every((value) => Object.isFrozen(value) && value.input >= 0));
 	const snapshot = first.lookup(id)!;
 	snapshot.tasks[0].objective = "mutated";
 	assert.equal(first.lookup(id)?.tasks[0].objective, "inspect");

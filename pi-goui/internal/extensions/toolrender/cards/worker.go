@@ -8,10 +8,10 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"pi-goui/internal/config"
+	"pi-goui/internal/core/config"
+	frames "pi-goui/internal/core/render/frame"
+	"pi-goui/internal/core/session"
 	detailview "pi-goui/internal/extensions/toolrender/detail"
-	frames "pi-goui/internal/render/frame"
-	"pi-goui/internal/session"
 )
 
 // Worker cards consume saved WorkerUiDetails, never the extension's live registry.

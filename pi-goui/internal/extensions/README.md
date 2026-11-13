@@ -1,38 +1,62 @@
-# 可选第三方扩展 UI 适配
+# 可选扩展接入指南
 
 [English](README_EN.md)
 
-Pi Go UI 是可独立运行的 Pi RPC 前端。本仓库的扩展与其他用户安装的扩展一样，**不是 Go 前端的核心依赖**。
+此目录只适配第三方能力的协议、状态和展示，不执行后端业务。使用说明见[项目 README](../../README.md)，通用修改约束见 [AGENTS](../../AGENTS.md)。
 
-## 代码归属
+## core 定义契约，extensions 实现并导出
 
-| 位置 | 职责 |
+权威接口在 [core/extension/contracts.go](../core/extension/contracts.go)，低层投影/绘制接口在 [core/extensionapi/](../core/extensionapi/)。入口为：
+
+```go
+type Extension interface {
+    Capabilities() Capabilities
+}
+```
+
+模块只声明实际支持的能力，nil 表示缺省。先确认后端协议，再实现所需接口，并加入 [extensions.New()](extensions.go) 返回的 `[]extension.Extension`；已有实现见 [hostui.Adapter](hostui/adapter.go)、[projectionAdapter](projection.go) 和 [toolrender.Adapter](toolrender/adapter.go)。支持现有能力无需在 core 增加模块专用分支；新增通用能力先扩充 core 契约。
+
+| 能力入口 | 职责 |
 | --- | --- |
-| `internal/rpc/` | 标准 Pi 传输，以及按能力发现启用的通用扩展 RPC 信封；不认识 Worker/Codex 操作 |
-| `internal/extensions/` | 第三方协议识别、通知文案；未知请求保留标准 Pi 行为 |
-| `askquestion/` | 问卷传输类型；不做权威答案校验 |
-| `codexfast/` | `codex-fast.get/set` RPC 客户端；不读写配置或迁移旧格式 |
-| `worker/` | 设置传输类型、记录 RPC 与只读回放；不读取扩展私有日志 |
-| `solpi/` | 只读计划投影；不压缩上下文或修改计划 |
-| `toolrender/cards/` | Worker/问卷紧凑卡片、任务活动与 Codex 档位标签 |
-| `toolrender/detail/` | Worker/问卷/SoL-Pi/Web 工具完整详情，保留未知字段 |
-| `internal/extensionapi/render.go` | 中立绘制类型和宿主回调，不含第三方行为 |
-| `internal/render/extensions.go`、`internal/render/tooldetail/extensions.go` | 仅绑定宿主回调、类型别名与薄路由 |
-| `hostui/` | 通过中立宿主回调实现第三方控件、表单和查看器 |
-| `internal/session/extension_plan.go` | 将可选计划数据接入通用侧栏状态 |
+| `NewSession` | 同步、异步更新、侧栏、滚动、轮询、事件及 `ControlView` 控件 |
+| `OpenDialog` | `DialogHandler` 管理输入、确认、取消；经 `DialogHost` 回调宿主 |
+| `NewInspector` / `NewInspectorContent` | `Inspector` 管理详情、交互、子页与内容版本 |
+| `NewUsage` | 观察权威记录，返回不重复计数的输入/输出用量 |
+| `NewProjection` / `Tools` | 会话投影与可选卡片/完整详情 Provider |
 
-工具渲染实现在 `toolrender/`，不再仅以宿主包中的文件名前缀区分。适配器接收通用换行、净化、边框和完整字段展示回调，不导入宿主 `render` 或 `ui` 实现。共享 JSON 解码位于 `render/tooldata`，不包含扩展规则；未知工具仍使用宿主通用结果视图。宿主集成测试保留在 `render`，适配器本地测试覆盖回调隔离与协议投影。
+[core/ui/extensions.go](../core/ui/extensions.go) 是核心唯一实现导入点，只以 `extension.New(extensions.New())` 组装 Runtime。其他核心使用方只消费中立接口，不暴露整个 Model、具体类型别名或可变全局 registry。
 
-## 可选 RPC 桥
+## 依赖与实现归属
 
-`extensions/pi-ui` 在 Pi 后端提供 `/pi-ui-rpc`。Go 先调用 `get_commands`，确认该名称属于 **extension** 命令。缺少桥时返回 `ErrExtensionUnavailable`，不发送可能触发模型的未知斜杠提示词。
+- [hostui/](hostui/) 管理第三方表单、控件、查看器及私有交互状态，不导入 `core/ui`。
+- [toolrender/cards/](toolrender/cards/) 与 [toolrender/detail/](toolrender/detail/) 管理专项卡片/完整详情；叶子包仅经中立回调复用绘制，不导入父 renderer/UI。只有 [toolrender/views.go](toolrender/views.go) 装配通用 render Provider；未识别工具交回通用兜底。
+- [sessionview/](sessionview/)、[solpi/](solpi/) 和 [web/](web/) 管理实时/历史投影、指标及隐藏策略；[internal/protocol/](internal/protocol/) 管理私有 wire 识别。子包不得反向导入根装配包。
+- [askquestion/](askquestion/)、[codexfast/](codexfast/) 和 [worker/](worker/) 保存必要传输类型、客户端与只读回放。权威校验、权限、调度、持久化、迁移及私有存储留在后端，不通过共享文件连接 Go 与 TypeScript。
 
-各适配器注册方法并委托能力服务；目前使用 `codex-fast.get`、`codex-fast.set` 和 `worker.transcript`。响应按请求 ID 关联；错误、取消和进程结束会清理本地等待者。客户端取消不会撤销后端已提交的操作。
+## 组合与生命周期
 
-没有桥或相应能力时，不显示 Codex 档位控件；Worker 查看器回退到已有任务结果，不尝试读取本地扩展文件。Go 与 TypeScript 只通过 Pi RPC 进程通信，不直接导入扩展、不通过共享文件交互，也不假定仓库位置。
+- 按 slice 顺序选择首个工具、弹窗、查看器、控件或事件处理者；观察、会话同步与 polling 广播。usage 求和，各提供者不得重复贡献同一记录。
+- 复合投影的计划取首个非空，隐藏策略取或，指标取首个可用值。历史成功验证后才提交快照；快照拒绝跨实例使用。Worker 回放在初始化/重置时建立独立投影。
+- 每个 Model 一个 Runtime，每个标签、弹窗和工作轮次经工厂创建独立可变状态；ToolViews 是实例级不可变组合，嵌套查看器与降级视图继承同一 Provider。
+- 私有状态改变详情行时，`Inspector.Version()` 必须变化；缓存区分 Provider 身份与版本。异步结果保留原后端、页面及 revision 归属。
+- `Sessions.Control(ctx)` 返回绑定拥有者的控件；点击后的请求只发给该拥有者，不因布局/可见性变化重新匹配。`Sessions.Poll` 才广播。
+- 空 slice、缺能力、未知载荷或格式错误不能破坏普通 Pi、codemode 与通用回退。看似协议的用户文本不能被当作命令。
 
-## 仍属于前端的能力
+## RPC 与降级
 
-会话浏览、剪贴板/编辑器、图片预览、Git 展示、额度展示、更新通知和前端偏好等通用 UI 辅助能力仍在前端，不依赖这些第三方扩展。这不等于声称整个应用完全没有本地 I/O。
+通用 [Client.CallExtension](../core/rpc/extensions.go) 先经 `get_commands` 确认 `name:"pi-ui-rpc", source:"extension"`，再发送 `/pi-ui-rpc {"id":…,"method":…,"params":…}`。响应是前缀 `pi-ui:rpc:v1:` 的 notify，载荷为 `{id,result}` 或 `{id,error:{code,message}}`，不是外层 prompt 确认。
 
-新增适配时，将协议/客户端/只读投影放在此处，权威校验和持久化留在后端，并覆盖扩展缺失及通用回退测试。Go 不会直接加载第三方 TypeScript 包。
+缺桥返回 `ErrExtensionUnavailable`，不能发送可能触发模型的未知斜杠提示词。按请求 ID 关联回复；错误、取消、超时和进程退出清理等待者并忽略迟到响应。本地取消只停止等待，不回滚后端已提交的操作。
+
+| 适配 | 必须保持的边界 |
+| --- | --- |
+| 问卷 | 标准 `extension_ui_request/response` 按对话 ID 归属；取消为 `cancelled:true`，不伪造答案或默认同意。答案权威校验由后端完成。 |
+| Codex 档位 | 仅 `codex-fast.get/set`；采用后端返回的 `level/levels`，后端确认后再更新。缺桥/能力隐藏控件，不读配置、不从模型名推断档位。 |
+| Worker | 仅 `worker.transcript`，参数为 `descriptor:{version,id}` 和可选不透明 `cursor`；消费记录及 `reset/more/partial`。路径、文件身份、偏移、限制和游标有效期均由后端验证。 |
+| Worker 展示 | 使用稳定 `phaseCode`，不解析翻译文案；回放只重建展示，不执行任务。不将 Activity 当作完整历史，缺失 end 不代表成功；缺记录回退已有结果，部分记录保留并标记不完整。 |
+
+没有公开的 `worker.start`、`worker.cancel` 或远程设置方法；`worker` 是 Agent 工具，`/worker_settings` 是对话命令。不要虚构 RPC 或读取本地私有日志兜底。
+
+历史 `pi-goui:*:v1` 标题及 `pi-goui:event:v1:` 前缀是兼容 wire 标识，不要求客户端是 Go。后端 RPC 模式默认使用结构化 UI，无需协议环境变量，不应重命名这些标识。
+
+新增适配必须覆盖正常路径、实例隔离、桥/能力缺失、未知协议、取消和迟到响应；专项测试放在实现旁，核心保留真正的宿主集成。验证命令统一见 [AGENTS](../../AGENTS.md#验证)。

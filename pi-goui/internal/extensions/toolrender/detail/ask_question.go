@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/session"
 )
 
 func (v *Renderer) AskQuestion(item session.Item, args, details map[string]any) {

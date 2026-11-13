@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/session"
 )
 
 // Presentation only: neither replay state nor the immutable visible snapshot is

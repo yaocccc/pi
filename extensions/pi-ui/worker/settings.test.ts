@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { DEFAULT_OPTIONS, supportedThinking } from "../../worker/config.ts";
 import { configureWorkerSettings as configureSettings } from "./settings.ts";
-import { parseSettings, saveWorkerSettings, SettingsError } from "../../worker/settings.ts";
+import { saveWorkerSettings } from "../../worker/settings.ts";
+import { parseSettings, SettingsError } from "../../worker/api.ts";
 
 const configureWorkerSettings = (ctx: any, current: any, path: string) => configureSettings(ctx, {
 	getSettings: () => current,
@@ -15,17 +16,16 @@ const configureWorkerSettings = (ctx: any, current: any, path: string) => config
 
 const settings = () => ({ ...DEFAULT_OPTIONS, fast: { model: "test/model", thinking: "off" as const }, normal: { model: "test/model", thinking: "off" as const }, deep: { model: "test/model", thinking: "off" as const } });
 const registry = { getAvailable: () => [{ provider: "test", id: "model", reasoning: false }] };
-const setup = (t: any, protocol = "PI_GOUI_PROTOCOL") => {
+const setup = (t: any) => {
 	const dir = mkdtempSync(join(tmpdir(), "worker-settings-ui-"));
 	const previous = { PI_UI_PROTOCOL: process.env.PI_UI_PROTOCOL, PI_GOUI_PROTOCOL: process.env.PI_GOUI_PROTOCOL };
 	for (const name of Object.keys(previous)) delete process.env[name];
-	process.env[protocol] = "1";
 	t.after(() => { for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } rmSync(dir, { recursive: true, force: true }); });
 	return { dir, path: join(dir, "settings.json") };
 };
 
-for (const protocol of ["PI_UI_PROTOCOL", "PI_GOUI_PROTOCOL"]) test(`${protocol} settings sends data only; cancellation never writes`, async (t) => {
-	const fixture = setup(t, protocol);
+test("RPC settings sends data without protocol flags; cancellation never writes", async (t) => {
+	const fixture = setup(t);
 	const current = settings();
 	let requests = 0;
 	const ctx = { mode: "rpc", hasUI: true, modelRegistry: registry, ui: {
@@ -117,7 +117,7 @@ test("save errors return structured error and keep draft available until cancell
 	await configureWorkerSettings(ctx as any, current, fixture.dir);
 });
 
-test("native mode retains native menu despite Go environment", async (t) => {
+test("native mode retains native menu without protocol flags", async (t) => {
 	const fixture = setup(t);
 	let menus = 0;
 	const ctx = { mode: "tui", hasUI: true, modelRegistry: registry, ui: {

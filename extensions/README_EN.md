@@ -1,101 +1,78 @@
-# Optional Pi capabilities and UI adapters
+# Optional Pi Extensions
 
-[中文](README.md)
+[中文](README.md) · [Repository](../README_EN.md)
 
-Install these extensions into your own Pi environment from any checkout directory. Neither replacing `~/.pi/agent` nor using the Go frontend is required. Extensions have local machine access: review them first. **Do not copy the repository's root settings, models, auth, or other personal configuration.**
+Capabilities own execution, authoritative validation, state, and persistence. Optional `pi-ui` owns native presentation, interaction, and the RPC bridge. Capabilities load without a UI; unsupported interaction is unavailable, never consent. See [pi-ui](pi-ui/README_EN.md) for development boundaries.
 
-## Installation
+## Install the whole package
 
-Requirements: Node.js **22.19+**, npm, and a Pi **1.5.x** host supporting the current extension API. The development lockfile does not upgrade your global host; older hosts may lack independent tool renderer registration.
+Use your existing Pi installation and your own models/credentials. The current installation and TypeScript test baseline is **Node 22.19+ / Pi SDK 1.5.2**; this does not certify every historical suite against that version.
 
-From your checkout:
-
-```bash
-npm ci --ignore-scripts --prefix ./extensions
-pi install /absolute/path/to/checkout/extensions
+```sh
+SRC=/path/to/repository/extensions
+npm ci --prefix "$SRC"
+pi install "$SRC"
 ```
 
-Replace the example path with your actual checkout. The second command registers a local package in Pi settings; it does not replace your agent directory. Keep the checkout available. Back up your settings first if desired. No npm publication or install hooks are needed. If the source already lives under Pi's auto-discovered agent/extensions directory, **do not register the same extensions again**.
+[package.json](package.json) declares entries in `pi.extensions`. Installation registers the local package without copying the author's settings, upgrading global Pi, or installing other packages from the root settings. Authenticate with `/login` in native Pi first; configure all three Worker model presets yourself.
 
-For a temporary trial without registering the package:
+If Pi already discovers the code in the agent's `extensions/`, do not also `pi install` or load it explicitly. Pi discovers top-level .ts files and directories containing index.ts; internal entries, maintenance helpers, and tests are not additional extensions.
 
-```bash
-pi -e /absolute/path/to/checkout/extensions/ask-question/index.ts \
-   -e /absolute/path/to/checkout/extensions/pi-ui/index.ts
-```
-
-Configure your own models and credentials in Pi (for example, `/login` in native Pi). Never reuse the author's credentials or personal model identifiers.
-
-The manifest enables all entries below and includes the Worker orchestration Skill. To select resources, merge a filtered package entry into your own Pi settings:
+To select capabilities, list entries in your own Pi settings instead of registering the whole package:
 
 ```json
 {
-  "packages": [{
-    "source": "/absolute/path/to/checkout/extensions",
-    "extensions": ["ask-question/index.ts", "pi-ui/index.ts"],
-    "skills": []
-  }]
+  "extensions": [
+    "/path/to/repository/extensions/ask-question/index.ts",
+    "/path/to/repository/extensions/worker/index.ts",
+    "/path/to/repository/extensions/pi-ui/index.ts"
+  ]
 }
 ```
 
-Do not replace your entire settings file. `pi config` can also select resources. Alternatively, copy just a capability directory and its `pi-ui/<module>/` directory into `<target>/<module>/` and `<target>/ui/<module>/`. No `shared/` or full source tree is needed. Keep all files within both directories, not just `index.ts`. Each module README includes executable copy commands and optional manual native-UI registration.
+The whole-package UI degrades safely when other capabilities are absent. Test selected entries with `pi --no-extensions -e /path/to/capability/index.ts -e /path/to/ui/index.ts`.
 
-## Copy-only module installation
+## Copy one module
 
-For `ask-question`, `worker`, `codex-fast`, `sol-pi`, `autoname` or `filter-output`, copy `extensions/<module>/` and `extensions/pi-ui/<module>/` into `<target>/<module>/` and `<target>/ui/<module>/`. Load both `index.ts` entries, or load the capability and explicitly call the UI's default export from your own extension factory. The full-package `pi-ui/index.ts` is not required and must not be loaded again.
+ask-question, worker, codex-fast, sol-pi, autoname, and filter-output support directory-pair distribution:
 
-Pi 1.5.2 supplies SDK/TUI/TypeBox dependencies for these modules. No repository `node_modules`, `shared/`, generation step or author configuration is needed. Worker routes and other capability settings still require your own values. Telegram has no UI module and separately needs its external npm dependency. Use the individual guides below for complete commands.
+```text
+extensions/<module>/         → <target>/<module>/
+extensions/pi-ui/<module>/   → <target>/ui/<module>/
+```
 
-Maintainers only: `npm run sync:portable --prefix extensions` updates checked-in thin helper copies; `node extensions/scripts/sync-portable.mjs --check` detects drift. Business logic stays in its capability; event types and display text stay in their owning module. Copy consumers never run these scripts.
+Copy both **complete directories**, preserve the layout, and load the capability/UI index.ts entries—or call `registerUI(pi)` from your own entry, without double registration. Helpers ship with each module; no shared directory, node_modules, build, or generation step is required. Pi supplies SDK dependencies. Each capability README is the pair's sole integration guide, with exact copy commands, registration, and RPC examples.
 
-## Features and prerequisites
+Telegram is not one of these six pairs and needs an external dependency; follow its guide. Third-party frontends may omit native presentation, but the current structured RPC interactions still require a bridge adapter. Removing all UI code does not automatically provide those protocols.
 
-| Entry | Responsibility and prerequisites |
-| --- | --- |
-| [ask-question](ask-question/README_EN.md) | Questionnaire queue, cancellation, answer validation; requires pi-ui or another interaction port, otherwise returns unavailable and unanswered questions |
-| [worker](worker/README_EN.md) | Independent tasks; configure your own three model/Thinking presets; path checks are not a sandbox |
-| [codex-fast](codex-fast/README_EN.md) | Codex request tiers; defaults to normal and only applies to supported providers |
-| [pi-ui](pi-ui/README_EN.md) | Optional native UI and RPC compatibility bridge; owns settings commands, not execution |
-| [sol-pi](sol-pi/README_EN.md) | Large-result archival and online compaction; see its model and economic settings |
-| autoname | Automatic naming; configurable/disableable through autoname.json in the agent directory; may call a model |
-| filter-output | Common sensitive-text filtering, not a comprehensive security or redaction guarantee |
-| telegram | Optional messaging, enabled by PI_TG_TOKEN and PI_TG_CHAT |
+## Third-party UI: use the per-extension README
 
-Enabled by default does not mean configuration-free. Configure your own `worker-settings.json`, rather than copying the author's file. Configuration and archives belong to the **current user's Pi agent directory** (default `~/.pi/agent`, overridden by `PI_CODING_AGENT_DIR`). Source installation does not transfer models, credentials, or saved settings between users.
+| Module | Purpose and entry | Guide |
+| --- | --- | --- |
+| ask-question | Agent tool `ask_question`; queueing, cancellation, answer validation | [Questionnaires](ask-question/README_EN.md) |
+| worker | Agent tool `worker`; UI command `/worker_settings` | [Scheduling, settings, read-only recordings](worker/README_EN.md) |
+| codex-fast | UI command `/codex-fast`; backend tier policy and persistence | [Fast / Ultrafast](codex-fast/README_EN.md) |
+| sol-pi | `obs_recall`, `update_plan`; archives and online compaction | [Configuration, protocol, compatibility](sol-pi/README_EN.md) |
+| autoname | Automatic primary-session names; may make extra model requests | [Naming policy](autoname/README_EN.md) |
+| filter-output | Heuristic sensitive-data filtering of successful tool results | [Scope and limitations](filter-output/README_EN.md) |
+| telegram | Environment-configured outbound notifications, no remote control | [Dependency and data disclosure](telegram/README_EN.md) |
+| pi-ui | Optional host adapter for these capabilities; does not replace execution | [Boundaries, discovery, and RPC](pi-ui/README_EN.md) |
 
-See [frontend boundaries](shared/FRONTENDS_EN.md). The Go frontend treats these capabilities as optional third-party extensions; it does not own their persistence or business rules. The package also works without Go.
+Each capability guide owns its usage, configuration, and wire examples; no reverse-engineering of Go is needed. Disable specialized controls without the capability/bridge, fall back to generic rendering for unknown payloads, and never invent remote methods or read extension-private files directly.
 
-## Third-party UI integration, one README at a time
+## Update, uninstall, and maintain
 
-Each guide below includes its own startup/discovery sequence, wire examples, lifecycle/error handling and absent-extension fallback. Shared design notes are optional background, not required to implement the minimal UI. In-process capability methods are explicitly distinguished from cross-process Pi RPC.
+- After updating local source, rerun `npm ci --prefix "$SRC"`. Use `/reload` in native Pi or restart the Go/RPC backend; Go's `/reload` only rereads frontend preferences.
+- Unregister the whole package with `pi remove "$SRC"`; for explicit/copy installations, remove the relevant settings and UI registration. Configuration, recordings, and archives require separate cleanup as documented by each module.
+- [shared/](shared/) and [pi-ui/shared/](pi-ui/shared/) contain maintenance templates, type aggregation, and compatibility helpers, not standalone entries. After changing portable helpers, run `npm --prefix extensions run sync:portable` and inspect the diff; consumers do not run it.
+- Maintain bilingual READMEs only for this overview, capabilities, and pi-ui—not duplicate guides in shared or UI subdirectories. Skills and role prompts are runtime resources, not disposable duplicate documentation.
 
-| Extension | English | 中文 | UI surface |
-| --- | --- | --- | --- |
-| ask-question | [Guide](ask-question/README_EN.md) | [指南](ask-question/README.md) | Standard dialogs or a complete structured questionnaire |
-| worker | [Guide](worker/README_EN.md) | [指南](worker/README.md) | Tool details, settings dialogs, optional transcript RPC |
-| codex-fast | [Guide](codex-fast/README_EN.md) | [指南](codex-fast/README.md) | State/get/set RPC or a settings dialog |
-| sol-pi | [Guide](sol-pi/README_EN.md) | [指南](sol-pi/README.md) | Read-only plan/progress/archive presentation |
-| autoname | [Guide](autoname/README_EN.md) | [指南](autoname/README.md) | Rename facts and standard session metadata |
-| filter-output | [Guide](filter-output/README_EN.md) | [指南](filter-output/README.md) | Redaction facts and standard tool output |
-| telegram | [Guide](telegram/README_EN.md) | [指南](telegram/README.md) | No dedicated UI API; delivery is backend-only |
-| pi-ui | [Guide](pi-ui/README_EN.md) | [指南](pi-ui/README.md) | Optional dialog/fact/RPC transport adapter |
+Verify from the repository root:
 
-Use `PI_UI_PROTOCOL=1` to request structured interaction from any RPC frontend. Legacy Go flags and wire names remain compatible. It does not enable undocumented methods or bypass capability validation.
-
-## Updating and removing
-
-After updating your checkout, repeat `npm ci --ignore-scripts --prefix ./extensions`. Native Pi supports `/reload`; restart the Pi backend used by Go. Never load both a top-level entry and its internal entries.
-
-`pi remove /absolute/path/to/checkout/extensions` removes package registration, not user settings, sessions, or archives. For temporary loading, stop supplying `-e`. Auto-discovered entries must be moved out of their discovery directory separately.
-
-## Validation and limitations
-
-```bash
-npm --prefix extensions run test:package
+```sh
+npm ci --prefix extensions
 npm --prefix extensions run typecheck
 npm --prefix extensions test
 ```
 
-The test script runs TypeScript tests from the repository root using temporary HOME / agent directories and cleared frontend markers, without real user credentials. It **excludes** SoL-Pi's .mjs suite. Testing does not require installing the checkout into your personal agent directory.
-
-SoL-Pi's historical isolated runner requires Pi **1.0.4**. Its full suite has reproduced baseline failures on the current 1.5.x host; successful TypeScript tests do not imply a green full repository suite. See [SoL-Pi offline validation](sol-pi/README_EN.md#offline-validation). Manual terminal interaction, other platforms, and other host versions require separate validation.
+Tests cover documentation JSON/real schemas, copy layouts, helper synchronization, capability boundaries, and RPC. The historical SoL-Pi .mjs suite is **not included** in npm test; see its [version limits](sol-pi/README_EN.md#compatibility-and-validation). These checks do not replace real-terminal, cross-platform, or model end-to-end verification.

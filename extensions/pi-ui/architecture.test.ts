@@ -21,3 +21,15 @@ test("capability sources do not depend on host UI implementations or frontend id
 		assert.doesNotMatch(source, /\b(?:renderCall|renderResult|renderShell|registerToolRenderer|registerMessageRenderer|isGoUI|supportsStructuredUI|PI_GOUI_PROTOCOL|PI_UI_PROTOCOL)\b/, path.pathname);
 	}
 });
+
+test("Worker settings UI consumes contracts rather than backend persistence modules", async () => {
+	for (const path of await sources(new URL("./worker/", import.meta.url))) {
+		const source = await readFile(path, "utf8");
+		assert.doesNotMatch(source, /from\s+["\x27][^"\x27]*worker\/(?:config|settings|runtime|process|session|transcript-reader|transcript-retention)\.ts["\x27]/, path.pathname);
+	}
+});
+
+test("Worker public contract owns its DTOs without importing storage implementations", async () => {
+	const source = await readFile(new URL("../worker/api.ts", import.meta.url), "utf8");
+	assert.doesNotMatch(source, /from\s+["\x27](?:node:|\.\/(?:config|settings|runtime|process|session|transcript-reader|transcript-retention)\.ts)/);
+});

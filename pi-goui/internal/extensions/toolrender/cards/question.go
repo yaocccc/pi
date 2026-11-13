@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"pi-goui/internal/config"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/session"
 )
 
 func questionStrings(value any) []string {

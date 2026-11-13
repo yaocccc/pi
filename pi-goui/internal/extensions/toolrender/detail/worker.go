@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/config"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/session"
 )
 
 // WorkerTask is a display-only, isolated task snapshot. Key is scoped to its

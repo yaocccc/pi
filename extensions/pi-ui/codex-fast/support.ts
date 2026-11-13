@@ -3,9 +3,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getCapability, registerCapability } from "../../codex-fast/capabilities.ts";
 
-/** Any RPC UI may opt in; legacy Go flags and wire names remain compatible. */
+/** RPC uses structured UI by default; historical wire names remain compatible. */
 export const supportsStructuredUI = (ctx: ExtensionContext): boolean =>
-	ctx.mode === "rpc" && (process.env.PI_UI_PROTOCOL === "1" || process.env.PI_GOUI_PROTOCOL === "1");
+	ctx.mode === "rpc";
 
 export function emitStructuredEvent(ctx: ExtensionContext, name: string, data: Record<string, unknown>): void {
 	if (ctx.hasUI && supportsStructuredUI(ctx)) ctx.ui.notify(`pi-goui:event:v1:${JSON.stringify({ name, data })}`, "info");

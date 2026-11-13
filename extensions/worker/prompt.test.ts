@@ -62,6 +62,17 @@ test("always-loaded tool metadata and worker system prompt stay within compact b
 	}
 });
 
+test("role resources do not depend on the current agent installation directory", (t) => {
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = fileURLToPath(new URL("./fixtures/nonexistent-agent-dir/", import.meta.url));
+	t.after(() => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+	});
+	const role = fs.readFileSync(new URL("./agents/fix.md", import.meta.url), "utf8").trim();
+	assert.ok(workerPromptBody("fix").includes(role));
+});
+
 test("dispatch instructions preserve session, authority and routing guidance within budget", () => {
 	assert.match(TOOL_DESCRIPTION, /Choose each task's sessionMode yourself/);
 	assert.match(TOOL_DESCRIPTION, /prefer fork; use new only when little context handoff is needed/);

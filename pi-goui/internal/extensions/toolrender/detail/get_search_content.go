@@ -1,6 +1,6 @@
 package detail
 
-import "pi-goui/internal/session"
+import "pi-goui/internal/core/session"
 
 // getSearchContent displays stored-result paging/find metadata. Offset zero,
 // nextOffset null and unknown future fields must not disappear.

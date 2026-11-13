@@ -1,6 +1,6 @@
+import { parseSettings, SettingsError, type SettingsErrorData } from "../../worker/api.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { WorkerCapability } from "../../worker/api.ts";
-import { parseSettings, SettingsError, type SettingsErrorData } from "../../worker/settings.ts";
 import type { RoutingConfig } from "../../worker/types.ts";
 import { supportsStructuredUI } from "./support.ts";
 import { configureWorkerSettings as configureNative } from "./settings-ui.ts";

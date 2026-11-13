@@ -14,12 +14,6 @@ cp -R "$SRC/ask-question/." "$DEST/ask-question/"
 cp -R "$SRC/pi-ui/ask-question/." "$DEST/ui/ask-question/"
 ~~~
 
-~~~text
-my-extensions/
-├── ask-question/index.ts        # capability, including all its local files
-└── ui/ask-question/index.ts     # optional UI, including all its local files
-~~~
-
 **Native Pi, explicit entry points:**
 
 ~~~sh
@@ -38,74 +32,46 @@ export default function (pi: ExtensionAPI) {
 
 Load the capability and `my-ui.ts` instead of the UI entry above; do not load both registration paths or the whole-package adapter too. With automatic capability discovery, only add the UI registration. Without this UI, the capability still owns execution/validation; unsupported interactions must remain unavailable, never implicit consent.
 
-For RPC, add `PI_UI_PROTOCOL=1` and `--mode rpc` to the explicit-entry command; the detailed wire contract follows below. Worker/Codex UI modules include their own optional method bridge and coordinate to register it once when combined. Other modules do not invent additional methods.
+For RPC, add `--mode rpc` to the explicit-entry command. See the wire examples below and the [shared RPC contract](../pi-ui/README_EN.md).
 
-Pi 1.5.2 supplies the SDK, `pi-tui` and `typebox`; you do not need this repository's `node_modules` for these two directories. Use your own authentication, models and capability settings; copying source is not configuration. Keep directory names/layout as shown, or adjust imports yourself. Maintainers sync bundled helpers; consumers **do not** run generation scripts.
+Pi 1.5.2 supplies the SDK, `pi-tui` and `typebox`; you do not need this repository's `node_modules` for these two directories. Use your own authentication, models and capability settings; copying source is not configuration. Keep directory names/layout as shown, or adjust imports yourself.
 
-`index.ts` registers the `ask_question` tool and its session-owned capability. It
-contains no native renderer, dialog implementation or frontend-specific routing.
-`model.ts` and `schema.ts` describe the inputs/results; `validation.ts` validates
-answers from **every** frontend. `interaction.ts` owns FIFO ordering, pending
-counts, cancellation and session shutdown.
+Load `ask-question/index.ts` for the `ask_question` tool and the matching UI entry shown above (or your own interaction port). No separate configuration file is required.
 
-## Public methods and information
+The capability owns normalization, FIFO ordering, pending counts, cancellation, session shutdown and authoritative validation for every frontend. Without a compatible adapter, the tool returns unanswered details with `unavailable: true`, not cancellation or consent.
 
-Use `getCapability<AskQuestionService>(pi, ASK_QUESTION_SERVICE)` from
-`./capabilities.ts`; the constants/interfaces are in `api.ts`.
+## Tool usage
 
-- `ask({ questions, review, context, signal })` returns a validated submission.
-  `undefined` means no compatible adapter is available. `{ cancelled: true,
-  answers: [] }` means the user cancelled; unfinished drafts never count as consent.
-- `pending()` includes the active request and all queued requests.
-- `pi.events` emits `ask-question:pending` with `{ pending: number }`. It never
-  broadcasts answers. Request lifetime is not extended by pending time.
+Call `ask_question` with `question` + `options` for one question, or `questions` for 1–8 questions. Each question has 1–8 options, optional `multiSelect` (default false), and an optional short `label` inside `questions`. Custom input is added by the UI.
 
-The tool returns unanswered details with `unavailable: true` when no adapter is
-installed; it does not claim that the user cancelled. Capabilities are discovered
-on each call through the session's event bus, not shared module state.
+~~~json
+{"questions":[{"question":"Choose a target","options":["A","B"],"label":"Target","multiSelect":false}]}
+~~~
 
-## Frontend adapter port
+## Interface
 
-Register a `QuestionInteractionPort` under `ASK_QUESTION_INTERACTION` using
-`registerCapability`. `supports(context)` declares availability. `ask(request)`
-receives a defensive copy of the normalized questions and a cancellation signal.
-It must return `{ cancelled, answers }`; completed answers require `completed:
-true`, selected strings and, for custom input, explicit `customAnswers` provenance.
-The capability independently checks cardinality, option membership and provenance.
+Discover `ask-question:v1` with `getCapability(pi, ASK_QUESTION_SERVICE)` from `./capabilities.ts`; interfaces are in `api.ts`.
 
-The adapter must close its own surface on abort. A faulty adapter that never
-settles cannot hold the capability's pending state or shutdown open. The port is
-an **in-process** integration contract; remote clients need an RPC/web bridge.
+- `ask({ questions, review, context, signal })` returns validated answers; undefined means unavailable, cancellation returns `{cancelled:true, answers:[]}`.
+- `pending()` includes active and queued requests.
+- `ask-question:pending` publishes counts, never answers; waiting does not extend task deadlines.
+- Register `ask-question.interaction:v1` with `supports(context)` and `ask(request)`; it receives a defensive copy of normalized questions and a cancellation signal.
+- Submissions must specify completion, selected answers and custom-input provenance; the capability revalidates rather than trusting the UI.
 
-`../pi-ui/ask-question/index.ts` exports `registerAskQuestionUI(pi)`. It supplies
-the optional native Pi renderer/dialogs and existing Go/generic RPC compatibility
-transport. UI code depends on the capability, never the reverse. Another frontend
-can implement the same port without loading `pi-ui`.
-
-Tests:
-
-```sh
-node --experimental-transform-types --test extensions/ask-question/*.test.ts
-env -u PI_UI_PROTOCOL -u PI_GOUI_PROTOCOL -u PI_GOUI_ASK_QUESTION node --experimental-transform-types --test extensions/pi-ui/ask-question/*.test.ts
-```
+Adapters close their own surface on abort. A broken adapter cannot indefinitely hold pending state or shutdown open. Drafts are not consent. Native and RPC transports live in pi-ui; retain all files in both copied directories.
 
 ## Third-party UI quick start (self-contained)
 
 ### Start and discover
-~~~sh
-PI_UI_PROTOCOL=1 pi --mode rpc --no-extensions \
-  -e /path/to/my-extensions/ask-question/index.ts \
-  -e /path/to/my-extensions/ui/ask-question/index.ts
-~~~
-Use your own Pi credentials/settings. Keep all files inside the two copied directories; do not copy just index.ts. Node 22.19+ and the currently tested Pi 1.5.2 host are the baseline. PI_UI_PROTOCOL=1 opts into structured extension UI; the historical PI_GOUI_PROTOCOL=1 alias and pi-goui:* wire names remain compatible. No Go frontend is required. On older adapters that do not yet recognize PI_UI_PROTOCOL, replace that environment assignment with PI_GOUI_PROTOCOL=1; the wire payloads below are identical.
+Requires Node 22.19+ and Pi 1.5.2. RPC exports structured messages by default without protocol environment variables; `pi-goui:*` names do not require Go. Implement the questionnaire protocol below; standard-dialog-only clients need updating.
 
 This is a **tool-triggered interaction**, not an /ask_question command. You can send get_commands to discover adapter commands, but it does not list tools and must not be used to infer ask_question availability. When the tool actually runs, handle its standard extension_ui_request messages; otherwise keep the normal tool-result fallback. There is no remote ask-question.ask RPC method.
 
-### Route A: ordinary Pi dialogs
-For the least integration work, omit PI_UI_PROTOCOL, PI_GOUI_PROTOCOL and PI_GOUI_ASK_QUESTION. Implement standard select/input/notify dialogs. Return the selected **exact option string** via {"type":"extension_ui_response","id":"…","value":"…"}; input returns text, cancellation uses cancelled:true. Multi-select is an adapter-owned series of select/input requests, not a single select containing an array. Treat labels as opaque; do not parse Chinese labels into actions yourself. One question's completion may open the next request with a new id.
+### RPC protocol requirement
+RPC no longer offers an environment-selected standard select/input questionnaire fallback. Implement the structured questionnaire protocol below and submit all answers together; do not display the protocol JSON as an ordinary input prompt.
 
-### Route B: one structured questionnaire
-With the structured marker above, receive:
+### One structured questionnaire
+RPC receives by default:
 ~~~json
 {
   "type": "extension_ui_request",
@@ -196,4 +162,4 @@ const service = getCapability<AskQuestionService>(pi, ASK_QUESTION_SERVICE);
 
 myFrontend is your own UI implementation, not a Pi API. showForm must return the same submission shape above and close its surface when signal aborts. The service exposes ask({questions,review,context,signal}) and pending(); ask returns undefined if no compatible port exists. Subscribe via pi.events.on("ask-question:pending", ({pending}) => …); this is a process-local count, not a broadcast of answers and not automatically exported over RPC.
 
-**Minimal implementation order:** standard dialogs → structured form → authoritative tool-result rendering → abort/session cleanup. The pi-goui:ask-question:v1 suffix is the protocol version; ignore unsupported future versions and fall back to a standard input/editor instead of guessing their schema.
+The `pi-goui:ask-question:v1` suffix is the protocol version. Do not guess unknown schemas or submit fabricated answers; keep generic tool-result rendering and mark unsupported interaction unavailable.

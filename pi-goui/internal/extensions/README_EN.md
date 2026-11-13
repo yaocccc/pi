@@ -1,38 +1,62 @@
-# Optional third-party UI adapters
+# Optional extension integration guide
 
-[中文](README.md)
+[简体中文](README.md)
 
-Pi Go UI is a standalone Pi RPC client. This repository's extensions are **not core frontend dependencies**. They are optional integrations, like extensions supplied by another user.
+This directory adapts third-party protocols, state and presentation; it does not execute backend business logic. See the [project README](../../README_EN.md) for usage and [AGENTS](../../AGENTS_EN.md) for general change constraints.
 
-## Code ownership
+## Core defines contracts; extensions implement and export them
 
-| Location | Responsibility |
+Authoritative interfaces live in [core/extension/contracts.go](../core/extension/contracts.go), with low-level projection/drawing contracts in [core/extensionapi/](../core/extensionapi/). The entry interface is:
+
+```go
+type Extension interface {
+    Capabilities() Capabilities
+}
+```
+
+Declare only supported capabilities; nil means absent. Confirm the backend protocol, implement the required interfaces, and join the `[]extension.Extension` returned by [extensions.New()](extensions.go). Existing examples are [hostui.Adapter](hostui/adapter.go), [projectionAdapter](projection.go) and [toolrender.Adapter](toolrender/adapter.go). Existing capabilities need no module-specific core branches; define new generic capabilities in core first.
+
+| Capability entry | Responsibility |
 | --- | --- |
-| `internal/rpc/` | Standard Pi transport and the optional, capability-discovered extension RPC envelope; no Worker/Codex operations |
-| `internal/extensions/` | Third-party protocol recognition and notification formatting; unknown requests retain standard Pi behavior |
-| `askquestion/` | Questionnaire wire types; no authoritative answer validation |
-| `codexfast/` | Typed `codex-fast.get/set` RPC client; no configuration files or migration |
-| `worker/` | Worker settings wire types, transcript RPC, and read-only replay; no private log filesystem access |
-| `solpi/` | Read-only plan projection; no compaction or plan mutation |
-| `toolrender/cards/` | Worker/questionnaire compact cards, task activities and Codex mode labels |
-| `toolrender/detail/` | Worker/questionnaire/SoL-Pi/web tool full detail views; unknown fields preserved |
-| `internal/extensionapi/render.go` | Neutral rendering types and host callbacks, no third-party behavior |
-| `internal/render/extensions.go`, `internal/render/tooldetail/extensions.go` | Thin host callback binding, aliases and dispatch only |
-| `hostui/` | Third-party controls, forms and inspectors using neutral UI host callbacks |
-| `internal/session/extension_plan.go` | Connects optional plan data to the generic sidebar state |
+| `NewSession` | Sync, async updates, sidebar, scrolling, polling, events and `ControlView` controls |
+| `OpenDialog` | `DialogHandler` manages input, confirmation and cancellation through `DialogHost` callbacks |
+| `NewInspector` / `NewInspectorContent` | `Inspector` manages details, interaction, child views and content versions |
+| `NewUsage` | Observe authoritative records and return non-duplicated input/output usage |
+| `NewProjection` / `Tools` | Session projection and optional card/full-detail providers |
 
-Tool rendering implementations live only under `toolrender/`, not in prefixed files in the host renderer. Adapters receive generic wrapping, sanitization, frame and full-value formatting callbacks; they never import the host `render` or `ui` implementations. Shared JSON decoding lives in `render/tooldata`; it has no extension rules. Unknown tool kinds retain the generic host result view. Host integration tests remain in `render`, while adapter-local tests cover host isolation and protocol projection.
+[core/ui/extensions.go](../core/ui/extensions.go) is core's only implementation import point, composing a Runtime with `extension.New(extensions.New())`. Other core consumers use neutral interfaces, not the entire Model, concrete type aliases or mutable global registries.
 
-## Optional RPC bridge
+## Dependencies and implementation ownership
 
-`extensions/pi-ui` provides `/pi-ui-rpc` in a Pi backend. The Go client first checks `get_commands` and requires an **extension** command with that name. Without it, it returns `ErrExtensionUnavailable` and does not send a prompt that might start an LLM turn.
+- [hostui/](hostui/) owns third-party forms, controls, inspectors and private interaction state; it does not import `core/ui`.
+- [toolrender/cards/](toolrender/cards/) and [toolrender/detail/](toolrender/detail/) own specialized cards/full details. Leaf packages reuse drawing through neutral callbacks without importing the parent renderer/UI. Only [toolrender/views.go](toolrender/views.go) assembles generic render providers; unrecognized tools return to generic fallback.
+- [sessionview/](sessionview/), [solpi/](solpi/) and [web/](web/) handle live/history projection, metrics and visibility; [internal/protocol/](internal/protocol/) handles private wire recognition. Subpackages must not import the root assembly package.
+- [askquestion/](askquestion/), [codexfast/](codexfast/) and [worker/](worker/) contain transport types, clients and read-only replay. Authoritative validation, permissions, scheduling, persistence, migration and private storage remain backend-owned; Go and TypeScript do not communicate through shared files.
 
-Methods are registered by adapters and delegated to capability services. The current clients use `codex-fast.get`, `codex-fast.set`, and `worker.transcript`. Replies are correlated by request ID; errors, cancellation, and process shutdown clean up local waiters. Client cancellation does not roll back a backend operation already committed.
+## Composition and lifecycle
 
-No bridge or capability means no Codex tier control, and Worker inspection falls back to the task result already received. It never probes local extension files. Go and TypeScript communicate only through the Pi RPC process, not imports, shared files, or assumptions about a repository path.
+- Slice order selects the first tool, dialog, inspector, control or event handler. Observation, session sync and polling broadcast. Usage is summed; providers must not contribute the same record twice.
+- Composite projections take the first nonempty plan, OR visibility predicates and use the first available metrics. Commit history snapshots only after successful validation; reject cross-instance snapshots. Worker replay creates its own projection on initialization/reset.
+- Each Model owns a Runtime; factories create separate mutable state per tab, dialog and working run. ToolViews is an immutable per-runtime composition; nested inspectors and fallback views inherit the same provider.
+- `Inspector.Version()` must change when private state changes detail rows; caches distinguish provider identity and version. Async results retain their original backend, page and revision.
+- `Sessions.Control(ctx)` binds the selected owner. Requests after clicking go only to that owner, even if layout/visibility changes; only `Sessions.Poll` broadcasts.
+- Empty slices, absent capabilities, unknown payloads and malformed data must not break native Pi, codemode or generic fallback. Protocol-looking user text must not become a command.
 
-## What remains in the frontend
+## RPC and fallback
 
-General-purpose UI facilities—session browsing, clipboard/editor integration, image previews, Git display, quota display, update notices, and frontend preferences—remain frontend features. They do not require these third-party extensions. This boundary does not claim that all local I/O has been removed from the entire application.
+Generic [Client.CallExtension](../core/rpc/extensions.go) discovers `name:"pi-ui-rpc", source:"extension"` via `get_commands` before sending `/pi-ui-rpc {"id":…,"method":…,"params":…}`. Results arrive as notify messages prefixed `pi-ui:rpc:v1:`, containing `{id,result}` or `{id,error:{code,message}}`; the outer prompt acknowledgement is not the operation result.
 
-To add an integration, put its wire contract/client/projection here, keep business validation and persistence in its backend, and add absent-extension and generic-fallback tests. No third-party package is loaded directly by Go.
+A missing bridge returns `ErrExtensionUnavailable`; never send an unknown slash prompt that could invoke a model. Correlate replies by request ID. Errors, cancellation, timeout and process exit clean up waiters and reject late responses. Local cancellation stops waiting; it does not roll back committed backend operations.
+
+| Adapter | Required boundary |
+| --- | --- |
+| Questionnaire | Standard `extension_ui_request/response`, owned by dialog ID. Cancellation is `cancelled:true`, never invented answers or default consent; the backend validates answers authoritatively. |
+| Codex levels | Only `codex-fast.get/set`; use backend `level/levels` and update after confirmation. Hide controls without the bridge/capability; do not read settings or infer levels from model names. |
+| Worker | Only `worker.transcript`, with `descriptor:{version,id}` and optional opaque `cursor`; consume records and `reset/more/partial`. The backend validates paths, file identity, offsets, limits and cursor lifetime. |
+| Worker presentation | Use stable `phaseCode`, not translated status text. Replay reconstructs presentation, never task execution. Activity is not a full transcript; missing end records are not success. Unavailable records fall back to existing results; preserve and label partial records. |
+
+There are no public `worker.start`, `worker.cancel` or remote settings methods. `worker` is an Agent tool; `/worker_settings` is a dialog command. Do not invent RPC methods or fall back to reading private local logs.
+
+Historical `pi-goui:*:v1` titles and the `pi-goui:event:v1:` prefix are compatibility wire identifiers, not Go-client requirements. Backends default to structured UI in RPC mode without protocol environment variables; do not rename these identifiers.
+
+New adapters must cover normal behavior, instance isolation, absent bridge/capabilities, unknown protocols, cancellation and stale replies. Focused tests belong beside implementations; core retains genuine host integration tests. Verification commands live only in [AGENTS](../../AGENTS_EN.md#verification).

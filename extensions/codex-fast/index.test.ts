@@ -89,6 +89,20 @@ test('notification failures cannot undo a committed configuration', async (t) =>
     assert.equal(JSON.parse(readFileSync(file, 'utf8')).level, 'fast');
 });
 
+test('committed facts are immutable across observers without freezing returned snapshots', async (t) => {
+    const { service, bus } = await setup(t);
+    const observed: unknown[] = [];
+    bus.on(CODEX_FAST_CHANGED, (state) => { Reflect.set(state, 'level', 'normal'); });
+    bus.on(CODEX_FAST_CHANGED, (state) => observed.push(state));
+    const saved = service.setLevel('fast');
+    assert.deepEqual(observed, [{ level: 'fast' }]);
+    assert.ok(Object.isFrozen(observed[0]));
+    assert.equal(Object.isFrozen(saved), false);
+    saved.level = 'normal';
+    assert.equal(service.getConfig().level, 'fast');
+    assert.deepEqual(observed, [{ level: 'fast' }]);
+});
+
 test('capability source has no UI imports, identity checks or drawing hooks', () => {
     for (const name of ['index.ts', 'api.ts']) {
         const source = readFileSync(new URL(name, import.meta.url), 'utf8');

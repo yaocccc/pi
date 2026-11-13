@@ -1,6 +1,6 @@
 # Telegram 通知
 
-[English](README_EN.md)
+[English](README_EN.md) · [安装](../README.md)
 
 仅在后端把主会话回复及部分 `ask_question` 通知发送到指定 Telegram 聊天。不绘制本地界面，不接收 Telegram 指令，不轮询回复，也不提供远程控制。
 
@@ -16,7 +16,7 @@ pi --mode rpc --no-extensions -e /path/to/extensions/telegram/index.ts
 
 ## 第三方 UI 如何接入
 
-**目前无需、也没有专项接入接口。** 本扩展没有注册 UI 命令、能力查询 API、`pi-ui-rpc` 方法、专用工具 details 或前端事实事件，不依赖 `pi-ui` / `PI_UI_PROTOCOL`。
+**目前无需、也没有专项接入接口。** 本扩展没有注册 UI 命令、能力查询 API、`pi-ui-rpc` 方法、专用工具 details 或前端事实事件，不依赖 `pi-ui`。
 
 1. 正常运行 Pi，装不装本扩展都一样。
 2. 按标准 Pi `message_start` / `message_update` / `message_end` 及工具事件展示对话。

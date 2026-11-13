@@ -2,8 +2,8 @@ package detail
 
 import (
 	"encoding/json"
-	"pi-goui/internal/extensionapi"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/extensionapi"
+	"pi-goui/internal/core/session"
 	"strings"
 	"testing"
 )

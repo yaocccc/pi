@@ -7,18 +7,10 @@ import { Container } from "@earendil-works/pi-tui";
 import askQuestion from "../../ask-question/index.ts";
 import { registerAskQuestionUI } from "./index.ts";
 
-// Generic RPC tests must not inherit the frontend identity of the test runner.
-const uiProtocol = process.env.PI_UI_PROTOCOL;
-const goProtocol = process.env.PI_GOUI_PROTOCOL;
+// Keep native/basic UI tests independent of the legacy question override.
 const goQuestion = process.env.PI_GOUI_ASK_QUESTION;
-delete process.env.PI_UI_PROTOCOL;
-delete process.env.PI_GOUI_PROTOCOL;
 delete process.env.PI_GOUI_ASK_QUESTION;
 after(() => {
-	if (uiProtocol === undefined) delete process.env.PI_UI_PROTOCOL;
-	else process.env.PI_UI_PROTOCOL = uiProtocol;
-	if (goProtocol === undefined) delete process.env.PI_GOUI_PROTOCOL;
-	else process.env.PI_GOUI_PROTOCOL = goProtocol;
 	if (goQuestion === undefined) delete process.env.PI_GOUI_ASK_QUESTION;
 	else process.env.PI_GOUI_ASK_QUESTION = goQuestion;
 });
@@ -100,7 +92,7 @@ test("a failing pending observer cannot break ordinary Pi question input or clea
 	assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
 });
 
-function rpcHarness(responses: { select?: Array<string | undefined>; input?: Array<string | undefined> } = {}) {
+function basicUIHarness(responses: { select?: Array<string | undefined>; input?: Array<string | undefined> } = {}) {
 	const tools = new Map<string, any>();
 	const handlers = new Map<string, Array<(...args: any[]) => any>>();
 	const calls: Array<{ method: string; args: any[] }> = [];
@@ -112,9 +104,8 @@ function rpcHarness(responses: { select?: Array<string | undefined>; input?: Arr
 	askQuestion(pi as any);
 	registerAskQuestionUI(pi as any);
 	const ctx = {
-		cwd: process.cwd(), hasUI: true, mode: "rpc", sessionManager: { getBranch: () => [] },
+		cwd: process.cwd(), hasUI: true, mode: "print", sessionManager: { getBranch: () => [] },
 		ui: {
-			custom: () => { throw new Error("RPC must not use custom UI"); },
 			select: async (...args: any[]) => { calls.push({ method: "select", args }); return responses.select?.shift(); },
 			input: async (...args: any[]) => { calls.push({ method: "input", args }); return responses.input?.shift(); },
 			notify: (...args: any[]) => calls.push({ method: "notify", args }),
@@ -126,20 +117,20 @@ function rpcHarness(responses: { select?: Array<string | undefined>; input?: Arr
 	};
 }
 
-test("RPC single-select supports fixed and custom answers without custom UI", async () => {
-	const fixed = rpcHarness({ select: ["B"] });
+test("Basic UI single-select supports fixed and custom answers without custom UI", async () => {
+	const fixed = basicUIHarness({ select: ["B"] });
 	assert.equal((await fixed.call(single)).details.answer, "B");
 	assert.deepEqual(fixed.calls.map(({ method }) => method), ["select"]);
 
-	const custom = rpcHarness({ select: ["自己输入…"], input: [" custom "] });
+	const custom = basicUIHarness({ select: ["自己输入…"], input: [" custom "] });
 	const result = await custom.call(single);
 	assert.equal(result.details.answer, "custom");
 	assert.equal(result.details.wasCustom, true);
 	assert.deepEqual(custom.calls.map(({ method }) => method), ["select", "input"]);
 });
 
-test("RPC multi-select toggles fixed choices, appends custom input and validates empty submission", async () => {
-	const h = rpcHarness({
+test("Basic UI multi-select toggles fixed choices, appends custom input and validates empty submission", async () => {
+	const h = basicUIHarness({
 		select: ["完成（已选 0 项）", "[ ] B", "[ ] A", "自己输入…", "完成（已选 3 项）"],
 		input: [" custom "],
 	});
@@ -150,8 +141,8 @@ test("RPC multi-select toggles fixed choices, appends custom input and validates
 	assert.equal(h.calls.filter(({ method }) => method === "notify").length, 1);
 });
 
-test("RPC questionnaire asks each labeled question and cancellation discards partial answers", async () => {
-	const completed = rpcHarness({ select: ["A", "D"] });
+test("Basic UI questionnaire asks each labeled question and cancellation discards partial answers", async () => {
+	const completed = basicUIHarness({ select: ["A", "D"] });
 	const result = await completed.call({ questions: [
 		{ label: "First", question: "One?", options: ["A", "B"] },
 		{ label: "Second", question: "Two?", options: ["C", "D"] },
@@ -159,23 +150,23 @@ test("RPC questionnaire asks each labeled question and cancellation discards par
 	assert.deepEqual(result.details.questions.map((question: any) => question.answer), ["A", "D"]);
 	assert.deepEqual(completed.calls.filter(({ method }) => method === "select").map(({ args }) => args[0]), ["First", "Second"]);
 
-	const cancelled = rpcHarness({ select: ["A", undefined] });
+	const cancelled = basicUIHarness({ select: ["A", undefined] });
 	const cancelledResult = await cancelled.call(multi);
 	assert.equal(cancelledResult.details.cancelled, true);
 	assert.ok(cancelledResult.details.questions.every((question: any) => question.answer === null));
 });
 
-test("RPC deduplicates a custom value that matches an already selected fixed choice", async () => {
-	const h = rpcHarness({ select: ["[ ] A", "自己输入…", "完成（已选 1 项）"], input: ["A"] });
+test("Basic UI deduplicates a custom value that matches an already selected fixed choice", async () => {
+	const h = basicUIHarness({ select: ["[ ] A", "自己输入…", "完成（已选 1 项）"], input: ["A"] });
 	const result = await h.call({ ...single, multiSelect: true });
 	assert.deepEqual(result.details.answer, ["A"]);
 	assert.deepEqual(result.details.customAnswers, ["A"]);
 	assert.equal(result.details.wasCustom, true);
 });
 
-test("RPC forwards AbortSignal to dialog calls", async () => {
+test("Basic UI forwards AbortSignal to dialog calls", async () => {
 	const controller = new AbortController();
-	const h = rpcHarness({ select: ["A"] });
+	const h = basicUIHarness({ select: ["A"] });
 	await h.call(single, controller.signal);
 	assert.ok(h.calls[0].args[2].signal instanceof AbortSignal);
 	assert.equal(h.calls[0].args[2].signal.aborted, false);

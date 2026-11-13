@@ -1,7 +1,7 @@
 // Package cards owns third-party compact tool layouts, never execution state.
 package cards
 
-import "pi-goui/internal/extensionapi"
+import "pi-goui/internal/core/extensionapi"
 
 type Renderer struct{ extensionapi.CardHost }
 

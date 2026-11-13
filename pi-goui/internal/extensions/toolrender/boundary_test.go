@@ -24,8 +24,12 @@ func TestAdaptersDoNotImportHostImplementationsOrIO(t *testing.T) {
 		}
 		for _, spec := range file.Imports {
 			name, _ := strconv.Unquote(spec.Path.Value)
+			// Only the fixed assembly may refer to the neutral host provider type.
+			if path == "views.go" && name == "pi-goui/internal/core/render" {
+				continue
+			}
 			switch name {
-			case "pi-goui/internal/render", "pi-goui/internal/render/tooldetail", "pi-goui/internal/ui", "os", "os/exec", "net/http":
+			case "pi-goui/internal/core/render", "pi-goui/internal/core/render/tooldetail", "pi-goui/internal/core/ui", "os", "os/exec", "net/http":
 				t.Errorf("%s imports host implementation or IO %s", path, name)
 			}
 		}

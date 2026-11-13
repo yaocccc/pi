@@ -2,15 +2,13 @@ package hostui
 
 import (
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/render"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/extension"
+	"pi-goui/internal/core/render"
+	"pi-goui/internal/core/session"
 	"strings"
 )
 
-type ConversationTarget struct {
-	ID   string
-	Rect Rect
-}
+type ConversationTarget = extension.ConversationTarget
 
 // Build hit regions once per document, not once per pointer-motion event. The
 // coordinates are document cells; the viewport only translates and clips them.
@@ -40,12 +38,12 @@ func ConversationTargets(doc render.Document, lines []string, items []session.It
 			continue
 		}
 		if !workers[b.ID] && top+1 < b.End {
-			out = append(out, ConversationTarget{b.ID, Rect{X: right - width, Y: top + 1, Width: width}})
+			out = append(out, ConversationTarget{ID: b.ID, Rect: Rect{X: right - width, Y: top + 1, Width: width}})
 		}
 		if workers[b.ID] {
 			for _, child := range doc.Blocks {
 				if child.InspectorParent == b.ID && child.InspectorTask != "" {
-					out = append(out, ConversationTarget{child.ID, Rect{X: right - width, Y: child.Start, Width: width}})
+					out = append(out, ConversationTarget{ID: child.ID, Rect: Rect{X: right - width, Y: child.Start, Width: width}})
 				}
 			}
 		}

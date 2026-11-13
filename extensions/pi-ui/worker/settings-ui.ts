@@ -1,7 +1,7 @@
+import { PRESETS } from "../../worker/api.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { PRESETS } from "../../worker/config.ts";
 import type { WorkerCapability } from "../../worker/api.ts";
-import type { SettingsErrorData } from "../../worker/settings.ts";
+import type { SettingsErrorData } from "../../worker/api.ts";
 
 type GetModels = () => ReturnType<WorkerCapability["getModels"]>;
 import type { WorkerPreset, RoutingConfig } from "../../worker/types.ts";

@@ -168,7 +168,7 @@ test("applied notification measures the committed boundary, includes the reminde
 
 for (const hasUI of [false, true]) test(`committed metrics persist with hasUI=${hasUI} and match RPC notifications`, async t => {
   const previous = process.env.PI_GOUI_PROTOCOL;
-  process.env.PI_GOUI_PROTOCOL = "1";
+  delete process.env.PI_GOUI_PROTOCOL;
   t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
   const h = harness();
   h.ctx.hasUI = hasUI;

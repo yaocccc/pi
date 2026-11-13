@@ -239,16 +239,24 @@ def acceptance(h):
     assert not any(label in h.screen.text for label in ('FILES', 'GIT STATUS', 'THEMES', 'PLUGINS')), 'Unexpected sidebar section'
     first = h.pids()[0]
     h.visible('$0.12')
-    h.click('fixture-model'); h.visible('Choose model'); h.visible('Message pi'); h.send(b'\x1b')
-    h.wait(lambda: 'Choose model' not in h.screen.text, 'model popup cancellation')
-    h.click('medium')
-    h.wait(lambda: len(h.commands('cycle_thinking_level',first))==1, 'clicking thinking must cycle directly')
+    x,y=h.cell('fixture-model'); h.send(f'\x1b[<35;{x+1};{y+1}M')
+    h.wait(lambda: bool(h.commands('get_available_models',first)), 'model hover requests options')
+    h.visible('Click to set'); h.visible('› fixture-model'); h.click('› fixture-model')
+    h.wait(lambda: len(h.commands('set_model',first))==1, 'model popup selection reaches RPC')
+    assert h.commands('set_model',first)[0]['command']['modelId']=='fixture-model'
+    h.send('\x1b[<35;1;1M'); h.visible('Message pi')
+    x,y=h.cell('medium'); h.send(f'\x1b[<35;{x+1};{y+1}M')
+    h.wait(lambda: bool(h.commands('get_available_thinking_levels',first)), 'thinking hover requests options')
+    h.visible('Click to set'); h.click('high')
+    h.wait(lambda: len(h.commands('set_thinking_level',first))==1, 'thinking popup selection reaches RPC')
+    assert h.commands('set_thinking_level',first)[0]['command']['level']=='high'
+    h.send('\x1b[<35;1;1M')
     h.send(b'\x1b[1;5H'); h.visible('PRECOMPACTION_USER_MARKER'); h.visible('PRECOMPACTION_ASSISTANT_MARKER')
     h.send(b'\x1b[1;5F'); h.visible('POSTCOMPACTION_MARKER')
     assert 'TOOL_DEEP_LINE' not in h.screen.text, 'Tool output must begin collapsed'
     h.send(b'\x1b[1;5H'); h.visible('2 calls'); h.click('2 calls')
     h.visible('fixture.txt'); assert 'TOOL_DEEP_LINE' not in h.screen.text, 'Group expansion must leave individual results folded'
-    h.click('fixture.txt'); h.visible('TOOL_DEEP_LINE'); h.visible('read · result')
+    h.click('fixture.txt'); h.visible('TOOL_DEEP_LINE'); h.visible('╭─ read')
     h.drag('COPY_ME 中文')
     h.wait(lambda:any(base64.b64decode(value).decode('utf-8')=='COPY_ME 中文' for value in re.findall(rb'\x1b\]52;c;([A-Za-z0-9+/=]+)(?:\x07|\x1b\\)',bytes(h.raw))), 'Unicode mouse selection OSC52 copy')
     h.visible('Latest')
@@ -257,12 +265,13 @@ def acceptance(h):
     assert 'Latest' not in h.screen.text, 'Latest button must hide at bottom'
     h.send(b'\x1b[1;5H'); h.visible('PRECOMPACTION_USER_MARKER')
     assert 'HIDDEN_COMPACTION_BODY' not in h.screen.text, 'Compaction body must not be dumped into transcript'
-    h.send(b'\x0f'); h.send(b'\x1b[1;5H'); h.visible('TOOL_DEEP_LINE')
+    h.send(b'\x1b[1;5H'); h.visible('TOOL_DEEP_LINE')
     h.send(b'\x14'); h.pump(); assert 'THINKING_VISIBLE_MARKER' not in h.screen.text
     h.send(b'\x14'); h.visible('THINKING_VISIBLE_MARKER')
-    assert len(h.commands('cycle_thinking_level'))==1, 'Ctrl+T must toggle, not cycle'
-    h.send(b'\x1b[Z'); h.wait(lambda: len(h.commands('cycle_thinking_level'))==2, 'Shift+Tab must cycle thinking')
-    h.send(b'\x0c'); h.visible('Choose model'); h.send(b'\x1b'); h.pump()
+    assert not h.commands('cycle_thinking_level'), 'Ctrl+T must toggle, not cycle'
+    h.send(b'\x1b[Z'); h.wait(lambda: len(h.commands('cycle_thinking_level'))==1, 'Shift+Tab must cycle thinking')
+    h.send(b'\x0c'); h.visible('Choose model'); h.send(b'\x1b')
+    h.wait(lambda: 'Choose model' not in h.screen.text, 'model popup cancellation')
     h.send('line-one'); h.send(b'\x0a'); h.visible('line-one'); h.send('line-two'); h.visible('line-two')
     first_x,first_y=h.cell('line-one'); second_x,second_y=h.cell('line-two')
     assert second_y==first_y+1, 'Ctrl+J must add exactly one visible input row'
@@ -277,7 +286,6 @@ def acceptance(h):
     image_prompt=h.commands('prompt')[-1]['command']
     assert image_prompt['message']=='你照这个图改 [image1]，然后参考这个图 [image2]'
     assert len(image_prompt['images'])==2
-    h.control(first, {'type':'message_end','message':{'role':'user','content':[{'type':'text','text':image_prompt['message']}]+image_prompt['images'],'timestamp':8900}})
     h.visible(image_prompt['message']); h.click('[image1]')
     opened=h.root/'opened-images.jsonl'
     h.wait(lambda: opened.exists() and bool(opened.read_text().strip()), 'saved image click did not launch fake viewer')
@@ -287,6 +295,7 @@ def acceptance(h):
     second = h.pids()[1]; assert second != first
     h.visible(f'Fixture-{second}'); h.send('DRAFT_SECOND_MARKER')
     h.send(b'\x19'); h.visible('Sessions'); h.send(b'\r'); h.visible(f'Fixture-{first}')
+    h.control(second, {'type':'message_end','message':{'role':'user','content':[{'type':'text','text':'BACKGROUND_REQUEST_MARKER'}],'timestamp':8999}})
     h.control(second, {'type':'agent_start'})
     h.control(second, {'type':'message_end','message':{'role':'assistant','content':[{'type':'text','text':'BACKGROUND_FINISHED_MARKER'}],'timestamp':9000}})
     h.control(second, {'type':'agent_settled'})

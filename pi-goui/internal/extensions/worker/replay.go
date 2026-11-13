@@ -3,12 +3,14 @@ package worker
 import (
 	"encoding/json"
 
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/session"
+	"pi-goui/internal/extensions/sessionview"
 )
 
 // Replay owns the recording protocol and its session projection. Its zero
 // value is ready to read; callers only schedule reads and render View().
 type Replay struct {
+	initialized       bool
 	state             session.State
 	inheritedMessages int
 	// Status and Stopped are read-only results for presentation and polling.
@@ -32,6 +34,10 @@ func (r *Replay) Apply(read ReplayRead) bool {
 	wasBusy := r.state.Busy
 	if read.Batch.Reset {
 		*r = Replay{Status: "实时 · 只读"}
+	}
+	if !r.initialized {
+		r.state.SetExtensionProjection(&sessionview.State{})
+		r.initialized = true
 	}
 	for _, raw := range eventBatch(read.Batch.Records) {
 		var event struct {

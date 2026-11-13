@@ -2,9 +2,9 @@
 package detail
 
 import (
-	"pi-goui/internal/extensionapi"
-	"pi-goui/internal/render/tooldata"
-	"pi-goui/internal/session"
+	"pi-goui/internal/core/extensionapi"
+	"pi-goui/internal/core/render/tooldata"
+	"pi-goui/internal/core/session"
 )
 
 type Renderer struct{ extensionapi.DetailHost }

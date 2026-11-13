@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { present } from "./callbacks.ts";
 import { captureWorkerSession, workerSessionArgs, type WorkerSessionSnapshot } from "./session.ts";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -186,7 +187,8 @@ export async function runPiWorker(
 		const systemPath = path.join(tempDir, "worker-system.md");
 		await fs.promises.writeFile(systemPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
 		const sessionArgs = await workerSessionArgs(task, cwd, tempDir, control?.sessionSnapshot);
-		const args = ["--mode", "json", "--print", ...sessionArgs, "--no-skills", "--no-context-files", "--model", route.modelId, "--thinking", route.thinking, "--append-system-prompt", systemPath, prompt];
+		const guardEntry = fileURLToPath(new URL("./guard-entry.ts", import.meta.url));
+		const args = ["--mode", "json", "--print", ...sessionArgs, "-e", guardEntry, "--no-skills", "--no-context-files", "--model", route.modelId, "--thinking", route.thinking, "--append-system-prompt", systemPath, prompt];
 		const invocation = control?.invocation ?? getPiInvocation(args);
 		const deadline = Date.now() + timeoutMs;
 		try {

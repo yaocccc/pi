@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { agentDir } from "./config.ts";
+import { fileURLToPath } from "node:url";
 import type { WorkerMode, WorkerTask, WorkspaceSnapshot } from "./types.ts";
 
 export function workerPromptBody(mode: WorkerMode): string {
 	return ["worker", mode].map((name) => {
-		const promptPath = path.join(agentDir(), "extensions", "worker", "agents", `${name}.md`);
+		const promptPath = fileURLToPath(new URL(`./agents/${name}.md`, import.meta.url));
 		if (!fs.existsSync(promptPath)) throw new Error(`缺少 Worker Prompt: ${promptPath}`);
 		return parseFrontmatter<Record<string, string>>(fs.readFileSync(promptPath, "utf8")).body.trim();
 	}).join("\n\n");

@@ -8,8 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/internal/core/render"
 	"pi-goui/internal/extensions/askquestion"
-	"pi-goui/internal/render"
 )
 
 type question = askquestion.Question
@@ -37,11 +37,11 @@ func (h DialogHost) OpenQuestionnaire(d *Dialog, payload string) bool {
 	return true
 }
 func (q *Questionnaire) Help(start, total, visible int) string {
-	if total > visible {
-		return fmt.Sprintf("PgUp/PgDn 翻阅问题 %d–%d/%d · Enter 提交 · Esc 返回", start+1, start+visible, total)
-	}
 	if q.Input {
 		return "Enter 保存答案 · Esc 返回"
+	}
+	if total > visible {
+		return fmt.Sprintf("PgUp/PgDn 翻阅问题 %d–%d/%d · Enter 提交 · Esc 返回", start+1, start+visible, total)
 	}
 	if q.ActiveMulti() {
 		return "←→ 切题 · ↑↓ 移动 · 空格勾选 · Enter 提交"
@@ -131,7 +131,7 @@ func (h DialogHost) RefreshQuestionnaire(d *Dialog) {
 func (h DialogHost) QuestionnaireKey(d *Dialog, k tea.KeyPressMsg) tea.Cmd {
 	q := d.Questionnaire
 	key := k.String()
-	if key == "pgup" || key == "pgdown" {
+	if !q.Input && (key == "pgup" || key == "pgdown") {
 		start, total, visible := h.Page()
 		delta := max(1, visible)
 		if key == "pgup" {
@@ -150,12 +150,21 @@ func (h DialogHost) QuestionnaireKey(d *Dialog, k tea.KeyPressMsg) tea.Cmd {
 		return h.Close(map[string]any{"cancelled": true})
 	}
 	if q.Input {
+		defer h.Resize()
+		if key == "pgup" || key == "pgdown" {
+			delta := d.Editor.Area.Height()
+			if key == "pgup" {
+				delta = -delta
+			}
+			d.Editor.Scroll(delta)
+			return nil
+		}
 		if key == "enter" {
 			return h.SubmitQuestion(d)
 		}
 		if !d.Editor.Jumping() {
 			for _, action := range h.Actions() {
-				if strings.HasPrefix(action, "tui.editor.") && h.Match(action, key) {
+				if (strings.HasPrefix(action, "tui.editor.") || action == "tui.input.newLine") && h.Match(action, key) {
 					return d.Editor.Update(action, k)
 				}
 			}

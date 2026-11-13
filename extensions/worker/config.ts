@@ -3,13 +3,12 @@ import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
+import { PRESETS, THINKING_LEVELS } from "./api.ts";
 import type { PresetConfig, Route, RoutingConfig, Thinking, WorkerMode, WorkerTask } from "./types";
 
 
 export const MODES = ["scout", "implement", "test", "review", "fix"] as const;
-export const PRESETS = ["fast", "normal", "deep"] as const;
 export const SESSION_MODES = ["new", "fork"] as const;
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const WRITE_MODES = new Set<WorkerMode>(["implement", "test", "fix"]);
 
 export const DEFAULT_OPTIONS = {

@@ -7,9 +7,9 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"pi-goui/internal/core/input"
+	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions/codexfast"
-	"pi-goui/internal/input"
-	"pi-goui/internal/session"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,7 +31,7 @@ func TestAdapterHasNoHostUIImport(t *testing.T) {
 		}
 		for _, item := range f.Imports {
 			path, _ := strconv.Unquote(item.Path.Value)
-			if path == "pi-goui/internal/ui" || strings.HasPrefix(path, "pi-goui/internal/ui/") {
+			if path == "pi-goui/internal/core/ui" || strings.HasPrefix(path, "pi-goui/internal/core/ui/") {
 				t.Fatalf("%s imports host implementation %s", entry.Name(), path)
 			}
 		}

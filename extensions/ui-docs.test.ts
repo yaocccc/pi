@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { validateQuestionResponse } from "./ask-question/validation.ts";
-import { parseSettings } from "./worker/settings.ts";
+import { parseSettings } from "./worker/api.ts";
 import { WorkerTranscriptReader } from "./worker/transcript-reader.ts";
+import filterOutput from "./filter-output/index.ts";
 
 const guides = ["ask-question", "worker", "codex-fast", "sol-pi", "autoname", "filter-output", "telegram", "pi-ui"];
 function examples(name: string, language: string): any[] {
@@ -29,9 +30,13 @@ for (const name of guides) test(`${name}: both standalone UI guides contain vali
 });
 
 test("each copy-pair guide documents the same explicit UI registration layout", () => {
-	for (const name of guides.slice(0, 6)) for (const directory of [name, `pi-ui/${name}`]) {
+	for (const name of guides.slice(0, 6)) {
+		// One capability guide owns both entries of the portable copy pair.
+		for (const directory of [name, `pi-ui/${name}`]) {
+			assert.ok(existsSync(new URL(`./${directory}/index.ts`, import.meta.url)), `${directory} entry must exist`);
+		}
 		for (const language of ["", "_EN"]) {
-			const source = readFileSync(new URL(`./${directory}/README${language}.md`, import.meta.url), "utf8");
+			const source = readFileSync(new URL(`./${name}/README${language}.md`, import.meta.url), "utf8");
 			assert.ok(source.split("\n").slice(0, 6).join("\n").includes(language ? "](README.md)" : "](README_EN.md)"));
 			assert.ok(source.includes(`cp -R "$SRC/${name}/." "$DEST/${name}/"`));
 			assert.ok(source.includes(`cp -R "$SRC/pi-ui/${name}/." "$DEST/ui/${name}/"`));
@@ -64,6 +69,22 @@ for (const language of ["", "_EN"]) {
 		assert.equal(validateQuestionResponse(JSON.parse(response.value), payload.questions).cancelled, false);
 		const cancel = values.find(value => value.type === "extension_ui_response" && value.cancelled);
 		assert.equal(cancel.id, request.id);
+	});
+	test(`filter-output ${language || "ZH"}: documented fact matches the capability publisher`, async () => {
+		const notice = examples("filter-output", language).find(value => value.message?.startsWith("pi-goui:event:v1:"));
+		const documented = JSON.parse(notice.message.slice("pi-goui:event:v1:".length));
+		let onResult: any;
+		let published: any;
+		filterOutput({
+			on: (name: string, handler: unknown) => { assert.equal(name, "tool_result"); onResult = handler; },
+			events: { emit: (_name: string, value: unknown) => { published = value; } },
+		} as any);
+		const context = { hasUI: false, mode: "sdk" };
+		const result = await onResult({ toolName: "read", input: { path: documented.data.path }, content: [{ type: "text", text: "private file contents" }], isError: false }, context);
+		assert.equal(published.context, context);
+		assert.deepEqual(published.event, documented);
+		assert.match(result.content[0].text, /redacted for security/);
+		assert.doesNotMatch(result.content[0].text, /private file contents/);
 	});
 	test(`Worker ${language || "ZH"}: documented settings retain authoritative schema`, () => {
 		const values = examples("worker", language);
