@@ -8,20 +8,21 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestLegacyResizeReproducesInitialNewlineScroll(t *testing.T) {
+func TestResizeClearsInitialNewlineScroll(t *testing.T) {
 	e := New()
 	e.Area.Focus()
-	e.Area.SetWidth(30)
-	e.Area.SetHeight(1)
 	e.SetValue("first line")
+	e.Resize(30, 1)
 	e.Update("tui.input.newLine", tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	e.Area.SetWidth(30)
-	e.Area.SetHeight(2)
-	if e.Area.ScrollYOffset() != 1 {
-		t.Fatalf("expected legacy stale offset 1, got %d", e.Area.ScrollYOffset())
+	e.Resize(30, 2)
+	if e.Area.Height() != 2 || e.Area.ScrollYOffset() != 0 {
+		t.Fatalf("initial newline height=%d offset=%d", e.Area.Height(), e.Area.ScrollYOffset())
 	}
-	t.Log("legacy resize leaves viewport offset 1 after height grows to 2")
+	if e.Value() != "first line\n" || e.Area.Line() != 1 || e.Area.Column() != 0 {
+		t.Fatal("resize changed initial newline content or cursor")
+	}
 }
+
 func TestResizeUsesNativeWordWrap(t *testing.T) {
 	e := New()
 	e.Area.Focus()

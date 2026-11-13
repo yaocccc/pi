@@ -73,10 +73,10 @@ func TestSidebarInformationGeometryAndAlignment(t *testing.T) {
 		if !strings.Contains(rows[layout.ContextRow], "CTX ") || strings.ContainsAny(rows[layout.ContextRow], "[]") || !strings.Contains(rows[layout.ContextRow], "12.4%") || !strings.Contains(rows[layout.ContextRow], "124.2K/1M") {
 			t.Fatal("missing two-line context display")
 		}
-		if !strings.Contains(rows[layout.StatsRow+1], "in 13.2M") || !strings.Contains(rows[layout.StatsRow+1], "13.2M") || !strings.Contains(rows[layout.StatsRow+1], "out 123K") || !strings.Contains(rows[layout.StatsRow+1], "123K") {
+		if !strings.Contains(rows[layout.StatsRow+1], "in 13.2M") || !strings.Contains(rows[layout.StatsRow+1], "out 123K") {
 			t.Fatal("missing compact token stats")
 		}
-		if !strings.Contains(rows[layout.StatsRow+2], "cache 88.0%") || !strings.Contains(rows[layout.StatsRow+2], "88.0%") || !strings.Contains(rows[layout.StatsRow+2], "$12.20") {
+		if !strings.Contains(rows[layout.StatsRow+2], "cache 88.0%") || !strings.Contains(rows[layout.StatsRow+2], "$12.20") {
 			t.Fatalf("missing second stats row: %q", rows[layout.StatsRow+2])
 		}
 		plain := strings.Join(rows, "\n")

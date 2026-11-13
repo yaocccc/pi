@@ -235,6 +235,7 @@ func TestConversationThinkingKeysAndNestedReturn(t *testing.T) {
 	m, w := conversationFixture(t)
 	parent := m.current()
 	oldThinking, oldExpanded := parent.showThinking, parent.expanded
+	oldWorkerExpanded := w.expanded
 	m.sidebarHistory.pointerKnown = true
 	m.sidebarHistory.pointerX = m.mainWidth() + 3
 	m.sidebarHistory.pointerY = 5
@@ -245,9 +246,13 @@ func TestConversationThinkingKeysAndNestedReturn(t *testing.T) {
 	}
 	m.key(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	m.inspectorRows()
-	if !w.expanded || parent.expanded != oldExpanded {
-		t.Fatal("tool expansion key not isolated")
+	if w.expanded != oldWorkerExpanded || parent.expanded != oldExpanded {
+		t.Fatal("removed expand-all shortcut changed a conversation")
 	}
+	// The removed shortcut no longer opens tools; expand the fixture explicitly
+	// so the nested-return checks remain independent of keyboard dispatch.
+	w.expanded = true
+	w.revision++
 	w.replay.Apply(worker.ReplayRead{Batch: worker.Batch{Records: []json.RawMessage{
 		json.RawMessage(`{"type":"tool_execution_end","toolCallId":"nested","toolName":"worker","result":{"details":{"kind":"worker-ui","batchId":"nested","tasks":[{"index":0,"title":"Nested task","status":"running","transcript":{"version":1,"id":"` + workerPageID + `"}}]}}}`),
 	}}})

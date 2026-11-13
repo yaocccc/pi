@@ -105,22 +105,23 @@ func TestSessionGuardBeforeInputAndCancel(t *testing.T) {
 }
 
 func TestSessionGuardPreservesDraftAndSend(t *testing.T) {
+	const draft = "draft [image1]"
 	m := testModel(t, "")
 	tab := m.current()
 	c, wire := fakeClient(t)
 	tab.client = c
 	guardFile(t, tab, guardUser)
-	tab.setValue("draft")
+	tab.setValue(draft)
 	tab.images = []map[string]any{{"type": "image", "data": "YQ==", "mimeType": "image/png"}}
 	m.sessionGuardResult(m.submit(tab, true)().(sessionGuardMsg))
 	m.dialogKey(tab, tea.KeyPressMsg{Code: tea.KeyEscape}, "esc")
-	if tab.editor.Value() != "draft" || len(tab.images) != 1 {
+	if tab.editor.Value() != draft || len(tab.images) != 1 {
 		t.Fatal("cancel discarded draft")
 	}
 	m.submit(tab, true)
 	guardContinue(t, m, tab)
-	if tab.editor.Value() != "draft" {
-		t.Fatal("confirmation consumed draft")
+	if tab.editor.Value() != draft || len(tab.images) != 1 {
+		t.Fatal("confirmation consumed draft or attachment")
 	}
 	// Fresh submit check retains intent; own run can start while it is pending.
 	v := m.submit(tab, true)().(sessionGuardMsg)
@@ -132,9 +133,19 @@ func TestSessionGuardPreservesDraftAndSend(t *testing.T) {
 	if reply := cmd().(replyMsg); reply.err != nil {
 		t.Fatal(reply.err)
 	}
-	records := wireRecords(t, wire, 1)
-	if len(records) != 1 || records[0]["streamingBehavior"] != "followUp" || records[0]["message"] != "draft" {
+	// A busy submit first retrieves the authoritative pending queue, then sends
+	// the preserved follow-up intent (the fake RPC returns an empty queue).
+	records := wireRecords(t, wire, 2)
+	if len(records) != 2 || records[0]["type"] != "clear_queue" || records[1]["type"] != "prompt" || records[1]["streamingBehavior"] != "followUp" || records[1]["message"] != draft {
 		t.Fatalf("wire: %#v", records)
+	}
+	images, ok := records[1]["images"].([]any)
+	if !ok || len(images) != 1 {
+		t.Fatalf("attachment missing from prompt: %#v", records[1])
+	}
+	image, ok := images[0].(map[string]any)
+	if !ok || image["type"] != "image" || image["data"] != "YQ==" || image["mimeType"] != "image/png" {
+		t.Fatalf("attachment changed: %#v", images[0])
 	}
 }
 

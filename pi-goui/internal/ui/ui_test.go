@@ -49,7 +49,7 @@ func assertValue(t *testing.T, tab *tab, want string) {
 }
 
 func TestNativeConfigDispatch(t *testing.T) {
-	m := testModel(t, `{"app.session.resume":["ctrl+y"],"app.thinking.toggle":["alt+t"],"app.tools.expand":[],"tui.editor.cursorLineStart":[]}`)
+	m := testModel(t, `{"app.session.resume":["ctrl+y"],"app.session.new":[],"app.thinking.toggle":["alt+t"],"app.tools.expand":[],"tui.editor.cursorLineStart":[]}`)
 	tab := m.current()
 	tab.setValue("draft")
 	cmd := m.key(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
@@ -77,9 +77,10 @@ func TestNativeConfigDispatch(t *testing.T) {
 	press(m, 'x', 0, "x")
 	assertValue(t, tab, "draftx")
 	press(m, 'n', tea.ModCtrl, "")
-	if len(m.tabs) != 1 {
-		t.Fatal("old frontend Ctrl+N new-session leaked")
+	if len(m.tabs) != 1 || m.current() != tab {
+		t.Fatal("disabled Ctrl+N new-session binding still active")
 	}
+	assertValue(t, tab, "draftx")
 	tab.setValue("")
 	press(m, tea.KeyEnter, tea.ModShift, "")
 	assertValue(t, tab, "\n")

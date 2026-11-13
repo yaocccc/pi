@@ -140,34 +140,53 @@ func TestOfflineDoesNotResolveOrSpawn(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
-func TestUnsupportedSelectedWrapperNeverRuns(t *testing.T) {
-	f := newFixture(t)
-	f.cfg.PiBin = filepath.Join(t.TempDir(), "pi-wrapper")
-	put(t, f.cfg.PiBin, "#!/bin/sh\nexit 99\n")
-	r := check(t, f)
-	if r.Unsupported == "" || r.HasUpdates() {
-		t.Fatal(r)
+func TestUnsupportedChecksRequireManualUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		setup       func(*testing.T, *fixture)
+		unsupported string
+		version     string
+	}{
+		{
+			name: "selected wrapper never runs",
+			setup: func(t *testing.T, f *fixture) {
+				f.cfg.PiBin = filepath.Join(t.TempDir(), "pi-wrapper")
+				put(t, f.cfg.PiBin, "#!/bin/sh\nexit 99\n")
+			},
+		},
+		{
+			name: "unsupported native modules",
+			setup: func(t *testing.T, f *fixture) {
+				if err := os.Remove(filepath.Join(f.root, "dist/utils/version-check.js")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			version: "1.2.3",
+		},
+		{
+			name: "custom npm wrappers",
+			setup: func(t *testing.T, f *fixture) {
+				put(t, filepath.Join(f.cfg.AgentDir, "settings.json"), `{"packages":["npm:example"],"npmCommand":["npm","install"]}`)
+			},
+			unsupported: "Custom npm command wrappers require manual update checks.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			tc.setup(t, &f)
+			r := check(t, f)
+			if r.Unsupported == "" || r.HasUpdates() {
+				t.Fatal(r)
+			}
+			if tc.unsupported != "" && r.Unsupported != tc.unsupported {
+				t.Fatal(r)
+			}
+			if tc.version != "" && r.CurrentVersion != tc.version {
+				t.Fatal(r)
+			}
+			noUpdatesRun(t, f)
+		})
 	}
-	noUpdatesRun(t, f)
-}
-func TestUnsupportedNativeModules(t *testing.T) {
-	f := newFixture(t)
-	if err := os.Remove(filepath.Join(f.root, "dist/utils/version-check.js")); err != nil {
-		t.Fatal(err)
-	}
-	r := check(t, f)
-	if r.Unsupported == "" || r.CurrentVersion != "1.2.3" || r.HasUpdates() {
-		t.Fatal(r)
-	}
-}
-func TestCustomNpmWrappersRequireManualChecks(t *testing.T) {
-	f := newFixture(t)
-	put(t, filepath.Join(f.cfg.AgentDir, "settings.json"), `{"packages":["npm:example"],"npmCommand":["npm","install"]}`)
-	r := check(t, f)
-	if r.Unsupported != "Custom npm command wrappers require manual update checks." || r.HasUpdates() {
-		t.Fatal(r)
-	}
-	noUpdatesRun(t, f)
 }
 
 func TestNoReportedUpdatesIsNotAnError(t *testing.T) {
