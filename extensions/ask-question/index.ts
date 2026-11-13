@@ -1,11 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { AskQuestionParams } from './schema.ts';
 import { QuestionInteractions } from './interaction.ts';
-import { nativeRenderers } from './native-ui.ts';
-import { askQuestions } from './rpc.ts';
+import { registerCapability } from './capabilities.ts';
+import { ASK_QUESTION_SERVICE, type AskQuestionService } from './api.ts';
+import { createQuestionService } from './service.ts';
 import { normalizeOptions, formatList, questionnaireDetails, type AskQuestionInput, type AskQuestionDetails } from './model.ts';
 
-const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, ctx: ExtensionContext, interactions: QuestionInteractions, signal?: AbortSignal) => {
+const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, ctx: ExtensionContext, service: AskQuestionService, signal?: AbortSignal) => {
     const questions = params.questions.map((question) => ({
         question: question.question,
         label: question.label?.replace(/[\r\n\t]+/g, ' ').trim() || undefined,
@@ -13,15 +14,16 @@ const executeQuestionnaire = async (params: { questions: AskQuestionInput[] }, c
         multiSelect: question.multiSelect === true,
     }));
 
-    if (!ctx.hasUI) {
+    const result = await service.ask({ questions, review: true, context: ctx, signal });
+    if (result === undefined) {
         const details = questionnaireDetails(questions, []);
+        details.unavailable = true;
         return {
             content: [{ type: 'text' as const, text: `需要询问用户（${questions.length} 个问题）：\n${questions.map((q, i) => `${q.label || `问题 ${i + 1}`}：${q.question}\n${q.multiSelect ? '可多选：' : '选项：'}${q.options.join(' / ')}`).join('\n')}` }],
             details,
         };
     }
 
-    const result = await askQuestions(questions, true, ctx, interactions, signal);
     // Esc cancels the submission, including any unsubmitted draft choices.
     const indexedAnswers = questions.map((_question, index) => result && !result.cancelled ? result.answers[index] : undefined);
     const details = questionnaireDetails(questions, indexedAnswers);
@@ -37,6 +39,8 @@ const askQuestion = (pi: ExtensionAPI) => {
     const interactions = new QuestionInteractions((pending) => {
         pi.events?.emit("ask-question:pending", { pending });
     });
+    const service = createQuestionService(pi, interactions);
+    registerCapability(pi, ASK_QUESTION_SERVICE, service);
     pi.on('session_shutdown', () => interactions.shutdown());
     pi.on('session_tree', () => interactions.shutdown());
     pi.on('session_start', () => interactions.shutdown());
@@ -53,7 +57,7 @@ const askQuestion = (pi: ExtensionAPI) => {
 
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             if (params.questions && params.questions.length > 0) {
-                return executeQuestionnaire({ questions: params.questions as AskQuestionInput[] }, ctx, interactions, _signal);
+                return executeQuestionnaire({ questions: params.questions as AskQuestionInput[] }, ctx, service, _signal);
             }
 
             if (typeof params.question !== 'string' || !Array.isArray(params.options)) {
@@ -63,14 +67,14 @@ const askQuestion = (pi: ExtensionAPI) => {
             const options = normalizeOptions(params.options);
             const multiSelect = params.multiSelect === true;
 
-            if (!ctx.hasUI) {
+            const submission = await service.ask({ questions: [{ question: params.question, options, multiSelect }], review: false, context: ctx, signal: _signal });
+            if (submission === undefined) {
                 return {
                     content: [{ type: 'text', text: `需要询问用户：${params.question}\n${multiSelect ? '可多选：' : '选项：'}${options.join(' / ')}` }],
-                    details: { question: params.question, options, answer: null, multiSelect } as AskQuestionDetails,
+                    details: { question: params.question, options, answer: null, multiSelect, unavailable: true } as AskQuestionDetails,
                 };
             }
 
-            const submission = await askQuestions([{ question: params.question, options, multiSelect }], false, ctx, interactions, _signal);
             const result = submission && !submission.cancelled ? submission.answers[0] : null;
 
             if (!result) {
@@ -108,7 +112,6 @@ const askQuestion = (pi: ExtensionAPI) => {
             };
         },
 
-        ...nativeRenderers,
     });
 };
 

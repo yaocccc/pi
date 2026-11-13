@@ -1,64 +1,52 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-
-type Factory<T> = Parameters<ExtensionContext["ui"]["custom"]>[0] extends (...args: infer A) => any
-	? (tui: A[0], theme: A[1], keybindings: A[2], done: (value: T | null) => void) => ReturnType<Parameters<ExtensionContext["ui"]["custom"]>[0]>
-	: never;
-
-/** Shared by single-question and questionnaire UIs; no user answer is sent to Workers. */
+/** Session-owned, frontend-independent FIFO request lifecycle. No answers are sent
+ * to pending observers. Cancellation also settles requests from unresponsive ports.
+ */
 export class QuestionInteractions {
-	private active = new Map<AbortController, Promise<void>>();
-	// Pi's non-overlay custom UI replaces the editor, so only one may own it.
-	private tail: Promise<void> = Promise.resolve();
-	private stopping = false;
-	constructor(private readonly pendingChanged: (count: number) => void = () => {}) {}
-	private reportPending() {
-		// Observers must never prevent a question from opening or finishing.
-		try { this.pendingChanged(this.active.size); } catch {}
-	}
-	async shutdown() {
-		this.stopping = true;
-		try {
-			const active = [...this.active];
-			for (const [controller] of active) controller.abort(new Error("用户交互会话已关闭"));
-			await Promise.all(active.map(([, completed]) => completed));
-		} finally { this.stopping = false; }
-	}
-	async custom<T>(ctx: ExtensionContext, signal: AbortSignal | undefined, factory: Factory<T>): Promise<T | null> {
-		if (!ctx.hasUI || ctx.mode !== "tui") return null;
-		if (this.stopping) throw new Error("用户交互会话已关闭");
-		const controller = new AbortController();
-		let completed!: () => void;
-		this.active.set(controller, new Promise<void>((resolve) => { completed = resolve; }));
-		this.reportPending();
-		const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-		const previous = this.tail;
-		let release!: () => void;
-		const released = new Promise<void>((resolve) => { release = resolve; });
-		// Cancelling a queued entry must not let its successor overtake the owner.
-		this.tail = previous.then(() => released);
-		let abort!: () => void;
-		const aborted = new Promise<never>((_, reject) => { abort = () => reject(combined.reason); });
-		combined.addEventListener("abort", abort, { once: true });
-		let detach = () => {};
-		try {
-			if (combined.aborted) throw combined.reason;
-			await Promise.race([previous, aborted]);
-			if (combined.aborted) throw combined.reason;
-			const value = await ctx.ui.custom<T | null>((tui, theme, keys, done) => {
-				let settled = false;
-				const finish = (value: T | null) => { if (settled) return; settled = true; detach(); done(value); };
-				const abort = () => finish(null);
-				combined.addEventListener("abort", abort, { once: true });
-				detach = () => combined.removeEventListener("abort", abort);
-				const component = factory(tui, theme, keys, finish);
-				if (combined.aborted) queueMicrotask(abort);
-				return component;
-			});
-			if (combined.aborted) throw combined.reason;
-			return value ?? null; // Unsupported custom UI must never fabricate a choice.
-		} finally {
-			detach(); combined.removeEventListener("abort", abort);
-			this.active.delete(controller); this.reportPending(); release(); completed();
-		}
-	}
+    private active = new Map<AbortController, Promise<void>>();
+    private tail: Promise<void> = Promise.resolve();
+    private closing = 0;
+    private readonly pendingChanged: (count: number) => void;
+    constructor(pendingChanged: (count: number) => void = () => {}) { this.pendingChanged = pendingChanged; }
+    get pending(): number { return this.active.size; }
+    private reportPending() {
+        try { this.pendingChanged(this.pending); } catch { /* Observers cannot own request lifetime. */ }
+    }
+    async shutdown() {
+        this.closing++;
+        try {
+            const active = [...this.active];
+            for (const [controller] of active) controller.abort(new Error('用户交互会话已关闭'));
+            await Promise.all(active.map(([, completed]) => completed));
+        } finally { this.closing--; }
+    }
+    async run<T>(signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+        if (this.closing) throw new Error('用户交互会话已关闭');
+        const controller = new AbortController();
+        let completed!: () => void;
+        this.active.set(controller, new Promise<void>((resolve) => { completed = resolve; }));
+        this.reportPending();
+        const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+        const previous = this.tail;
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => { release = resolve; });
+        // Aborting a queued request must not let its successor overtake the owner.
+        this.tail = previous.then(() => released);
+        let abort!: () => void;
+        const aborted = new Promise<never>((_, reject) => { abort = () => reject(combined.reason); });
+        combined.addEventListener('abort', abort, { once: true });
+        try {
+            if (combined.aborted) throw combined.reason;
+            await Promise.race([previous, aborted]);
+            if (combined.aborted) throw combined.reason;
+            const value = await Promise.race([operation(combined), aborted]);
+            if (combined.aborted) throw combined.reason;
+            return value;
+        } finally {
+            combined.removeEventListener('abort', abort);
+            this.active.delete(controller);
+            this.reportPending();
+            release();
+            completed();
+        }
+    }
 }

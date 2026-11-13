@@ -10,9 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/internal/extensions/worker"
 	"pi-goui/internal/render"
 	"pi-goui/internal/session"
-	"pi-goui/internal/session/worker"
 )
 
 // Build recording fixtures through the domain protocol, not replay internals.
@@ -54,14 +54,14 @@ func conversationFixture(t *testing.T) (*Model, *workerSession) {
 	receiveWorkerCommand(t, m, m.openWorkerSession(p, "w", "index:batch:0"))
 	w := m.inspector.worker
 	args, _ := json.Marshal(map[string]string{"path": "large.go", "content": "FIRST_SOURCE\n" + strings.Repeat("var x = \"中文 👩‍💻\"\n", 100) + "LAST_SOURCE"})
-	w.replay = replayFixtureItems([]session.Item{
+	w.Replay = replayFixtureItems([]session.Item{
 		{ID: "u", Role: "user", Text: "user message"},
 		{ID: "a", Role: "assistant", Text: "assistant **message**", Thinking: "PRIVATE_THINKING"},
 		{ID: "write", Role: "tool", ToolName: "write", Arguments: args, HasResult: true},
 		{ID: "read", Role: "tool", ToolName: "read", Text: "FIRST_RESULT\n" + strings.Repeat("middle\n", 100) + "LAST_RESULT", HasResult: true},
 		{ID: "nested", Role: "tool", ToolName: "worker", Details: json.RawMessage(`{"kind":"worker-ui","batchId":"nested","tasks":[{"index":0,"title":"Nested task","mode":"implement","preset":"deep","status":"completed"}]}`), HasResult: true},
 	})
-	w.refreshVisibleMessages(w.replay.View())
+	w.RefreshVisibleMessages(w.Replay.View())
 	m.inspectorRows()
 	return m, w
 }
@@ -79,14 +79,14 @@ func TestConversationUsesMainDocumentAndFolds(t *testing.T) {
 	parent := m.current()
 	before, _ := json.Marshal(parent.state)
 	check := func() {
-		want := render.Transcript(w.replay.View().Items, m.cfg.Theme, conversationOptions(w.replay.View(), m.inspector.cache.width, w.expanded, w.showThinking, w.folds))
-		if !reflect.DeepEqual(w.doc, want) {
+		want := render.Transcript(w.Replay.View().Items, m.cfg.Theme, conversationOptions(w.Replay.View(), m.inspector.cache.width, w.Expanded, w.ShowThinking, w.Folds))
+		if !reflect.DeepEqual(w.Doc, want) {
 			t.Fatal("inspector does not use ordinary transcript document")
 		}
 	}
 	check()
 	var group render.Block
-	for _, b := range w.doc.Blocks {
+	for _, b := range w.Doc.Blocks {
 		if b.Role == "toolGroup" {
 			group = b
 			break
@@ -96,32 +96,32 @@ func TestConversationUsesMainDocumentAndFolds(t *testing.T) {
 		t.Fatal("calls not initially collapsed")
 	}
 	clickConversationRow(t, m, group.Start)
-	if !w.folds[group.ID] {
+	if !w.Folds[group.ID] {
 		t.Fatal("calls click did not expand")
 	}
 	check()
 	for _, id := range []string{"tool:write", "tool:read", "tool:nested"} {
 		found := false
-		for _, b := range w.doc.Blocks {
+		for _, b := range w.Doc.Blocks {
 			if b.ID == id {
 				clickConversationRow(t, m, b.Start)
 				found = true
 				break
 			}
 		}
-		if !found || !w.folds[id] {
+		if !found || !w.Folds[id] {
 			t.Fatalf("tool %s did not expand", id)
 		}
 		check()
 	}
 	// Body clicks use the parent's fold range; internal worker task cards stay fixed.
-	for _, b := range w.doc.Blocks {
+	for _, b := range w.Doc.Blocks {
 		if b.InspectorTask != "" {
 			clickConversationRow(t, m, b.Start+1)
 			break
 		}
 	}
-	if w.folds["tool:nested"] {
+	if w.Folds["tool:nested"] {
 		t.Fatal("worker body did not collapse enclosing batch")
 	}
 	after, _ := json.Marshal(parent.state)
@@ -131,24 +131,24 @@ func TestConversationUsesMainDocumentAndFolds(t *testing.T) {
 }
 func TestConversationDetailDrilldownBackAndCopy(t *testing.T) {
 	m, w := conversationFixture(t)
-	w.expanded = true
-	w.revision++
+	w.Expanded = true
+	w.Revision++
 	m.inspectorRows()
-	saved := w.doc.Text
+	saved := w.Doc.Text
 	m.sidebarHistory.pointerKnown = true
 	var target conversationTarget
-	for _, candidate := range w.targets {
-		if candidate.id == "tool:write" {
+	for _, candidate := range w.Targets {
+		if candidate.ID == "tool:write" {
 			target = candidate
 			break
 		}
 	}
-	if target.id == "" {
+	if target.ID == "" {
 		t.Fatal("missing full-result target")
 	}
-	m.inspector.offset = min(target.rect.y, max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+	m.inspector.offset = min(target.Rect.Y, max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
 	left, _ := m.inspectorBounds()
-	v := tea.Mouse{Button: tea.MouseLeft, X: left + m.inspectorInset() + target.rect.x, Y: 2 + target.rect.y - m.inspector.offset}
+	v := tea.Mouse{Button: tea.MouseLeft, X: left + m.inspectorInset() + target.Rect.X, Y: 2 + target.Rect.Y - m.inspector.offset}
 	m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = v.X, v.Y
 	m.mouse(v)
 	m.mouseRelease(v)
@@ -160,19 +160,19 @@ func TestConversationDetailDrilldownBackAndCopy(t *testing.T) {
 		t.Fatal("full source unavailable")
 	}
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.inspector.worker != w || m.inspector.parent != nil || w.doc.Text != saved || !w.expanded {
+	if m.inspector.worker != w || m.inspector.parent != nil || w.Doc.Text != saved || !w.Expanded {
 		t.Fatal("back lost conversation state")
 	}
 	// A selection never toggles a block, and copies only Content spans.
-	for _, b := range w.doc.Blocks {
+	for _, b := range w.Doc.Blocks {
 		if b.ID == "tool:write" {
 			m.inspector.offset = min(b.Start, max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
 			v = tea.Mouse{Button: tea.MouseLeft, X: left + m.inspectorInset() + 2, Y: 2 + b.Start - m.inspector.offset}
-			revision := w.revision
+			revision := w.Revision
 			m.mouse(v)
 			m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: v.X + 3, Y: v.Y})
 			m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: v.X + 3, Y: v.Y})
-			if w.revision != revision {
+			if w.Revision != revision {
 				t.Fatal("selection folded block")
 			}
 			break
@@ -184,32 +184,32 @@ func TestConversationStreamInvalidationAndUnknownEvents(t *testing.T) {
 	receiveWorkerCommand(t, m, m.openWorkerSession(p, "w", "index:batch:0"))
 	w := m.inspector.worker
 	deliver := func(raw string) {
-		m.receiveWorkerTranscript(workerTranscriptMsg{owner: w, batch: worker.Batch{Records: []json.RawMessage{json.RawMessage(raw)}}})
+		m.receiveWorkerTranscript(workerTranscriptMsg{Owner: w, Batch: worker.Batch{Records: []json.RawMessage{json.RawMessage(raw)}}})
 		m.inspectorRows()
 	}
 	deliver(`{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":1}}`)
 	deliver(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"FIRST_STREAM"}}`)
-	if !strings.Contains(ansi.Strip(w.doc.Text), "FIRST_STREAM") {
+	if !strings.Contains(ansi.Strip(w.Doc.Text), "FIRST_STREAM") {
 		t.Fatal("delta not rendered")
 	}
 	rows := m.inspector.rows
-	revision := w.revision
+	revision := w.Revision
 	deliver(`{"type":"turn_end"}`)
-	if revision != w.revision || &rows[0] != &m.inspector.rows[0] {
+	if revision != w.Revision || &rows[0] != &m.inspector.rows[0] {
 		t.Fatal("nonvisual event rebuilt transcript")
 	}
 	deliver(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" NEXT"}}`)
-	if !strings.Contains(ansi.Strip(w.doc.Text), "NEXT") {
+	if !strings.Contains(ansi.Strip(w.Doc.Text), "NEXT") {
 		t.Fatal("next delta stale")
 	}
 }
 func TestConversationNestedSummaryFallbackReturns(t *testing.T) {
 	m, w := conversationFixture(t)
-	w.expanded = true
-	w.revision++
+	w.Expanded = true
+	w.Revision++
 	m.inspectorRows()
 	var id string
-	for _, b := range w.doc.Blocks {
+	for _, b := range w.Doc.Blocks {
 		if b.InspectorTask != "" {
 			id = b.ID
 			break
@@ -235,31 +235,31 @@ func TestConversationThinkingKeysAndNestedReturn(t *testing.T) {
 	m, w := conversationFixture(t)
 	parent := m.current()
 	oldThinking, oldExpanded := parent.showThinking, parent.expanded
-	oldWorkerExpanded := w.expanded
+	oldWorkerExpanded := w.Expanded
 	m.sidebarHistory.pointerKnown = true
 	m.sidebarHistory.pointerX = m.mainWidth() + 3
 	m.sidebarHistory.pointerY = 5
 	m.key(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	m.inspectorRows()
-	if w.showThinking || parent.showThinking != oldThinking || strings.Contains(ansi.Strip(w.doc.Text), "PRIVATE_THINKING") {
+	if w.ShowThinking || parent.showThinking != oldThinking || strings.Contains(ansi.Strip(w.Doc.Text), "PRIVATE_THINKING") {
 		t.Fatal("thinking key not isolated")
 	}
 	m.key(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	m.inspectorRows()
-	if w.expanded != oldWorkerExpanded || parent.expanded != oldExpanded {
+	if w.Expanded != oldWorkerExpanded || parent.expanded != oldExpanded {
 		t.Fatal("removed expand-all shortcut changed a conversation")
 	}
 	// The removed shortcut no longer opens tools; expand the fixture explicitly
 	// so the nested-return checks remain independent of keyboard dispatch.
-	w.expanded = true
-	w.revision++
-	w.replay.Apply(worker.ReplayRead{Batch: worker.Batch{Records: []json.RawMessage{
+	w.Expanded = true
+	w.Revision++
+	w.Replay.Apply(worker.ReplayRead{Batch: worker.Batch{Records: []json.RawMessage{
 		json.RawMessage(`{"type":"tool_execution_end","toolCallId":"nested","toolName":"worker","result":{"details":{"kind":"worker-ui","batchId":"nested","tasks":[{"index":0,"title":"Nested task","status":"running","transcript":{"version":1,"id":"` + workerPageID + `"}}]}}}`),
 	}}})
-	w.refreshVisibleMessages(w.replay.View())
+	w.RefreshVisibleMessages(w.Replay.View())
 	m.inspectorRows()
 	var id string
-	for _, b := range w.doc.Blocks {
+	for _, b := range w.Doc.Blocks {
 		if b.InspectorTask != "" {
 			id = b.ID
 			break
@@ -268,7 +268,7 @@ func TestConversationThinkingKeysAndNestedReturn(t *testing.T) {
 	if id == "" {
 		t.Fatal("no nested task block")
 	}
-	w.next = time.Now().Add(time.Hour)
+	w.Next = time.Now().Add(time.Hour)
 	cmd := m.openConversationDetail(id)
 	child := m.inspector.worker
 	if child == nil || child == w || m.inspector.parent == nil {
@@ -281,7 +281,7 @@ func TestConversationThinkingKeysAndNestedReturn(t *testing.T) {
 	if cmd != nil {
 		m.receiveWorkerTranscript(cmd().(workerTranscriptMsg))
 	}
-	if child.pending == false {
+	if child.Pending == false {
 		t.Fatal("closed child accepted a stale read")
 	}
 	if m.inspector.worker != w || len(m.tabs) != 1 {
@@ -293,7 +293,7 @@ func BenchmarkWorkerConversationBatch(b *testing.B) {
 	for _, count := range []int{200, 1000} {
 		b.Run(fmt.Sprint(count), func(b *testing.B) {
 			m := resizeBenchmarkModel(b, "worker", 1)
-			w := &workerSession{revision: 1, showThinking: true}
+			w := &workerSession{Revision: 1, ShowThinking: true}
 			m.inspector.worker = w
 			var entries []map[string]any
 			for i := 0; i < count; i++ {
@@ -304,11 +304,11 @@ func BenchmarkWorkerConversationBatch(b *testing.B) {
 				entries = append(entries, map[string]any{"type": "message", "id": fmt.Sprint(i), "parentId": parentID, "message": map[string]any{"role": "assistant", "timestamp": i + 1, "content": []map[string]string{{"type": "text", "text": "A short completed message 中文"}}}})
 			}
 			raw, _ := json.Marshal(map[string]any{"type": "worker_transcript_header", "entries": entries})
-			w.replay.Apply(worker.ReplayRead{Batch: worker.Batch{Reset: true, Records: []json.RawMessage{raw}}})
-			if w.replay.View().MessageCount != count || len(w.replay.View().Items) != 0 {
+			w.Replay.Apply(worker.ReplayRead{Batch: worker.Batch{Reset: true, Records: []json.RawMessage{raw}}})
+			if w.Replay.View().MessageCount != count || len(w.Replay.View().Items) != 0 {
 				b.Fatal("inherited fixture leaked into the task conversation")
 			}
-			w.refreshVisibleMessages(w.replay.View())
+			w.RefreshVisibleMessages(w.Replay.View())
 			m.inspectorRows()
 			records := []json.RawMessage{json.RawMessage(`{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":999999}}`)}
 			for i := 0; i < 100; i++ {
@@ -317,9 +317,9 @@ func BenchmarkWorkerConversationBatch(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				m.receiveWorkerTranscript(workerTranscriptMsg{owner: w, batch: worker.Batch{Records: records}})
+				m.receiveWorkerTranscript(workerTranscriptMsg{Owner: w, Batch: worker.Batch{Records: records}})
 				m.View()
-				w.next = time.Time{}
+				w.Next = time.Time{}
 			}
 		})
 	}

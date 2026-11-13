@@ -4,7 +4,6 @@
  */
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { hiddenRenderer } from "../../tui.ts";
 import { Type } from "typebox";
 import { PLAN_STATUSES, type PlanStep } from "./plan.ts";
 
@@ -57,7 +56,6 @@ export function registerOnlineTools(pi: ExtensionAPI, handlers: OnlineToolHandle
 			"Keep at most one step in_progress and mark finished steps completed.",
 			"When completing a step, include concise progress evidence when available.",
 		],
-		renderShell: "self",
 		parameters: Type.Object(
 			{
 				steps: Type.Array(planStepSchema, { minItems: 1, maxItems: 128 }),
@@ -74,7 +72,5 @@ export function registerOnlineTools(pi: ExtensionAPI, handlers: OnlineToolHandle
 				signal,
 				context,
 			}),
-		renderCall: hiddenRenderer,
-		renderResult: hiddenRenderer,
 	});
 }

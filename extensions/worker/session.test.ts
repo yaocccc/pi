@@ -12,8 +12,7 @@ import { acquireSlot, baseExecution, createWorkerOwner, runPiWorker } from "./pr
 import { buildTaskPrompt } from "./prompt.ts";
 import { captureWorkerSession, workerSessionArgs, type WorkerSessionSnapshot } from "./session.ts";
 import type { Route, WorkerTask } from "./types.ts";
-import { compactWorkerResult, emptyWorkerUsage } from "./data.ts";
-import { renderWorkerDetails } from "./ui.ts";
+import { compactWorkerResult } from "./data.ts";
 
 const task: WorkerTask = { mode: "scout", preset: "normal", sessionMode: "fork", objective: "fixture" };
 const route: Route = { requestedPreset: "normal", resolvedPreset: "normal", modelId: "fixture/local", provider: "fixture", thinking: "high", routeReason: [] };
@@ -230,7 +229,7 @@ test("mixed queued tasks share admission snapshot; new tasks do not inherit it",
 	process.env.PI_WORKER_DEPTH = "0";
 	t.after(() => { if (oldDepth === undefined) delete process.env.PI_WORKER_DEPTH; else process.env.PI_WORKER_DEPTH = oldDepth; });
 	const preset = { model: "fixture/local", thinking: "high" as const };
-	workerExtension({ on: (event: string, handler: any) => handlers.set(event, handler), registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, events: { emit() {} } } as any, {
+	workerExtension({ on: (event: string, handler: any) => handlers.set(event, handler), registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, events: { emit() {}, on() { return () => {}; } } } as any, {
 		loadRoutingConfig: () => ({ config: { ...DEFAULT_OPTIONS, maxConcurrentWorkers: 1, fast: preset, normal: preset, deep: preset }, warnings: [], path: "fixture" }),
 		executeTask: async (...args) => {
 			seen.push(args[9]);
@@ -249,11 +248,8 @@ test("mixed queued tasks share admission snapshot; new tasks do not inherit it",
 	assert.deepEqual(result.details.tasks.map((item: any) => item.sessionMode), ["fork", "new", "fork"]);
 });
 
-test("execution compaction and UI preserve the fork indicator", () => {
+test("execution compaction preserves the fork indicator", () => {
 	for (const level of ["standard", "minimal"] as const) {
 		assert.equal(compactWorkerResult({ status: "completed", execution: baseExecution({ ...task, sessionMode: "fork" }, route, 1, []) }, level).execution.session_mode, "fork");
 	}
-	const theme = { fg: (_: string, text: string) => text } as any;
-	const details = { kind: "worker-ui" as const, startedAt: 1, limit: 1, total: 1, completed: 0, tasks: [{ ...task, index: 0, sessionMode: "fork" as const, status: "queued" as const, requestedPreset: "normal" as const, attempt: 0, phase: "queued", activities: [], toolCalls: 0, usage: emptyWorkerUsage() }] };
-	assert.match(renderWorkerDetails(details, theme).render(100).join("\n"), /normal · fork/);
 });

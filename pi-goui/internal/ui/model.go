@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"pi-goui/internal/codex"
 	"pi-goui/internal/config"
+	"pi-goui/internal/extensions/hostui"
 	"pi-goui/internal/input"
 	"pi-goui/internal/render"
 	"pi-goui/internal/rpc"
@@ -26,6 +27,7 @@ type Options struct {
 	PiArgs                []string
 }
 type tab struct {
+	codex                                                                          hostui.CodexState
 	todoScroll                                                                     int
 	todoRevision                                                                   uint64
 	todoExpiry                                                                     todoExpiryState
@@ -66,10 +68,7 @@ type tab struct {
 	sessionGuard            sessionGuard
 }
 type command struct{ Name, Description string }
-type option struct {
-	Label, Detail, Value string
-	Data                 any
-}
+type option = hostui.Option
 type dialog struct {
 	themeBefore                      *config.Theme
 	cwd                              *cwdCompletion
@@ -118,9 +117,8 @@ type Model struct {
 	imagePreviews                  imagePreviewer
 	lastEscape, lastClear          time.Time
 	frame                          int
-	codexFastLabel                 string
-	codexFastChecked               time.Time
 	codexFastHover                 bool
+	codexFastChoice                string
 }
 
 // The pool also owns clients created by a tea.Cmd that finishes during shutdown.
@@ -179,7 +177,6 @@ func New(opts Options, cfg config.Config) *Model {
 	m := &Model{opts: opts, cfg: cfg, width: 100, height: 30, pool: &clientPool{clients: map[*rpc.Client]bool{}}}
 	m.imagePreviews = &imagepreview.Store{}
 	m.quota = codex.New(cfg.AgentDir)
-	m.refreshCodexFast(time.Now())
 	m.updates.reader = newUpdateReader()
 	m.addTab(opts.SessionFile)
 	return m
@@ -763,8 +760,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t := m.byID(v.id); t != nil && t.todoExpiry.generation == v.generation && t.todoExpiry.revision == t.state.PlanRevision && t.todoExpiry.file == t.state.File {
 			t.todoExpiry.hidden = true
 		}
+	case codexFastMsg:
+		m.codexFastResult(v)
 	case tickMsg:
-		m.refreshCodexFast(time.Time(v))
 		m.frame++
 		now := time.Time(v)
 		cmds = append(cmds, m.pollWorkerSession(now))
@@ -783,7 +781,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		cmds = append(cmds, tick(), m.requestGit(now), m.requestSidebarHistory(now), m.pollQuota(now))
+		cmds = append(cmds, tick(), m.requestGit(now), m.requestSidebarHistory(now), m.pollQuota(now), m.requestCodexFast(m.current(), "", now))
 	default:
 		if t := m.current(); t != nil {
 			cmds = append(cmds, m.editTarget(t, "", msg))

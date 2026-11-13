@@ -4,7 +4,7 @@
  * Pi 1.0.4 background generation and boundary-draft lifecycle adapter. No abort/settled-message continuation.
  */
 import { createHash } from "node:crypto";
-import { notifyFrontendEvent } from "../../../shared/frontend.ts";
+import { notifyFrontendEvent } from "../../frontend.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
@@ -125,7 +125,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 				// makes historical RPC views independent of ephemeral UI notifications.
 				submittedSummary = undefined;
 				pi.appendEntry(ONLINE_METRICS_ENTRY, metrics);
-				if (ctx.hasUI) notifyFrontendEvent(ctx, { name: "context.applied", data: metrics });
+				notifyFrontendEvent(pi, ctx, { name: "context.applied", data: metrics });
 			}
 			submittedSummary = undefined;
 		};
@@ -408,10 +408,10 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 							continue: remaining.length > 0,
 						};
 					};
-					notifyFrontendEvent(ctx, { name: "context.ready", data: { generationMs } });
+					notifyFrontendEvent(pi, ctx, { name: "context.ready", data: { generationMs } });
 				} catch (error) {
 					// Optional optimization: no ghost turn and no notification for obsolete jobs.
-					if (valid()) notifyFrontendEvent(ctx, { name: "context.failed", data: { durationMs: performance.now() - startedAt, reason: summaryFailureReason(error) } });
+					if (valid()) notifyFrontendEvent(pi, ctx, { name: "context.failed", data: { durationMs: performance.now() - startedAt, reason: summaryFailureReason(error) } });
 				} finally {
 					if (controller === local && !takeReady) controller = undefined;
 				}

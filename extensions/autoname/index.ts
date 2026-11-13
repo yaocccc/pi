@@ -1,6 +1,7 @@
+import { isPrimarySession } from "./session-policy.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadAutonameConfig } from "./config.ts";
-import { notifyFrontendEvent } from "../shared/frontend.ts";
+import { notifyFrontendEvent } from "./frontend.ts";
 import {
     AUTONAME_ENTRY_TYPE,
     extractNamingMessages,
@@ -135,7 +136,7 @@ export default function autoname(pi: ExtensionAPI): void {
             pi.setSessionName(proposed.name);
             pi.appendEntry(AUTONAME_ENTRY_TYPE, { version: 1, kind: "set-name", name: proposed.name });
             if (config.notify) {
-                notifyFrontendEvent(ctx, { name: "autoname.renamed", data: proposed });
+                notifyFrontendEvent(pi, ctx, { name: "autoname.renamed", data: proposed });
             }
         } catch (error) {
             if (!controller.signal.aborted) logFailure("naming request failed", error);
@@ -155,7 +156,7 @@ export default function autoname(pi: ExtensionAPI): void {
     });
 
     pi.on("agent_settled", (_event, ctx) => {
-        if (!ctx.hasUI) return;
+        if (!isPrimarySession()) return;
         void nameCurrentSession(ctx);
     });
 

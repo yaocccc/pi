@@ -9,7 +9,7 @@ import (
 )
 
 func TestWorkerToolsRecentThreeWithoutFold(t *testing.T) {
-	card := workerCard{toolCalls: 5}
+	card := workerCard{ToolCalls: 5}
 	for i := range 5 {
 		status := "completed"
 		if i == 3 {
@@ -18,8 +18,8 @@ func TestWorkerToolsRecentThreeWithoutFold(t *testing.T) {
 		if i == 4 {
 			status = "running"
 		}
-		card.activities = append(card.activities, map[string]any{"type": "tool", "label": fmt.Sprintf("call%d", i), "detail": "path 中文", "status": status})
-		card.activities = append(card.activities, map[string]any{"type": "phase", "detail": "not a step"})
+		card.Activities = append(card.Activities, map[string]any{"type": "tool", "label": fmt.Sprintf("call%d", i), "detail": "path 中文", "status": status})
+		card.Activities = append(card.Activities, map[string]any{"type": "phase", "detail": "not a step"})
 	}
 	rows := workerToolRows(card, testTheme(), 100)
 	plain := ansi.Strip(strings.Join(rows, "\n"))
@@ -50,7 +50,7 @@ func TestWorkerToolsRecentThreeWithoutFold(t *testing.T) {
 	for _, width := range []int{1, 2, 4, 8, 20, 40, 100} {
 		checkWidth(t, strings.Join(workerToolRows(card, testTheme(), width), "\n"), width)
 	}
-	card.toolCalls = 12
+	card.ToolCalls = 12
 	plain = ansi.Strip(strings.Join(workerToolRows(card, testTheme(), 100), "\n"))
 	if !strings.Contains(plain, "≡ Activity") || !strings.Contains(plain, "9 items (已折叠)") {
 		t.Fatal("invented outcomes for unrecorded calls: " + plain)
@@ -58,7 +58,7 @@ func TestWorkerToolsRecentThreeWithoutFold(t *testing.T) {
 }
 
 func TestWorkerThinkingMergedIntoRecentSteps(t *testing.T) {
-	card := workerCard{toolCalls: 2, activities: []any{
+	card := workerCard{ToolCalls: 2, Activities: []any{
 		map[string]any{"type": "thinking", "detail": "**Earlier thought**"},
 		map[string]any{"type": "tool", "label": "read", "detail": "old.go", "status": "completed"},
 		map[string]any{"type": "tool", "label": "edit", "detail": "new.go", "status": "completed"},
@@ -91,7 +91,7 @@ func TestWorkerThinkingMergedIntoRecentSteps(t *testing.T) {
 }
 
 func TestWorkerActivityItemTruncation(t *testing.T) {
-	card := workerCard{activities: []any{
+	card := workerCard{Activities: []any{
 		map[string]any{"type": "thinking", "detail": strings.Repeat("思考", 100)},
 		map[string]any{"type": "tool", "label": "bash", "detail": strings.Repeat("参数", 100), "status": "running"},
 		map[string]any{"type": "tool", "label": "read", "detail": strings.Repeat("path", 100), "status": "failed"},
@@ -108,7 +108,7 @@ func TestWorkerActivityItemTruncation(t *testing.T) {
 			}
 		}
 		if !strings.HasSuffix(ansi.Strip(rows[2]), " (运行中…)") || !strings.HasSuffix(ansi.Strip(rows[3]), " (失败)") {
-			t.Fatalf("truncation lost status: %v", rows)
+			t.Fatalf("truncation lost Status: %v", rows)
 		}
 	}
 }
@@ -117,7 +117,7 @@ func TestWorkerToolsMissingActivities(t *testing.T) {
 	if len(workerToolRows(workerCard{}, testTheme(), 80)) != 0 {
 		t.Fatal("invented tool calls")
 	}
-	rows := workerToolRows(workerCard{toolCalls: 4}, testTheme(), 80)
+	rows := workerToolRows(workerCard{ToolCalls: 4}, testTheme(), 80)
 	plain := ansi.Strip(strings.Join(rows, "\n"))
 	if !strings.Contains(plain, "≡ Activity") || strings.Contains(plain, "✓") || strings.Contains(plain, "✗") {
 		t.Fatal("fabricated outcomes without activity data")

@@ -8,4 +8,3 @@ export const estimateToolTokens = (args: unknown, result: ToolResult): number =>
         role: 'toolResult', toolCallId: '', toolName: '', content: result.content,
         isError: result.isError ?? false, timestamp: 0,
     });
-

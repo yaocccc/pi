@@ -1,0 +1,399 @@
+import assert from "node:assert/strict";
+import test, { after } from "node:test";
+import { EventEmitter } from "node:events";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { Container } from "@earendil-works/pi-tui";
+import askQuestion from "../../ask-question/index.ts";
+import { registerAskQuestionUI } from "./index.ts";
+
+// Generic RPC tests must not inherit the frontend identity of the test runner.
+const uiProtocol = process.env.PI_UI_PROTOCOL;
+const goProtocol = process.env.PI_GOUI_PROTOCOL;
+const goQuestion = process.env.PI_GOUI_ASK_QUESTION;
+delete process.env.PI_UI_PROTOCOL;
+delete process.env.PI_GOUI_PROTOCOL;
+delete process.env.PI_GOUI_ASK_QUESTION;
+after(() => {
+	if (uiProtocol === undefined) delete process.env.PI_UI_PROTOCOL;
+	else process.env.PI_UI_PROTOCOL = uiProtocol;
+	if (goProtocol === undefined) delete process.env.PI_GOUI_PROTOCOL;
+	else process.env.PI_GOUI_PROTOCOL = goProtocol;
+	if (goQuestion === undefined) delete process.env.PI_GOUI_ASK_QUESTION;
+	else process.env.PI_GOUI_ASK_QUESTION = goQuestion;
+});
+
+// Use installed Pi's real editor-replacing custom lifecycle, not concurrent UI mocks.
+const piRoot = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
+const { InteractiveMode } = await import(pathToFileURL(join(piRoot, "modes/interactive/interactive-mode.js")).href);
+const { initTheme } = await import(pathToFileURL(join(piRoot, "modes/interactive/theme/theme.js")).href);
+initTheme("dark", false);
+const single = { question: "Choose?", options: ["A", "B"] };
+const multi = { questions: [{ question: "One?", options: ["A", "B"] }, { question: "Two?", options: ["C", "D"] }] };
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+function harness() {
+	const tools = new Map<string, any>();
+	const handlers = new Map<string, Array<(...args: any[]) => any>>();
+	const events = new EventEmitter();
+	const pi = { registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerToolRenderer() {},
+		on: (name: string, handler: any) => handlers.set(name, [...handlers.get(name) ?? [], handler]), events };
+	askQuestion(pi as any);
+	registerAskQuestionUI(pi as any);
+	const components: any[] = [];
+	let uiMode: "normal" | "throw" | "undefined" = "normal";
+	let opens = 0; let closes = 0;
+	let focused: any;
+	const editor = { getText: () => "draft", setText() {}, render: () => [], invalidate() {} };
+	// Pi 1.5's custom lifecycle delegates editor replacement to dialog-stack helpers.
+	const surface = Object.assign(Object.create(InteractiveMode.prototype), {
+		editor, editorContainer: new Container(), keybindings: {}, disposeActiveSelector() {},
+		extensionDialogs: [], programStatus: { setBlocked() {} },
+		ui: { requestRender() {}, setFocus: (component: any) => { focused = component; }, terminal: { rows: 40, columns: 100 } },
+	});
+	surface.editorContainer.addChild(editor);
+	const ctx = { cwd: process.cwd(), hasUI: true, mode: "tui", sessionManager: { getBranch: () => [] }, ui: {
+		custom: (factory: any) => {
+			opens++;
+			if (uiMode === "throw") throw new Error("UI failed");
+			if (uiMode === "undefined") return undefined;
+			return InteractiveMode.prototype.showExtensionCustom.call(surface, (tui: any, theme: any, keys: any, done: any) => {
+				const component = factory(tui, theme, keys, (value: unknown) => { closes++; done(value); });
+				components.push(component);
+				return component;
+			});
+		},
+	} };
+	const call = (params: any, signal?: AbortSignal) => tools.get("ask_question").execute("human", params, signal, undefined, ctx);
+	const event = async (name: string) => { for (const fn of handlers.get(name) ?? []) await fn({}, ctx); };
+	return { pi, ctx, tools, components, call, event, surface, editor, input: (key: string) => focused.handleInput(key), setUiMode: (mode: typeof uiMode) => { uiMode = mode; }, opens: () => opens, closes: () => closes };
+}
+
+test("explicit waiting snapshots include queued questions and clear after answer/cancellation", async () => {
+	const h = harness();
+	const states: unknown[] = [];
+	h.pi.events.on("ask-question:pending", (data) => states.push(data));
+	const first = h.call(single);
+	const controller = new AbortController();
+	const second = h.call(single, controller.signal);
+	const rejected = assert.rejects(second);
+	await flush();
+	assert.deepEqual(states, [{ pending: 1 }, { pending: 2 }]);
+	controller.abort(new Error("cancel queued"));
+	await rejected;
+	assert.deepEqual(states.at(-1), { pending: 1 });
+	h.input("\r");
+	await first;
+	assert.deepEqual(states.at(-1), { pending: 0 });
+});
+
+test("a failing pending observer cannot break ordinary Pi question input or cleanup", async () => {
+	const h = harness();
+	h.pi.events.on("ask-question:pending", () => { throw new Error("observer failure"); });
+	const first = h.call(single);
+	await flush();
+	h.input("\r");
+	assert.equal((await first).details.answer, "A");
+	const next = h.call(single);
+	await flush();
+	h.input("\x1b");
+	assert.equal((await next).details.answer, null);
+	assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+});
+
+function rpcHarness(responses: { select?: Array<string | undefined>; input?: Array<string | undefined> } = {}) {
+	const tools = new Map<string, any>();
+	const handlers = new Map<string, Array<(...args: any[]) => any>>();
+	const calls: Array<{ method: string; args: any[] }> = [];
+	const pi = {
+		registerTool: (tool: any) => tools.set(tool.name, tool),
+		registerCommand() {}, registerToolRenderer() {}, events: new EventEmitter(),
+		on: (name: string, handler: any) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
+	};
+	askQuestion(pi as any);
+	registerAskQuestionUI(pi as any);
+	const ctx = {
+		cwd: process.cwd(), hasUI: true, mode: "rpc", sessionManager: { getBranch: () => [] },
+		ui: {
+			custom: () => { throw new Error("RPC must not use custom UI"); },
+			select: async (...args: any[]) => { calls.push({ method: "select", args }); return responses.select?.shift(); },
+			input: async (...args: any[]) => { calls.push({ method: "input", args }); return responses.input?.shift(); },
+			notify: (...args: any[]) => calls.push({ method: "notify", args }),
+		},
+	};
+	return {
+		ctx, calls,
+		call: (params: any, signal?: AbortSignal) => tools.get("ask_question").execute("human", params, signal, undefined, ctx),
+	};
+}
+
+test("RPC single-select supports fixed and custom answers without custom UI", async () => {
+	const fixed = rpcHarness({ select: ["B"] });
+	assert.equal((await fixed.call(single)).details.answer, "B");
+	assert.deepEqual(fixed.calls.map(({ method }) => method), ["select"]);
+
+	const custom = rpcHarness({ select: ["自己输入…"], input: [" custom "] });
+	const result = await custom.call(single);
+	assert.equal(result.details.answer, "custom");
+	assert.equal(result.details.wasCustom, true);
+	assert.deepEqual(custom.calls.map(({ method }) => method), ["select", "input"]);
+});
+
+test("RPC multi-select toggles fixed choices, appends custom input and validates empty submission", async () => {
+	const h = rpcHarness({
+		select: ["完成（已选 0 项）", "[ ] B", "[ ] A", "自己输入…", "完成（已选 3 项）"],
+		input: [" custom "],
+	});
+	const result = await h.call({ question: "Choose?", options: ["A", "B"], multiSelect: true });
+	assert.deepEqual(result.details.answer, ["A", "B", "custom"]);
+	assert.deepEqual(result.details.customAnswers, ["custom"]);
+	assert.equal(result.details.wasCustom, false);
+	assert.equal(h.calls.filter(({ method }) => method === "notify").length, 1);
+});
+
+test("RPC questionnaire asks each labeled question and cancellation discards partial answers", async () => {
+	const completed = rpcHarness({ select: ["A", "D"] });
+	const result = await completed.call({ questions: [
+		{ label: "First", question: "One?", options: ["A", "B"] },
+		{ label: "Second", question: "Two?", options: ["C", "D"] },
+	] });
+	assert.deepEqual(result.details.questions.map((question: any) => question.answer), ["A", "D"]);
+	assert.deepEqual(completed.calls.filter(({ method }) => method === "select").map(({ args }) => args[0]), ["First", "Second"]);
+
+	const cancelled = rpcHarness({ select: ["A", undefined] });
+	const cancelledResult = await cancelled.call(multi);
+	assert.equal(cancelledResult.details.cancelled, true);
+	assert.ok(cancelledResult.details.questions.every((question: any) => question.answer === null));
+});
+
+test("RPC deduplicates a custom value that matches an already selected fixed choice", async () => {
+	const h = rpcHarness({ select: ["[ ] A", "自己输入…", "完成（已选 1 项）"], input: ["A"] });
+	const result = await h.call({ ...single, multiSelect: true });
+	assert.deepEqual(result.details.answer, ["A"]);
+	assert.deepEqual(result.details.customAnswers, ["A"]);
+	assert.equal(result.details.wasCustom, true);
+});
+
+test("RPC forwards AbortSignal to dialog calls", async () => {
+	const controller = new AbortController();
+	const h = rpcHarness({ select: ["A"] });
+	await h.call(single, controller.signal);
+	assert.ok(h.calls[0].args[2].signal instanceof AbortSignal);
+	assert.equal(h.calls[0].args[2].signal.aborted, false);
+});
+
+for (const [kind, input] of [["single", single], ["questionnaire", multi]] as const) {
+	test(`${kind}: signal/pre-abort, Esc, exception, unsupported custom, no UI and shutdown release UI without consent`, async () => {
+		for (const exit of ["abort", "pre-abort", "escape", "exception", "undefined", "no-ui", "shutdown", "tree"] as const) {
+			const h = harness(); const controller = new AbortController();
+			const pending: number[] = [];
+			h.pi.events.on("ask-question:pending", (data) => pending.push(data.pending));
+			if (exit === "pre-abort") controller.abort(new Error("pre aborted"));
+			if (exit === "exception") h.setUiMode("throw");
+			if (exit === "undefined") h.setUiMode("undefined");
+			if (exit === "no-ui") h.ctx.hasUI = false;
+			const call = h.call(input, controller.signal);
+			const fails = ["abort", "pre-abort", "exception", "shutdown", "tree"].includes(exit);
+			const assertion = fails ? assert.rejects(call) : call.then((result: any) => {
+				if (kind === "single") assert.equal(result.details.answer, null);
+				else assert.ok(result.details.questions.every((q: any) => q.answer === null));
+			});
+			await flush();
+			if (exit === "abort") controller.abort(new Error("abort"));
+			if (exit === "escape") {
+				if (kind === "questionnaire") h.input("\r"); // An unsubmitted draft is not consent.
+				h.input("\x1b");
+			}
+			if (exit === "shutdown" || exit === "tree") await h.event(exit === "tree" ? "session_tree" : "session_shutdown");
+			await assertion;
+			assert.equal(pending.at(-1) ?? 0, 0, "all completion paths clear the explicit waiting state");
+			if (exit === "no-ui" || exit === "pre-abort") assert.equal(h.opens(), 0);
+			assert.ok(h.closes() <= 1, "abort and UI completion cannot dispose custom twice");
+			assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+			// Every exit also releases the queue for a subsequent interaction.
+			h.ctx.hasUI = true; h.ctx.mode = "tui"; h.setUiMode("normal");
+			const next = h.call(single); await flush(); h.input("\r");
+			assert.equal((await next).details.answer, "A");
+		}
+	});
+
+	test(`${kind}: UI opens directly and submits the selected answers`, async () => {
+		const h = harness();
+		const call = h.call(input);
+		await flush(); assert.equal(h.opens(), 1);
+		h.input("\r");
+		if (kind === "questionnaire") { h.input("\r"); h.input("\r"); }
+		const result = await call;
+		if (kind === "single") assert.equal(result.details.answer, "A");
+		else assert.deepEqual(result.details.questions.map((q: any) => q.answer), ["A", "C"]);
+		assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+	});
+}
+
+for (const wasCustom of [false, true]) {
+	test(`single: ${wasCustom ? "custom" : "fixed"} answer preserves the complete result`, async () => {
+		const h = harness();
+		const call = h.call({ question: "Choose?", options: [" A ", "A", "B", "\t"] });
+		await flush();
+		h.input("\x1b[B"); // B, after option normalization
+		if (wasCustom) {
+			h.input("\x1b[B"); h.input("\r");
+			h.input(" B "); // Even text matching a fixed option retains custom provenance.
+		}
+		h.input("\r");
+		const result = await call;
+		assert.deepEqual(result, {
+			content: [{ type: "text", text: wasCustom ? "用户输入：B" : "用户选择：B" }],
+			details: { question: "Choose?", options: ["A", "B"], answer: "B", multiSelect: false, wasCustom },
+		});
+		assert.deepEqual(Object.keys(result.details), ["question", "options", "answer", "multiSelect", "wasCustom"]);
+		assert.equal(h.closes(), 1);
+		assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+	});
+}
+
+for (const grouped of [false, true]) {
+	const kind = grouped ? "questionnaire" : "single";
+	const params = (multiSelect = false) => {
+		const question = { question: "Choose?", options: [" A ", "A", "B", "\t"], multiSelect };
+		return grouped ? { questions: [question] } : question;
+	};
+	const details = (result: any) => grouped ? result.details.questions[0] : result.details;
+	const rendered = (h: ReturnType<typeof harness>) => h.components[0].render(100).join("\n");
+	const submit = (h: ReturnType<typeof harness>) => {
+		h.input("\r");
+		assert.equal(h.closes(), grouped ? 0 : 1, "only a questionnaire requires final review");
+		if (grouped) h.input("\r");
+	};
+
+	test(`${kind}: multi-select validates, toggles, orders and appends custom answers`, async () => {
+		const h = harness(); const call = h.call(params(true)); await flush();
+		h.input("\r");
+		assert.match(rendered(h), /请至少勾选一项/);
+		h.input("\x1b[B"); h.input(" "); // B first
+		h.input("\x1b[A"); h.input(" "); h.input(" "); h.input(" "); // toggle A off and on
+		h.input("\x1b[B"); h.input("\x1b[B"); h.input(" "); // custom input
+		h.input(" custom "); h.input("\r");
+		assert.equal(h.closes(), 0, "adding custom text does not submit multi-select");
+		assert.match(rendered(h), /已选 3 项/);
+		h.input("\x1b[A"); submit(h);
+		const answer = details(await call);
+		assert.deepEqual(answer.options, ["A", "B"]);
+		assert.deepEqual(answer.answer, ["A", "B", "custom"]);
+		assert.deepEqual(answer.customAnswers, ["custom"]);
+		assert.equal(answer.wasCustom, false);
+	});
+
+	test(`${kind}: blank/custom input and Escape return to options without consent`, async () => {
+		const h = harness(); const call = h.call(params()); await flush();
+		if (!grouped) { h.input("\t"); h.input("\x1b[C"); } // single has no navigation
+		h.input("\x1b[B"); h.input("\x1b[B"); h.input("\r");
+		h.input(" "); h.input("\r"); // blank answer returns to options
+		assert.equal(h.closes(), 0);
+		h.input("\r"); h.input("discard me"); h.input("\x1b");
+		assert.equal(h.closes(), 0);
+		h.input("\r"); h.input(" custom "); submit(h);
+		const answer = details(await call);
+		assert.equal(answer.answer, "custom");
+		assert.equal(answer.wasCustom, true);
+	});
+
+	test(`${kind}: custom-only multi-select retains provenance`, async () => {
+		const h = harness(); const call = h.call(params(true)); await flush();
+		h.input("\x1b[B"); h.input("\x1b[B"); h.input("\r");
+		h.input("custom"); h.input("\r"); h.input("\x1b[A"); submit(h);
+		const answer = details(await call);
+		assert.deepEqual(answer.answer, ["custom"]);
+		assert.equal(answer.wasCustom, true);
+	});
+}
+
+test("native multi-select deduplicates custom input equal to a selected fixed choice", async () => {
+	const h = harness(); const call = h.call({ ...single, multiSelect: true }); await flush();
+	h.input(" "); // select A
+	h.input("\x1b[B"); h.input("\x1b[B"); h.input("\r"); // custom input
+	h.input("A"); h.input("\r");
+	h.input("\r"); h.input("A"); h.input("\r"); // repeated custom input is not a second answer
+	assert.match(h.components[0].render(100).join("\n"), /已选 1 项/);
+	h.input("\x1b[A"); h.input("\r");
+	const result = await call;
+	assert.deepEqual(result.details.answer, ["A"]);
+	assert.deepEqual(result.details.customAnswers, ["A"]);
+	assert.equal(result.details.wasCustom, true);
+});
+
+test("questionnaire: incomplete review is blocked and editing invalidates the previous answer", async () => {
+	const h = harness();
+	const call = h.call({ questions: [{ question: "Choose?", options: ["A", "B"], multiSelect: true }] });
+	await flush();
+	h.input("\x1b[D"); h.input("\r"); // wrap to review without answering
+	assert.match(h.components[0].render(100).join("\n"), /尚未回答：问题 1/);
+	h.input("\t"); h.input(" "); h.input("\r"); // save A
+	h.input("\x1b[Z"); h.input("\x1b[B"); h.input(" "); // back, add B
+	h.input("\x1b[C"); h.input("\r");
+	assert.equal(h.closes(), 0, "changed draft must be confirmed again");
+	assert.match(h.components[0].render(100).join("\n"), /尚未回答：问题 1/);
+	h.input("\x1b[D"); h.input("\r"); h.input("\r");
+	assert.deepEqual((await call).details.questions[0].answer, ["A", "B"]);
+});
+
+test("parallel calls serialize the real Pi editor in FIFO order", async () => {
+	const h = harness();
+	const one = h.call(single); const two = h.call(multi);
+	await flush(); assert.equal(h.components.length, 1);
+	assert.deepEqual(h.surface.editorContainer.children, [h.components[0]]);
+	h.input("\r"); assert.equal((await one).details.answer, "A");
+	await flush(); assert.equal(h.components.length, 2);
+	assert.deepEqual(h.surface.editorContainer.children, [h.components[1]]);
+	h.input("\r"); h.input("\r"); h.input("\r");
+	assert.deepEqual((await two).details.questions.map((q: any) => q.answer), ["A", "C"]);
+	assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+});
+
+test("queued abort/pre-abort immediately rejects without letting a successor overtake the active editor", async () => {
+	const h = harness(); const queued = new AbortController(); const pre = new AbortController(); pre.abort();
+	const one = h.call(single);
+	const two = h.call(single, queued.signal); const rejected = assert.rejects(two);
+	await assert.rejects(h.call(single, pre.signal));
+	const three = h.call(multi);
+	await flush(); queued.abort(); await rejected; await flush();
+	assert.equal(h.opens(), 1);
+	h.input("\x1b"); await one; await flush();
+	assert.equal(h.opens(), 2); assert.equal(h.surface.editorContainer.children[0], h.components[1]);
+	h.input("\x1b"); await three;
+	assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+});
+
+for (const event of ["session_shutdown", "session_tree", "session_start"] as const) {
+	test(`${event} cancels active and all queued questionnaires without orphan promises`, async () => {
+		const h = harness();
+		const calls = [h.call(single), h.call(multi), h.call(single)];
+		const rejected = calls.map((call) => assert.rejects(call, /关闭/));
+		await flush(); assert.equal(h.opens(), 1);
+		await h.event(event); await Promise.all(rejected); await flush();
+		assert.equal(h.opens(), 1); assert.equal(h.closes(), 1);
+		assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+		const next = h.call(single); await flush(); h.input("\r"); await next;
+		assert.equal(h.opens(), 2, "new session may interact normally");
+	});
+}
+
+test("a shared invocation abort cancels the active editor and all queued calls", async () => {
+	const h = harness(); const controller = new AbortController();
+	const calls = [h.call(single, controller.signal), h.call(multi, controller.signal)];
+	const rejected = calls.map((call) => assert.rejects(call));
+	await flush(); controller.abort(); await Promise.all(rejected); await flush();
+	assert.equal(h.opens(), 1); assert.equal(h.closes(), 1);
+	assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+});
+
+// No separate UI waiting limit: lifetime is owned by completion, signal and session.
+test("elapsed wall time does not impose a separate questionnaire or queue timeout", async (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
+	const h = harness(); const first = h.call(single); const second = h.call(multi);
+	await flush(); t.mock.timers.tick(24 * 60 * 60_000); await flush();
+	assert.equal(h.opens(), 1); assert.equal(h.closes(), 0);
+	h.input("\r"); assert.equal((await first).details.answer, "A");
+	await flush(); assert.equal(h.opens(), 2);
+	h.input("\x1b"); await second;
+	assert.deepEqual(h.surface.editorContainer.children, [h.editor]);
+});

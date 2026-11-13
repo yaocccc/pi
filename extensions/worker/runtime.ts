@@ -47,6 +47,7 @@ export class WorkerRuntime {
 		if (this.batches.size >= 64) throw new Error("本会话已达 64 个 Worker 批次上限；请在新会话继续");
 		const batch: Batch = { ...input, id: randomUUID(), tasks: [], finished: false, cancelled: false };
 		batch.ui.batchId = batch.id;
+		for (const ui of batch.ui.tasks) ui.phaseCode = "queued";
 		batch.tasks = tasks.map((task, index) => ({ id: `${batch.id}:${index + 1}`, index, batch, task, cwd, state: "queued", controller: new AbortController(), overlappedWriter: false }));
 		this.batches.set(batch.id, batch);
 		this.queue.push(...batch.tasks);
@@ -76,6 +77,7 @@ export class WorkerRuntime {
 				const ui = task.batch.ui.tasks[task.index];
 				ui.status = "running";
 				ui.phase = "执行中";
+				ui.phaseCode = "running";
 				ui.startedAt = Date.now();
 				this.active.add(task);
 				this.changed();
@@ -119,6 +121,7 @@ export class WorkerRuntime {
 		ui.status = task.result?.status === "completed" ? "completed" : task.result?.status === "blocked" ? "blocked" : "failed";
 		ui.finishedAt = Date.now();
 		ui.phase = ui.status === "completed" ? "已完成" : ui.status === "blocked" ? "已阻塞" : "执行失败";
+		ui.phaseCode = task.result?.execution?.timed_out ? "timed_out" : task.result?.execution?.cancelled ? "cancelled" : ui.status;
 		task.batch.ui.completed = task.batch.tasks.filter((item) => item.state === "finished").length;
 		task.batch.finished = task.batch.tasks.every((item) => item.state === "finished");
 		if (task.batch.finished) task.batch.ui.finishedAt = Date.now();

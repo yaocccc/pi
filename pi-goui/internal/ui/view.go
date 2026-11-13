@@ -293,8 +293,8 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 	if m.beginPanelResize(v) {
 		return nil
 	}
-	if m.clickCodexFast(v.X, v.Y) {
-		return nil
+	if cmd, handled := m.codexFastClickCommand(v.X, v.Y); handled {
+		return cmd
 	}
 	if cmd, handled := m.clickFooterPopup(t, v.X, v.Y); handled {
 		return cmd
@@ -348,7 +348,7 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 			if d.kind == "cwd" {
 				return m.completeCwd(d)
 			}
-			if d.questionnaire != nil && d.questionnaire.activeMulti() {
+			if d.questionnaire != nil && d.questionnaire.ActiveMulti() {
 				return m.questionnaireKey(t, d, tea.KeyPressMsg{Code: tea.KeySpace})
 			}
 			return m.confirmDialog(t, d)

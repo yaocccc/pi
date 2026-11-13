@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import autoname from "./index.ts";
 
-test("autoname registers no commands and still names the settled current session", { timeout: 5_000 }, async (t) => {
+test("autoname names a settled primary session even without a UI", { timeout: 5_000 }, async (t) => {
     const dir = await mkdtemp(join(tmpdir(), "autoname-registration-"));
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = dir;
@@ -31,7 +31,7 @@ test("autoname registers no commands and still names the settled current session
     assert.deepEqual(commands, []);
     assert.deepEqual([...handlers.keys()], ["session_start", "agent_start", "agent_settled", "session_shutdown"]);
     const ctx = {
-        hasUI: true,
+        hasUI: false,
         model: { provider: "fixture", id: "local" },
         sessionManager: {
             getSessionId: () => "current",

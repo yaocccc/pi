@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 import askQuestion from './index.ts';
 
 function metadata() {
     let tool: any;
     const events: string[] = [];
     askQuestion({
+        events: new EventEmitter(),
         registerTool: (value: any) => { tool = value; },
         on: (event: string) => { events.push(event); },
     } as any);

@@ -63,18 +63,15 @@ func (m *Model) popupGeometry(d *dialog) popupLayout {
 	p.inner = p.width - 4
 	maxHeight := available
 	if d.message != "" && (maxHeight >= 10 || d.questionnaire != nil) {
-		p.message = strings.Split(ansi.Hardwrap(render.Clean(d.message), p.inner, true), "\n")
-		limit := 2
 		if d.questionnaire != nil {
-			limit = max(1, (maxHeight-6)/2)
-		}
-		p.messageTotal = len(p.message)
-		if d.questionnaire != nil {
-			p.messageStart = min(max(0, d.questionnaire.MessageOffset), max(0, len(p.message)-limit))
-			p.message = p.message[p.messageStart:min(len(p.message), p.messageStart+limit)]
-		} else if len(p.message) > limit {
-			p.message = p.message[:limit]
-			p.message[limit-1] = ansi.Truncate(p.message[limit-1], max(1, p.inner-1), "") + "…"
+			p.message, p.messageStart, p.messageTotal = d.questionnaire.MessageRows(d.message, p.inner, maxHeight)
+		} else {
+			p.message = strings.Split(ansi.Hardwrap(render.Clean(d.message), p.inner, true), "\n")
+			p.messageTotal = len(p.message)
+			if len(p.message) > 2 {
+				p.message = p.message[:2]
+				p.message[1] = ansi.Truncate(p.message[1], max(1, p.inner-1), "") + "…"
+			}
 		}
 	}
 	if popupFilter(d) {
@@ -140,7 +137,7 @@ func (m *Model) popupRows(d *dialog, p popupLayout) []string {
 	}
 	title := d.title
 	if d.questionnaire != nil {
-		title = d.questionnaire.tabs(p.inner)
+		title = d.questionnaire.Tabs(p.inner)
 	}
 	body := []string{lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.cfg.Theme.Text)).Render(render.Clean(strings.Join(strings.Fields(title), " ")))}
 	for _, line := range p.message {
@@ -216,15 +213,7 @@ func (m *Model) popupRows(d *dialog, p popupLayout) []string {
 		help = "↑↓ choose · " + m.hint("tui.input.tab") + " complete · " + help
 	}
 	if d.questionnaire != nil {
-		help = "←→ 切题 · ↑↓ 选择 · Enter 提交 · Esc 取消"
-		if d.questionnaire.Input {
-			help = "Enter 保存答案 · Esc 返回"
-		} else if d.questionnaire.activeMulti() {
-			help = "←→ 切题 · ↑↓ 移动 · 空格勾选 · Enter 提交"
-		}
-	}
-	if d.questionnaire != nil && p.messageTotal > len(p.message) {
-		help = fmt.Sprintf("PgUp/PgDn 翻阅问题 %d–%d/%d · Enter 提交 · Esc 返回", p.messageStart+1, p.messageStart+len(p.message), p.messageTotal)
+		help = d.questionnaire.Help(p.messageStart, p.messageTotal, len(p.message))
 	}
 	body = append(body, m.paint(help, m.cfg.Theme.Muted))
 	// Every row is clipped before framing: plugin labels cannot enlarge the box.

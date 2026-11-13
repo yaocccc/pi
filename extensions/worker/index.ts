@@ -3,21 +3,22 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
-import { MODES, PRESETS, SESSION_MODES, loadRoutingConfig, validateTask } from "./config.ts";
+import { MODES, PRESETS, SESSION_MODES, agentDir, loadRoutingConfig, supportedThinking, validateTask } from "./config.ts";
 import { WORKER_USAGE_EVENT, type WorkerUsageSnapshot } from "./events.ts";
 import { registerWorkerWriteGuard } from "./guard.ts";
 import { captureWorkerSession, type WorkerSessionSnapshot } from "./session.ts";
 import { beginWorkerShutdown, createWorkerOwner, executeTask } from "./process.ts";
 import { workerTaskScopesConflict } from "./security.ts";
-import { configureWorkerSettings } from "./settings.ts";
-import { isGoUI, notifyFrontendEvent } from "../shared/frontend.ts";
+import { saveWorkerSettings } from "./settings.ts";
+import { registerCapability } from "./capabilities.ts";
+import { WorkerTranscriptReader } from "./transcript-reader.ts";
+import { notifyFrontendEvent } from "./frontend.ts";
+import { WORKER_CAPABILITY, type WorkerCapability, type WorkerSessionView, type WorkerStateChange } from "./api.ts";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
 import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, sanitizeStructuredValue, serializePayload } from "./data.ts";
 import { WorkerRuntime, type Batch } from "./runtime.ts";
 import { present } from "./callbacks.ts";
 import { workerBranchSnapshots, WORKER_SNAPSHOT_ENTRY } from "./history.ts";
-import { WorkerRenderRefresh } from "./presentation.ts";
-import { nativeWorkerRenderers } from "./native-ui.ts";
 
 export const TOOL_DESCRIPTION = `Autonomously delegate bounded, verifiable tasks: fast for clear local work, normal for ordinary work, deep for difficult work. Every task requires explicit preset and sessionMode. Read worker-orchestration for non-trivial delegation. Choose each task's sessionMode yourself: prefer fork; use new only when little context handoff is needed; do not ask the user. Workers cannot delegate. Handle failures without automatic retries; verify diffs and acceptance evidence yourself.
 ONE unfinished batch per session; parallel tasks go in ONE tasks array. Start: tasks array, even for one task. Continue: {batchId}. Cancel: {batchId,cancel:true}. Do not mix modes. A second start returns activeBatchId; finish or cancel it first.
@@ -106,8 +107,13 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 	const createSession = (branch: readonly any[] = [], awaitingHistory = false) => {
 		const history = workerBranchSnapshots(branch);
 		const persisted = new Map<string, string>();
+		const listeners = new Set<(change: WorkerStateChange) => void>();
+		let closed = false;
+		const publish = (change: WorkerStateChange) => {
+			for (const listener of listeners) present(() => listener(change));
+		};
 		const runtime = new WorkerRuntime((left, right) => workerTaskScopesConflict(left.task, left.cwd, right.task, right.cwd), () => {
-			refresh.changed();
+			publish({ type: "changed" });
 			if (stopped) return; // Never append old-session cleanup into a newly selected branch.
 			for (const batch of runtime.batches.values()) {
 				const fingerprint = JSON.stringify([batch.tasks.map((t) => [t.state, t.result?.status]), batch.ui.controlErrors]);
@@ -116,13 +122,34 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 				pi.appendEntry?.(WORKER_SNAPSHOT_ENTRY, batchUiSnapshot(batch));
 			}
 		});
-		const refresh = new WorkerRenderRefresh((id) => {
-			const batch = runtime.batches.get(id);
-			return batch ? batchUiSnapshot(batch) : undefined;
-		}, undefined, (id) => history.get(id), awaitingHistory);
-		return { runtime, refresh, history, processes: createWorkerOwner() };
+		const view: WorkerSessionView = {
+			get awaitingHistory() { return awaitingHistory; },
+			get closed() { return closed; },
+			lookup(id) { const batch = runtime.batches.get(id); return batch ? batchUiSnapshot(batch) : undefined; },
+			history(id) { const snapshot = history.get(id); return snapshot ? structuredClone(snapshot) : undefined; },
+			subscribe(listener) { if (!closed) listeners.add(listener); return () => { listeners.delete(listener); }; },
+		};
+		return { runtime, view, history, publish, processes: createWorkerOwner(),
+			bindHistory() { awaitingHistory = false; publish({ type: "history" }); },
+			close() { closed = true; publish({ type: "closed" }); listeners.clear(); },
+		};
 	};
+	const transcripts = new WorkerTranscriptReader(agentDir);
 	let session = createSession([], true);
+	registerCapability<WorkerCapability>(pi, WORKER_CAPABILITY, {
+		readTranscript: (request) => transcripts.read(request),
+		getSession: () => session.view,
+		getSettings: () => structuredClone(services.loadRoutingConfig().config),
+		getModels: (ctx) => ctx.modelRegistry.getAvailable().map((model) => ({ id: `${model.provider}/${model.id}`, thinking: supportedThinking(model) })),
+		saveSettings: (ctx, value) => {
+			const current = services.loadRoutingConfig();
+			const saved = saveWorkerSettings(ctx, value, current.path);
+			if (JSON.stringify(current.config) !== JSON.stringify(saved)) {
+				notifyFrontendEvent(pi, ctx, { name: "worker.settings-saved", data: {} });
+			}
+			return saved;
+		},
+	});
 	let initialized = false;
 	const shutdown = async () => {
 		stopped = true;
@@ -131,7 +158,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 		const disposal = owner.runtime.dispose();
 		beginWorkerShutdown(owner.processes);
 		try { await disposal; }
-		finally { owner.refresh.dispose(); }
+		finally { owner.close(); }
 	};
 	const restart = async (_event: unknown, ctx: any) => {
 		initialized = true;
@@ -139,40 +166,21 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 		session = createSession(ctx?.sessionManager?.getBranch() ?? []);
 		stopped = false;
 	};
-	pi.on("session_shutdown", shutdown);
+	pi.on("session_shutdown", async () => { transcripts.clear(); await shutdown(); });
 	pi.on("session_start", async (event, ctx) => {
 		if (initialized || stopped) return restart(event, ctx);
 		// beforeSessionStart may already have built/rendered the original cards.
 		// Hydrate that initial owner only; real session replacements still freeze it.
 		initialized = true;
 		for (const [id, details] of workerBranchSnapshots(ctx.sessionManager.getBranch())) session.history.set(id, details);
-		session.refresh.bindHistory();
+		session.bindHistory();
 	});
 	pi.on("session_tree", restart);
-	pi.registerCommand("worker_settings", {
-		description: "交互式配置 Worker",
-		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) {
-				pi.sendMessage({ customType: "text", content: "/worker_settings 仅支持交互式 UI。", display: true });
-				return;
-			}
-			await ctx.waitForIdle();
-			try {
-				const loaded = services.loadRoutingConfig();
-				const updated = await configureWorkerSettings(ctx, loaded.config, loaded.path);
-				if (updated && !isGoUI(ctx)) notifyFrontendEvent(ctx, { name: "worker.settings-saved", data: {} });
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				notifyFrontendEvent(ctx, { name: "worker.settings-error", data: { message } });
-			}
-		},
-	});
 	pi.registerTool({
 		name: "worker",
 		label: "Worker",
 		description: TOOL_DESCRIPTION,
 		parameters: InputSchema,
-		...nativeWorkerRenderers(() => session),
 		async execute(toolCallId, input: WorkerToolInput, signal, onUpdate, ctx) {
 			const invocationSession = session;
 			const fail = (error: unknown): never => {
@@ -180,7 +188,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 				if (batch && invocationSession === session && batch.ui.originToolCallId) {
 					batch.ui.controlErrors = [...(batch.ui.controlErrors ?? []), { toolCallId, message: error instanceof Error ? error.message : String(error) }].slice(-32);
 					invocationSession.runtime.changed();
-					invocationSession.refresh.refreshBatch(batch.id);
+					invocationSession.publish({ type: "batch", batchId: batch.id });
 				}
 				throw error; // Still a genuine model-facing tool error, never a successful result.
 			};

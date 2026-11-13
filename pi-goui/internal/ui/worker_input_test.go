@@ -62,17 +62,17 @@ func TestWorkerInputListsPreserveBlocks(t *testing.T) {
 	if len(actions) != 1 || !strings.Contains(folded, "path-04.go") || strings.Contains(folded, "path-05.go") || !strings.Contains(folded, "展开剩余 7 项") {
 		t.Fatal("bad folded list", folded)
 	}
-	expanded, actions := workerInputLists(source, "u", map[string]bool{actions[0].key: true}, marker)
+	expanded, actions := workerInputLists(source, "u", map[string]bool{actions[0].Key: true}, marker)
 	if !strings.Contains(expanded, "path-11.go") || !strings.Contains(expanded, "收起列表") {
 		t.Fatal("missing expanded content")
 	}
 	// Appending items to a streamed list preserves identity and expansion.
-	grown, grownActions := workerInputLists(source+"- added.go\n", "u", map[string]bool{actions[0].key: true}, marker)
-	if grownActions[0].key != actions[0].key || !strings.Contains(grown, "added.go") || !strings.Contains(grown, "收起列表") {
+	grown, grownActions := workerInputLists(source+"- added.go\n", "u", map[string]bool{actions[0].Key: true}, marker)
+	if grownActions[0].Key != actions[0].Key || !strings.Contains(grown, "added.go") || !strings.Contains(grown, "收起列表") {
 		t.Fatal("streamed list lost expansion")
 	}
 	_, other := workerInputLists(source, "other-message", nil, marker)
-	if other[0].key == actions[0].key {
+	if other[0].Key == actions[0].Key {
 		t.Fatal("messages share list state")
 	}
 	nested := ""
@@ -96,11 +96,11 @@ func TestWorkerInputListInteractionAndCache(t *testing.T) {
 			m.height = 60
 			w := m.inspector.worker
 			original := "# Files\n\n" + inputList(12) + "\n# Other files\n\n" + inputList(10) + "\n展开剩余 7 项\n\ue000 user-supplied marker"
-			w.visible = []session.Item{{ID: "input", Role: "user", Text: original, MessageIndex: 1}}
-			w.revision++
+			w.Visible = []session.Item{{ID: "input", Role: "user", Text: original, MessageIndex: 1}}
+			w.Revision++
 			rows := m.inspectorRows()
-			if len(w.inputActions) != 2 {
-				t.Fatalf("no action metadata: %+v\n%s", w.inputActions, strings.Join(rows, "\n"))
+			if len(w.InputActions) != 2 {
+				t.Fatalf("no action metadata: %+v\n%s", w.InputActions, strings.Join(rows, "\n"))
 			}
 			if strings.Contains(ansi.Strip(strings.Join(rows, "\n")), "path-11.go") {
 				t.Fatal("list not collapsed")
@@ -109,12 +109,12 @@ func TestWorkerInputListInteractionAndCache(t *testing.T) {
 			if &rows[0] != &again[0] {
 				t.Fatal("static hover rebuilt document")
 			}
-			a := w.inputActions[0]
+			a := w.InputActions[0]
 			// Scroll to the action rather than relying on auto-follow position.
 			m.inspector.followPaused = true
-			m.inspector.offset = min(max(0, a.rect.y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
 			left, _ := m.inspectorBounds()
-			x, y := left+m.inspectorInset()+a.rect.x, 2+a.rect.y-m.inspector.offset
+			x, y := left+m.inspectorInset()+a.Rect.X, 2+a.Rect.Y-m.inspector.offset
 			if m.pointerShapeAt(x, y) != "pointer" {
 				t.Fatal("no action pointer")
 			}
@@ -124,50 +124,50 @@ func TestWorkerInputListInteractionAndCache(t *testing.T) {
 			m.inspectorClick(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorRelease(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorRows()
-			if !w.inputExpanded[a.key] || w.inputExpanded[w.inputActions[1].key] {
+			if !w.InputExpanded[a.Key] || w.InputExpanded[w.InputActions[1].Key] {
 				t.Fatal("lists not independently toggled")
 			}
-			if !strings.Contains(ansi.Strip(w.doc.Text), "path-11.go") {
+			if !strings.Contains(ansi.Strip(w.Doc.Text), "path-11.go") {
 				t.Fatal("expanded content missing")
 			}
-			if w.visible[0].Text != original {
+			if w.Visible[0].Text != original {
 				t.Fatal("mutated original")
 			}
 			// Width reflow does not lose the fold preference.
 			m.workerConversationRows(width + 1)
-			if !w.inputExpanded[a.key] {
+			if !w.InputExpanded[a.Key] {
 				t.Fatal("reflow reset fold")
 			}
 			m.workerConversationRows(width)
-			a = w.inputActions[0]
-			m.inspector.offset = min(max(0, a.rect.y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
-			x, y = left+m.inspectorInset()+a.rect.x, 2+a.rect.y-m.inspector.offset
+			a = w.InputActions[0]
+			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+			x, y = left+m.inspectorInset()+a.Rect.X, 2+a.Rect.Y-m.inspector.offset
 			m.inspectorClick(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorMotion(tea.Mouse{Button: tea.MouseLeft, X: x + 1, Y: y})
 			m.inspectorRelease(tea.Mouse{Button: tea.MouseLeft, X: x + 1, Y: y})
-			if !w.inputExpanded[a.key] {
+			if !w.InputExpanded[a.Key] {
 				t.Fatal("drag selection toggled list")
 			}
 			m.inspectorClick(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorRelease(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorRows()
-			if w.inputExpanded[a.key] {
+			if w.InputExpanded[a.Key] {
 				t.Fatal("collapse failed")
 			}
 			m.Update(tea.WindowSizeMsg{Width: 30, Height: 40})
 			m.inspectorRows()
-			a = w.inputActions[0]
-			m.inspector.offset = min(max(0, a.rect.y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
-			x, y = m.inspectorInset()+a.rect.x, 2+a.rect.y-m.inspector.offset
+			a = w.InputActions[0]
+			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+			x, y = m.inspectorInset()+a.Rect.X, 2+a.Rect.Y-m.inspector.offset
 			m.inspectorClick(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorRelease(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorRows()
-			if !w.inputExpanded[a.key] {
+			if !w.InputExpanded[a.Key] {
 				t.Fatal("fullscreen action failed")
 			}
 			m.closeInspector()
 			receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
-			if len(m.inspector.worker.inputExpanded) != 0 {
+			if len(m.inspector.worker.InputExpanded) != 0 {
 				t.Fatal("new task view inherited list folds")
 			}
 		})

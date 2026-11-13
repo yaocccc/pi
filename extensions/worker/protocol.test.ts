@@ -26,7 +26,7 @@ function harness(execute: typeof executeTask, maxConcurrentWorkers = DEFAULT_OPT
 		workerExtension({
 			on: (event: string, fn: any) => handlers.set(event, fn),
 			registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {},
-			events: { emit() {} }, sendMessage() { throw new Error("no queued continuations"); },
+			events: { emit() {}, on() { return () => {}; } }, sendMessage() { throw new Error("no queued continuations"); },
 		} as any, {
 			executeTask: execute,
 			loadRoutingConfig: () => { loads++; return { config: { ...DEFAULT_OPTIONS, maxConcurrentWorkers, fast: preset, normal: preset, deep: preset }, warnings: [], path: "fixture" }; },

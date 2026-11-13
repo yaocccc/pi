@@ -10,6 +10,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"pi-goui/internal/config"
+	"pi-goui/internal/extensions/worker"
 )
 
 const workingDedupLimit = 4096
@@ -39,7 +40,7 @@ type workingState struct {
 	total                                 workingUsage
 	finished                              map[[32]byte]workingUsage
 	order                                 [][32]byte
-	workers                               map[string]workingUsage
+	workers                               worker.UsageTracker
 }
 
 func workingNonnegative(n float64) float64 {
@@ -185,49 +186,8 @@ func (w *workingState) finish(m workingMessage) {
 	}
 }
 
-// Worker usage snapshots are cumulative. Key by batch and task, not the
-// invocation ID: continuation calls and toolResult messages repeat snapshots.
 func (w *workingState) workerUsage(raw json.RawMessage, toolCallID string) {
-	var result struct {
-		ToolCallID string
-		Details    struct {
-			Kind, BatchID, OriginToolCallID string
-			Tasks                           []struct {
-				Index int
-				Usage struct{ Input, Output, CacheRead, CacheWrite float64 }
-			}
-		}
-	}
-	if json.Unmarshal(raw, &result) != nil || result.Details.Kind != "worker-ui" {
-		return
-	}
-	d := result.Details
-	id := d.BatchID
-	if id == "" {
-		id = d.OriginToolCallID
-	}
-	if id == "" {
-		id = result.ToolCallID
-	}
-	if id == "" {
-		id = toolCallID
-	}
-	if id == "" {
-		return
-	}
-	if w.workers == nil {
-		w.workers = make(map[string]workingUsage)
-	}
-	for _, task := range d.Tasks {
-		key := fmt.Sprintf("%s:%d", id, task.Index)
-		old := w.workers[key]
-		u := task.Usage
-		// Ignore duplicate or stale snapshots, including late progress updates.
-		w.workers[key] = workingUsage{
-			input:  math.Max(old.input, workingNonnegative(u.Input)),
-			output: math.Max(old.output, workingNonnegative(u.Output)),
-		}
-	}
+	w.workers.Apply(raw, toolCallID)
 }
 
 func (w *workingState) apply(raw json.RawMessage, now time.Time) {
@@ -384,8 +344,8 @@ func (w *workingState) formatLine(now time.Time, theme config.Theme, detailed bo
 	}
 	output := w.total.output
 	for _, usage := range w.workers {
-		input += usage.input
-		output += usage.output
+		input += usage.Input
+		output += usage.Output
 	}
 	if w.current {
 		output += math.Max(w.live.output, w.estimate())

@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/internal/extensions/codexfast"
 	"pi-goui/internal/session"
 )
 
@@ -325,6 +326,7 @@ func TestToolInspectorGeometryAndModalPriority(t *testing.T) {
 }
 func TestToolInspectorDisablesSidebarMode(t *testing.T) {
 	m := inspectorFixture(t)
+	m.current().codex.State = codexfast.State{Level: "normal", Levels: []string{"normal", "fast", "ultrafast"}}
 	target, _, ok := m.codexFastGeometry()
 	if !ok {
 		t.Fatal("missing sidebar mode target")

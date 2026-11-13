@@ -1,4 +1,4 @@
-import { estimateToolTokens } from '../shared/token-estimate.ts';
+import { estimateToolTokens } from './token-estimate.ts';
 import { StringDecoder } from "node:string_decoder";
 import { WorkerTranscriptWriter } from "./transcript.ts";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -13,7 +13,7 @@ import { buildTaskPrompt, workerPromptBody } from "./prompt.ts";
 import { resolveRoute, resolveTaskCwd } from "./config.ts";
 import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard.ts";
 import { attributeChangedFiles, changedSince, killProcessTree, processGroupActive, snapshotWorkspace } from "./security.ts";
-import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkerUsage, WorkspaceSnapshot } from "./types";
+import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerPhaseCode, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkerUsage, WorkspaceSnapshot } from "./types";
 import { addWorkerUsage, appendUiActivity, createThinkingActivityRecorder, emptyWorkerUsage, estimateMessageTokens, messageUsage, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./data.ts";
 
 export interface WorkerOwner {
@@ -132,6 +132,7 @@ export async function runPiWorker(
 		: undefined;
 	let transcript: WorkerTranscriptWriter | undefined;
 	let phase = "等待执行槽位";
+	let phaseCode: WorkerPhaseCode = "waiting_slot";
 	let toolCalls = 0;
 	let lastEmitAt = 0;
 	let settledUsage = emptyWorkerUsage();
@@ -147,14 +148,15 @@ export async function runPiWorker(
 		const now = Date.now();
 		if (!force && now - lastEmitAt < 150) return;
 		lastEmitAt = now;
-		present(() => onProgress?.({ phase, activities: activities.map((item) => ({ ...item })), toolCalls, usage: usageSnapshot(), actualModel: undefined, transcript: transcript ? { ...transcript.descriptor } : undefined }));
+		present(() => onProgress?.({ phase, phaseCode, activities: activities.map((item) => ({ ...item })), toolCalls, usage: usageSnapshot(), actualModel: undefined, transcript: transcript ? { ...transcript.descriptor } : undefined }));
 	};
-	const setPhase = (value: string, status: WorkerUiActivityStatus = "running") => {
+	const setPhase = (code: WorkerPhaseCode, value: string, status: WorkerUiActivityStatus = "running") => {
 		phase = value;
+		phaseCode = code;
 		for (const activity of activities) {
 			if (activity.type === "phase" && activity.status === "running") activity.status = "completed";
 		}
-		appendUiActivity(activities, { id: `phase:${value}`, type: "phase", status, label: value, at: Date.now() });
+		appendUiActivity(activities, { id: `phase:${code}`, type: "phase", phaseCode: code, status, label: value, at: Date.now() });
 		emit(true);
 	};
 	const upsertTool = (id: string, name: string, status: WorkerUiActivityStatus, detail?: string, contextSizeEstimate?: number) => {
@@ -194,7 +196,7 @@ export async function runPiWorker(
 			const timedOut = source === "task_timeout" || source === "slot_timeout";
 			const aborted = !timedOut;
 			const message = `${error instanceof Error ? error.message : String(error)} [stage=slot source=${source} parent=${process.pid} owner=${owner.id}]`;
-			setPhase(aborted ? "已取消" : "等待执行槽位超时", "failed");
+			setPhase(aborted ? "cancelled" : "timed_out", aborted ? "已取消" : "等待执行槽位超时", "failed");
 			return {
 				exitCode: 1,
 				stderr: "",
@@ -212,8 +214,10 @@ export async function runPiWorker(
 		// Shutdown can run between slot acquisition and this continuation.
 		if (owner.closed || signal?.aborted) {
 			const source = signal?.aborted ? terminationSource(signal) : "owner_shutdown";
+			setPhase(source === "task_timeout" ? "timed_out" : "cancelled", source === "task_timeout" ? "已超时" : "已取消", "failed");
 			return { exitCode: 1, stderr: "", assistantText: "", errorMessage: `Worker 启动前已终止 [source=${source} parent=${process.pid} owner=${owner.id}]`, aborted: source !== "task_timeout", timedOut: source === "task_timeout", termination: { stage: "spawn", code: source, source, parentPid: process.pid, ownerId: owner.id }, truncated: false, activities, toolCalls, usage: usageSnapshot() };
 		}
+		setPhase("slot_acquired", "已获得槽位");
 		transcript = new WorkerTranscriptWriter({ cwd, prompt, root: control?.transcriptRoot });
 		emit(true);
 		return await new Promise<ChildResult>((resolve) => {
@@ -267,11 +271,12 @@ export async function runPiWorker(
 				if (childClosed) forgetChild(owner, child);
 				transcript?.finish(timedOut ? "timed_out" : aborted ? "cancelled" : exitCode !== 0 || errorMessage ? "failed" : "completed");
 				phase = aborted ? "已取消" : timedOut ? "已超时" : exitCode === 0 ? "子进程已完成" : "子进程失败";
+				phaseCode = aborted ? "cancelled" : timedOut ? "timed_out" : exitCode === 0 ? "completed" : "failed";
 				for (const activity of activities) {
 					if (activity.status !== "running") continue;
 					activity.status = activity.type === "tool" && (exitCode !== 0 || aborted || timedOut) ? "failed" : "completed";
 				}
-				appendUiActivity(activities, { id: "phase:finished", type: "phase", status: exitCode === 0 && !aborted && !timedOut ? "completed" : "failed", label: phase, detail: errorMessage, at: Date.now() });
+				appendUiActivity(activities, { id: "phase:finished", type: "phase", phaseCode, status: exitCode === 0 && !aborted && !timedOut ? "completed" : "failed", label: phase, detail: errorMessage, at: Date.now() });
 				emit(true);
 				const usage = usageSnapshot();
 				usage.turns = Math.max(usage.turns, settledUsage.turns);
@@ -300,7 +305,7 @@ export async function runPiWorker(
 					timedOut = reason === "timeout" || source === "task_timeout";
 					errorMessage ||= `Worker 已终止 [source=${source} parent=${process.pid} worker=${child.pid ?? "unknown"} owner=${owner.id}]`;
 				}
-				const terminatingPhase = () => setPhase(cleaningDescendants ? "清理子进程" : aborted ? "正在取消" : timedOut ? "正在终止超时任务" : "正在终止超限输出", cleaningDescendants ? "running" : "failed");
+				const terminatingPhase = () => setPhase(cleaningDescendants ? "cleanup" : aborted ? "cancelling" : timedOut ? "terminating_timeout" : "terminating_output", cleaningDescendants ? "清理子进程" : aborted ? "正在取消" : timedOut ? "正在终止超时任务" : "正在终止超限输出", cleaningDescendants ? "running" : "failed");
 				// A cancellation during normal cleanup changes the result, not its fixed grace.
 				if (alreadyTerminating) { terminatingPhase(); return; }
 				killProcessTree(child, "SIGTERM");
@@ -504,7 +509,7 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 	let route: Route | null = null;
 	let before: WorkspaceSnapshot;
 	let stage = "route_or_contract";
-	report({ status: "running", phase: "解析模型路由" });
+	report({ status: "running", phase: "解析模型路由", phaseCode: "routing" });
 	try {
 		if (task.sessionMode !== "new" && task.sessionMode !== "fork") throw new Error(`无效 sessionMode: ${String(task.sessionMode)}`);
 		if (task.sessionMode === "fork" && !sessionSnapshot) {
@@ -513,17 +518,17 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 		}
 		stage = "route_or_contract";
 		route = resolveRoute(task, config, ctx);
-		report({ resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, phase: "记录 Git 状态" });
+		report({ resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, phase: "记录 Git 状态", phaseCode: "snapshot_workspace" });
 		stage = "workspace_snapshot";
 		before = await snapshotWorkspace(cwd, new Set(), signal);
-		report({ phase: "Git 状态记录完成" });
+		report({ phase: "Git 状态记录完成", phaseCode: "workspace_snapshotted" });
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		const failure = failureDetails(stage, reason);
 		return { status: "blocked", execution: baseExecution(task, route, 0, warnings), failure, summary: [reason], changed_files: [], observed_changed_files: [], validation: [], acceptance: [], findings: [], risks: [], out_of_scope: [], recommended_next_action: [failure.next_action] };
 	}
 	const systemPrompt = workerPromptBody(task.mode);
-	report({ status: "running", resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, attempt: 1, phase: "启动 Worker" });
+	report({ status: "running", resolvedPreset: route.resolvedPreset, modelId: route.modelId, thinking: route.thinking, attempt: 1, phase: "启动 Worker", phaseCode: "starting" });
 	const child = await runPiWorker(
 		task,
 		route,
@@ -533,10 +538,10 @@ export async function executeTask(task: WorkerTask, config: RoutingConfig, warni
 		signal,
 		config.defaultTimeoutMs,
 		config.maxConcurrentWorkers,
-		(progress) => report({ phase: progress.phase, activities: progress.activities, toolCalls: progress.toolCalls, usage: progress.usage, transcript: progress.transcript }),
+		(progress) => report({ phase: progress.phase, phaseCode: progress.phaseCode, activities: progress.activities, toolCalls: progress.toolCalls, usage: progress.usage, transcript: progress.transcript }),
 		{ managedTimeout, owner, sessionSnapshot },
 	);
-	report({ phase: "校验结果与修改范围", activities: child.activities, toolCalls: child.toolCalls, usage: child.usage, transcript: child.transcript });
+	report({ phase: "校验结果与修改范围", phaseCode: "validating", activities: child.activities, toolCalls: child.toolCalls, usage: child.usage, transcript: child.transcript });
 	const parsed = parseStructuredResult(child.assistantText);
 	let delta = { changed: [] as string[] };
 	let deltaError: string | undefined;

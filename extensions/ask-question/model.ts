@@ -5,6 +5,8 @@ export interface AskQuestionDetails {
     multiSelect: boolean;
     wasCustom?: boolean;
     customAnswers?: string[];
+    /** No compatible interaction adapter was installed; this is not cancellation. */
+    unavailable?: boolean;
 }
 
 export interface AskQuestionResult {
@@ -23,6 +25,7 @@ export interface AskQuestionInput {
 export interface QuestionnaireDetails {
     questions: Array<AskQuestionDetails & { label?: string }>;
     cancelled?: boolean;
+    unavailable?: boolean;
 }
 
 export type QuestionnaireAnswer = AskQuestionResult & { completed: boolean };

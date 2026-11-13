@@ -5,19 +5,14 @@ import (
 	"fmt"
 
 	"pi-goui/internal/config"
+	"pi-goui/internal/extensionapi"
 	"pi-goui/internal/session"
 )
 
 // Hooks supplies terminal rendering primitives from the parent render package.
 // All hooks are required, pure, and must preserve content at the requested width.
 // Line sanitizes and styles each source line separately (no multiline padding).
-type Hooks struct {
-	Line       func(text, color string, width int) []string
-	Clean      func(string) string
-	CodeRows   func(source, path, language string, start, width int, theme config.Theme) []string
-	DiffRows   func(diff string, width int, theme config.Theme) []string
-	DiffCounts func(diff string) (added, removed int)
-}
+type Hooks = extensionapi.DetailHooks
 
 type renderer struct {
 	theme config.Theme
@@ -53,28 +48,12 @@ func (v *renderer) tool(item session.Item) {
 			v.edit(item, args, details)
 		case "bash", "shell", "powershell":
 			v.bash(item, args, details)
-		case "worker":
-			v.worker(item, args, details)
 		case "codemode":
 			v.codemode(item, args, details)
-		case "ask_question":
-			v.askQuestion(item, args, details)
-		case "web_search":
-			v.webSearch(item, args, details)
-		case "fetch_content":
-			v.fetchContent(item, args, details)
-		case "source_check":
-			v.sourceCheck(item, args, details)
-		case "get_search_content":
-			v.getSearchContent(item, args, details)
-		case "update_plan":
-			v.updatePlan(item, args, details)
-		case "web_enable":
-			v.webEnable(item, args, details)
-		case "obs_recall":
-			v.obsRecall(item, args, details)
 		default:
-			v.generic(item, args, details)
+			if !v.extensions().Render(name, item, args, details) {
+				v.generic(item, args, details)
+			}
 		}
 	}
 	if len(details) > 0 {

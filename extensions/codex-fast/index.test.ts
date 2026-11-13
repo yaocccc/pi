@@ -1,20 +1,16 @@
 import assert from 'node:assert/strict';
-import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
+import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { getCapability } from '../shared/capabilities.ts';
+import { CODEX_FAST_CAPABILITY, CODEX_FAST_CHANGED, InvalidFastLevelError, type CodexFastService } from './api.ts';
 
-type Level = 'normal' | 'fast' | 'ultrafast';
-type Config = { level: Level };
-const levels: Level[] = ['normal', 'fast', 'ultrafast'];
-type Select = (title: string, options: string[]) => string | undefined | Promise<string | undefined>;
-const labels = ({ level }: Config) => levels.map((item) => `${item}${item === level ? ' · 当前' : ''}`);
 let importId = 0;
-
-async function setup(t: TestContext, initial: unknown) {
-    const root = mkdtempSync(join(tmpdir(), 'pi-codex-fast-test-'));
+async function setup(t: TestContext, initial?: unknown) {
+    const root = mkdtempSync(join(tmpdir(), 'codex-fast-capability-'));
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = root;
     t.after(() => {
@@ -23,264 +19,79 @@ async function setup(t: TestContext, initial: unknown) {
         rmSync(root, { recursive: true, force: true });
     });
     const file = join(root, 'codex-fast.json');
-    if (initial !== undefined) writeFileSync(file, `${JSON.stringify(initial)}\n`);
-    const commands = new Map<string, any>();
+    if (initial !== undefined) writeFileSync(file, JSON.stringify(initial));
+    const bus = new EventEmitter();
     const handlers = new Map<string, any>();
-    const notifications: { message: string; level: string }[] = [];
-    const { default: extension } = await import(`./index.ts?test=${++importId}`);
-    extension({
-        registerCommand: (name: string, command: any) => commands.set(name, command),
+    const pi = {
+        events: {
+            emit: (name: string, data: unknown) => { bus.emit(name, data); },
+            on: (name: string, handler: (data: any) => void) => { bus.on(name, handler); return () => { bus.off(name, handler); }; },
+        },
         on: (name: string, handler: any) => handlers.set(name, handler),
-    } as unknown as ExtensionAPI);
-    const request = (
-        model: object | null | undefined,
-        payload: unknown = { fixture: true },
-    ) => handlers.get('before_provider_request')({ payload }, { model });
-    return {
-        file, commands, notifications, request,
-        open: (select: Select, hasUI = true) => commands.get('codex-fast').handler('', {
-            hasUI,
-            ui: { select, notify: (message: string, level: string) => notifications.push({ message, level }) },
-        }),
-        saved: (): Config => JSON.parse(readFileSync(file, 'utf8')),
-        tier: (id = 'gpt-6-astra') => request({ id, provider: 'openai-codex', api: 'openai-codex-responses' })?.service_tier,
-    };
+        registerCommand: () => { throw new Error('Capability must not register UI commands'); },
+    } as unknown as ExtensionAPI;
+    const { default: extension } = await import(`./index.ts?capability=${++importId}`);
+    extension(pi);
+    const service = getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY)!;
+    assert.ok(service);
+    return { service, bus, file, handlers };
 }
 
-function trackSaves(t: TestContext, file: string) {
-    const counts = { writes: 0, renames: 0 };
-    const write = fs.writeFileSync;
-    const rename = fs.renameSync;
-    const writeMock = t.mock.method(fs, 'writeFileSync', (...args: Parameters<typeof write>) => {
-        if (args[0] === `${file}.${process.pid}.tmp`) counts.writes++;
-        return Reflect.apply(write, fs, args);
-    });
-    const renameMock = t.mock.method(fs, 'renameSync', (...args: Parameters<typeof rename>) => {
-        if (args[1] === file) counts.renames++;
-        return Reflect.apply(rename, fs, args);
-    });
-    syncBuiltinESMExports();
-    t.after(() => {
-        writeMock.mock.restore();
-        renameMock.mock.restore();
-        syncBuiltinESMExports();
-    });
-    return counts;
-}
-
-
-test('running extension reloads externally saved mode for requests and menu', async (t) => {
-    const fixture = await setup(t, { level: 'normal' });
-    for (const level of levels) {
-        const temp = `${fixture.file}.gui.tmp`;
-        writeFileSync(temp, JSON.stringify({ level }), { mode: 0o600 });
-        renameSync(temp, fixture.file);
-        assert.equal(fixture.tier(), level === 'ultrafast' ? 'ultrafast' : level === 'fast' ? 'priority' : undefined);
-        assert.equal(fixture.tier('other'), level === 'normal' ? undefined : 'priority');
-        await fixture.open((_title, options) => {
-            assert.deepEqual(options, labels({ level }));
-            return undefined;
-        });
+test('headless service exposes levels, validates and atomically saves without a UI', async (t) => {
+    const { service, file, bus } = await setup(t);
+    assert.deepEqual(service.levels, ['normal', 'fast', 'ultrafast']);
+    assert.deepEqual(service.getConfig(), { level: 'normal' });
+    const changes: unknown[] = [];
+    bus.on(CODEX_FAST_CHANGED, (state) => changes.push(state));
+    for (const level of service.levels) {
+        assert.deepEqual(service.setLevel(level), { level });
+        assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { level });
     }
-    writeFileSync(fixture.file, '{broken');
-    assert.equal(fixture.tier(), 'ultrafast', 'bad external write retains last known mode');
-});
-
-test('only codex-fast is registered', async (t) => {
-    const fixture = await setup(t, { level: 'normal' });
-    assert.deepEqual([...fixture.commands.keys()], ['codex-fast']);
-});
-
-for (const level of levels) {
-    test(`select and atomically save every tier from ${level}`, async (t) => {
-        const fixture = await setup(t, { level });
-        const counts = trackSaves(t, fixture.file);
-        let current = level;
-        for (const next of levels) {
-            let calls = 0;
-            await fixture.open((title, options) => {
-                calls++;
-                assert.match(title, new RegExp(`当前 ${current}`));
-                assert.deepEqual(options, labels({ level: current }));
-                return options[levels.indexOf(next)];
-            });
-            assert.equal(calls, 1, 'selection exits instead of reopening');
-            assert.deepEqual(fixture.saved(), { level: next });
-            assert.equal(fixture.notifications.at(-1)?.message, `Codex 档位已设为 ${next}`);
-            assert.equal(fixture.notifications.at(-1)?.level, 'info');
-            assert.equal(fixture.tier(), next === 'ultrafast' ? 'ultrafast' : next === 'fast' ? 'priority' : undefined);
-            assert.equal(fixture.tier('gpt-other'), next === 'normal' ? undefined : 'priority');
-            assert.equal(statSync(fixture.file).mode & 0o777, 0o600);
-            assert.equal(existsSync(`${fixture.file}.${process.pid}.tmp`), false);
-            current = next;
-        }
-        assert.deepEqual(counts, { writes: 3, renames: 3 });
-    });
-
-    test(`cancel or unexpected selection preserves ${level}`, async (t) => {
-        const fixture = await setup(t, { level });
-        const counts = trackSaves(t, fixture.file);
-        const original = readFileSync(fixture.file, 'utf8');
-        for (const choice of [undefined, 'unexpected']) await fixture.open(() => choice);
-        assert.deepEqual(counts, { writes: 0, renames: 0 });
-        assert.equal(readFileSync(fixture.file, 'utf8'), original);
-        assert.deepEqual(fixture.notifications, []);
-    });
-
-    test(`routing and payload preservation for ${level}`, async (t) => {
-        const fixture = await setup(t, { level });
-        const supported = { id: 'gpt-6-astra', provider: 'openai-codex', api: 'openai-codex-responses' };
-        for (const id of ['gpt-6-astra', 'gpt-other', 'gpt-6-astra-preview', 'gpt-6.1-sol', 'o3', 'Gpt-6-astra']) {
-            const payload = { model: id, fixture: true, service_tier: 'existing', nested: { keep: true } };
-            const original = structuredClone(payload);
-            const result = fixture.request({ ...supported, id }, payload);
-            const tier = level === 'ultrafast' && id === 'gpt-6-astra' ? 'ultrafast' : level !== 'normal' ? 'priority' : undefined;
-            assert.deepEqual(result, tier ? { ...payload, service_tier: tier } : undefined);
-            assert.deepEqual(payload, original);
-            if (result) assert.equal(result.nested, payload.nested);
-        }
-        for (const model of [{ ...supported, provider: 'openai' }, { ...supported, api: 'openai-responses' }, {}, null, undefined]) {
-            assert.equal(fixture.request(model), undefined);
-        }
-        for (const payload of [null, false, 1, 'payload', [], ['payload']]) {
-            assert.equal(fixture.request(supported, payload), undefined);
-        }
-    });
-}
-
-test('without UI warns without opening or saving', async (t) => {
-    const fixture = await setup(t, { level: 'ultrafast' });
-    const counts = trackSaves(t, fixture.file);
-    await fixture.open(() => assert.fail('must not select without UI'), false);
-    assert.deepEqual(counts, { writes: 0, renames: 0 });
-    assert.deepEqual(fixture.saved(), { level: 'ultrafast' });
-    assert.equal(fixture.notifications[0]?.level, 'warning');
-});
-
-for (const stage of ['write', 'rename']) {
-    test(`${stage} failure retains config and memory, later invocation retries`, async (t) => {
-        const fixture = await setup(t, { level: 'ultrafast' });
-        const original = readFileSync(fixture.file, 'utf8');
-        const temp = `${fixture.file}.${process.pid}.tmp`;
-        const backup = `${fixture.file}.backup`;
-        if (stage === 'write') mkdirSync(temp);
-        else {
-            renameSync(fixture.file, backup);
-            mkdirSync(fixture.file);
-        }
-        await fixture.open((_title, options) => options[0]);
-        assert.equal(fixture.notifications.at(-1)?.level, 'error');
-        assert.match(fixture.notifications.at(-1)!.message, /保存 Fast 配置失败:/);
-        assert.equal(readFileSync(stage === 'write' ? fixture.file : backup, 'utf8'), original);
-        assert.equal(fixture.tier(), 'ultrafast');
-        assert.equal(fixture.tier('gpt-other'), 'priority');
-        if (stage === 'write') rmSync(temp, { recursive: true });
-        else {
-            rmSync(fixture.file, { recursive: true });
-            renameSync(backup, fixture.file);
-        }
-        await fixture.open((_title, options) => {
-            assert.deepEqual(options, labels({ level: 'ultrafast' }));
-            return options[0];
-        });
-        assert.deepEqual(fixture.saved(), { level: 'normal' });
-        assert.equal(fixture.tier(), undefined);
-        assert.equal(fixture.notifications.at(-1)?.level, 'info');
-        assert.equal(existsSync(temp), false);
-    });
-}
-
-test('new level precedence, strict legacy booleans, malformed values, and missing defaults', async (t) => {
-    const cases: [unknown, Level][] = [
-        [{ fast: false, ultrafast: false }, 'normal'],
-        [{ fast: true, ultrafast: false }, 'fast'],
-        [{ fast: false, ultrafast: true }, 'ultrafast'],
-        [{ fast: true, ultrafast: true }, 'ultrafast'],
-        [{ fast: 'true', ultrafast: 1 }, 'normal'],
-        [{ level: 'normal', fast: true, ultrafast: true }, 'normal'],
-        [{ level: 'fast', ultrafast: true }, 'fast'],
-        [{ level: 'ultrafast' }, 'ultrafast'],
-        [{ level: 'invalid', fast: true }, 'normal'],
-        [{ level: null, ultrafast: true }, 'normal'],
-        [{ level: false }, 'normal'],
-        [{ level: 1 }, 'normal'],
-        [{ enabled: true }, 'normal'],
-        [{}, 'normal'], [null, 'normal'], [[], 'normal'], ['fast', 'normal'], [undefined, 'normal'],
-    ];
-    for (const [initial, level] of cases) {
-        await t.test(JSON.stringify(initial) ?? 'missing', async (child) => {
-            const fixture = await setup(child, initial);
-            const counts = trackSaves(child, fixture.file);
-            await fixture.open((_title, options) => {
-                assert.deepEqual(options, labels({ level }));
-                return undefined;
-            });
-            assert.deepEqual(counts, { writes: 0, renames: 0 }, 'loading does not migrate disk');
-            assert.equal(fixture.tier(), level === 'ultrafast' ? 'ultrafast' : level === 'fast' ? 'priority' : undefined);
-            assert.equal(fixture.tier('other'), level === 'normal' ? undefined : 'priority');
-            await fixture.open((_title, options) => options[levels.indexOf(level)]);
-            assert.deepEqual(fixture.saved(), { level }, 'saving migrates legacy config to single level');
-        });
+    assert.deepEqual(changes, service.levels.map((level) => ({ level })));
+    for (const invalid of ['bogus', null, 1, {}, undefined]) {
+        assert.throws(() => service.setLevel(invalid), InvalidFastLevelError);
     }
+    assert.deepEqual(service.getConfig(), { level: 'ultrafast' });
+    assert.equal(changes.length, 3);
+    const snapshot = service.getConfig();
+    snapshot.level = 'normal';
+    assert.equal(service.getConfig().level, 'ultrafast');
 });
 
-for (const answer of [undefined, 'fast', 'invalid']) {
-    test(`Go settings protocol: ${answer ?? 'cancel'}`, async (t) => {
-        const fixture = await setup(t, { level: 'normal' });
-        const previous = process.env.PI_GOUI_PROTOCOL;
-        process.env.PI_GOUI_PROTOCOL = '1';
-        t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
-        const events: any[] = [];
-        const counts = trackSaves(t, fixture.file);
-        await fixture.commands.get('codex-fast').handler('', {
-            mode: 'rpc', hasUI: true,
-            ui: {
-                select: () => assert.fail('Go owns the settings menu'),
-                input: async (title: string, payload: string) => {
-                    assert.equal(title, 'pi-goui:codex-fast:v1');
-                    assert.deepEqual(JSON.parse(payload), { level: 'normal' });
-                    assert.deepEqual(counts, { writes: 0, renames: 0 });
-                    return answer;
-                },
-                notify: (message: string) => {
-                    assert.ok(message.startsWith('pi-goui:event:v1:'));
-                    events.push(JSON.parse(message.slice('pi-goui:event:v1:'.length)));
-                },
-            },
-        });
-        assert.deepEqual(fixture.saved(), { level: answer === 'fast' ? 'fast' : 'normal' });
-        assert.deepEqual(counts, answer === 'fast' ? { writes: 1, renames: 1 } : { writes: 0, renames: 0 });
-        assert.deepEqual(events, answer === undefined ? [] : answer === 'fast'
-            ? [{ name: 'codex.settings-saved', data: { level: 'fast' } }]
-            : [{ name: 'codex.settings-error', data: { code: 'invalid-level', message: 'invalid' } }]);
-    });
-}
-
-test('native mode does not select Go protocol even with capability environment', async (t) => {
-    const fixture = await setup(t, { level: 'normal' });
-    const previous = process.env.PI_GOUI_PROTOCOL;
-    process.env.PI_GOUI_PROTOCOL = '1';
-    t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
-    await fixture.commands.get('codex-fast').handler('', {
-        mode: 'tui', hasUI: true,
-        ui: { select: async (_title: string, options: string[]) => options[1], input: () => assert.fail('native must not use Go protocol'), notify: () => {} },
-    });
-    assert.deepEqual(fixture.saved(), { level: 'fast' });
+test('headless service preserves legacy migration and provider-specific tiers', async (t) => {
+    const { service, handlers, file } = await setup(t, { fast: true, ultrafast: true });
+    assert.equal(service.getConfig().level, 'ultrafast');
+    const request = handlers.get('before_provider_request');
+    const model = { id: 'gpt-6-astra', provider: 'openai-codex', api: 'openai-codex-responses' };
+    assert.equal(request({ payload: { original: true } }, { model }).service_tier, 'ultrafast');
+    assert.equal(request({ payload: {} }, { model: { ...model, id: 'other' } }).service_tier, 'priority');
+    assert.equal(request({ payload: {} }, { model: { ...model, provider: 'other' } }), undefined);
+    writeFileSync(file, JSON.stringify({ level: 'normal' }));
+    assert.equal(request({ payload: {} }, { model }), undefined);
+    assert.equal(service.getConfig().level, 'normal');
 });
 
-test('Go save failure emits data error and retains persisted configuration', async (t) => {
-    const fixture = await setup(t, { level: 'normal' });
-    const previous = process.env.PI_GOUI_PROTOCOL;
-    process.env.PI_GOUI_PROTOCOL = '1';
-    t.after(() => { if (previous === undefined) delete process.env.PI_GOUI_PROTOCOL; else process.env.PI_GOUI_PROTOCOL = previous; });
-    mkdirSync(`${fixture.file}.${process.pid}.tmp`);
-    const events: any[] = [];
-    await fixture.commands.get('codex-fast').handler('', {
-        mode: 'rpc', hasUI: true,
-        ui: { input: async () => 'fast', notify: (message: string) => events.push(JSON.parse(message.slice('pi-goui:event:v1:'.length))) },
-    });
-    assert.deepEqual(fixture.saved(), { level: 'normal' });
-    assert.equal(events.length, 1);
-    assert.equal(events[0].name, 'codex.settings-error');
-    assert.match(events[0].data.message, /EISDIR/);
+test('failed persistence leaves committed state unchanged and emits no event', async (t) => {
+    const { service, file, bus } = await setup(t, { level: 'fast' });
+    let changes = 0;
+    bus.on(CODEX_FAST_CHANGED, () => changes++);
+    // A directory at the staging path deterministically rejects the write.
+    mkdirSync(`${file}.${process.pid}.tmp`);
+    assert.throws(() => service.setLevel('ultrafast'));
+    assert.equal(service.getConfig().level, 'fast');
+    assert.equal(changes, 0);
+});
+
+test('notification failures cannot undo a committed configuration', async (t) => {
+    const { service, bus, file } = await setup(t);
+    bus.on(CODEX_FAST_CHANGED, () => { throw new Error('observer failed'); });
+    assert.deepEqual(service.setLevel('fast'), { level: 'fast' });
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).level, 'fast');
+});
+
+test('capability source has no UI imports, identity checks or drawing hooks', () => {
+    for (const name of ['index.ts', 'api.ts']) {
+        const source = readFileSync(new URL(name, import.meta.url), 'utf8');
+        assert.doesNotMatch(source, /(?:ctx\.ui|isGoUI|pi-tui|pi-ui\/|renderCall|renderResult|registerCommand)/);
+    }
 });

@@ -41,7 +41,7 @@ func TestWorkerTitleAndObjectiveFallback(t *testing.T) {
 			if !strings.Contains(output, want) {
 				t.Fatalf("title=%v authoritative=%v: %q", title, authoritative, output)
 			}
-			if workerData(item).cards[0].objective != "Complete execution goal" {
+			if workerData(item).Cards[0].Objective != "Complete execution goal" {
 				t.Fatal("objective changed")
 			}
 		}
@@ -51,7 +51,7 @@ func TestWorkerTitleAndObjectiveFallback(t *testing.T) {
 func TestWorkerHeaderDoesNotStretchViewport(t *testing.T) {
 	item := workerFixture()
 	view := workerData(item)
-	view.batch = "a7bd3f65-91ae-430d-90f8-230587f3cdf4"
+	view.Batch = "a7bd3f65-91ae-430d-90f8-230587f3cdf4"
 	for _, width := range []int{40, 80, 120, 240} {
 		row := workerHeader(item, view, true, testTheme(), width)
 		plain := ansi.Strip(row)
@@ -71,7 +71,7 @@ func TestWorkerDurationWholeSeconds(t *testing.T) {
 	}{
 		{0, "0s"}, {400, "0s"}, {900, "1s"}, {10400, "10s"}, {11900, "12s"}, {59900, "1m0s"}, {62300, "1m2s"},
 	} {
-		if got := workerDuration(workerCard{started: 1000, finished: 1000 + tc.elapsed}, 0); got != tc.want {
+		if got := workerDuration(workerCard{Started: 1000, Finished: 1000 + tc.elapsed}, 0); got != tc.want {
 			t.Fatalf("duration %v = %q, want %q", tc.elapsed, got, tc.want)
 		}
 	}
@@ -114,15 +114,16 @@ func TestWorkerTaskSectionIndentation(t *testing.T) {
 }
 
 func TestWorkerSlotNoticesHidden(t *testing.T) {
-	for _, phase := range []string{"等待执行槽位", "等待槽位", "已获得槽位"} {
+	for _, code := range []string{"waiting_slot", "slot_acquired"} {
+		phase := "arbitrary translated slot message"
 		for _, status := range []string{"queued", "running"} {
 			details, _ := json.Marshal(map[string]any{"kind": "worker-ui", "tasks": []any{map[string]any{
-				"mode": "scout", "objective": "Inspect", "status": status, "phase": phase,
-				"activities": []any{map[string]any{"type": "phase", "label": phase, "status": "running"}},
+				"mode": "scout", "objective": "Inspect", "status": status, "phase": phase, "phaseCode": code,
+				"activities": []any{map[string]any{"type": "phase", "phaseCode": code, "label": phase, "status": "running"}},
 			}}})
 			item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: details}
 			rows, _ := workerDetailRows(item, testTheme(), Options{}, 80)
-			if strings.Contains(ansi.Strip(strings.Join(rows, "\n")), "槽位") {
+			if strings.Contains(ansi.Strip(strings.Join(rows, "\n")), phase) {
 				t.Fatal("slot notice leaked")
 			}
 		}
@@ -134,8 +135,25 @@ func TestWorkerSlotNoticesHidden(t *testing.T) {
 	}
 }
 
+func TestWorkerPhaseTextIsNotAProtocol(t *testing.T) {
+	for _, code := range []string{"", "running", "timed_out", "cancelled", "future_phase"} {
+		for _, withActivity := range []bool{false, true} {
+			phase := "等待执行槽位"
+			task := map[string]any{"status": "running", "objective": "Inspect", "phase": phase, "phaseCode": code}
+			if withActivity {
+				task["activities"] = []any{map[string]any{"type": "phase", "phaseCode": code, "label": phase, "status": "running"}}
+			}
+			details, _ := json.Marshal(map[string]any{"kind": "worker-ui", "tasks": []any{task}})
+			rows, _ := workerDetailRows(session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: details}, testTheme(), Options{}, 100)
+			if !strings.Contains(ansi.Strip(strings.Join(rows, "\n")), phase) {
+				t.Fatalf("legacy/non-slot phase hidden: code=%q activity=%v", code, withActivity)
+			}
+		}
+	}
+}
+
 func TestWorkerStepsInterleaveToolsAndThinking(t *testing.T) {
-	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"status":"running","mode":"scout","objective":"Inspect source","modelId":"hidden/model","sessionMode":"fork","activities":[{"type":"thinking","label":"思考","detail":"First explanation"},{"type":"tool","status":"running","label":"read","detail":"secret.go"},{"type":"thinking","label":"思考","detail":"Second explanation"},{"type":"phase","label":"等待槽位"},{"type":"phase","label":"已获得槽位"}]}]}`)}
+	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"status":"running","mode":"scout","objective":"Inspect source","modelId":"hidden/model","sessionMode":"fork","activities":[{"type":"thinking","label":"思考","detail":"First explanation"},{"type":"tool","status":"running","label":"read","detail":"secret.go"},{"type":"thinking","label":"思考","detail":"Second explanation"},{"type":"phase","phaseCode":"waiting_slot","label":"等待槽位"},{"type":"phase","phaseCode":"slot_acquired","label":"已获得槽位"}]}]}`)}
 	opts := Options{Expanded: map[string]bool{workerTaskID(item, 0, 0): false}}
 	rows, blocks := workerDetailRows(item, testTheme(), opts, 100)
 	text := ansi.Strip(strings.Join(rows, "\n"))

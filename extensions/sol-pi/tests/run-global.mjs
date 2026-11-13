@@ -25,6 +25,7 @@ try {
   await symlink(pi, join(modules, "@earendil-works/pi-coding-agent"));
   const source = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   await cp(source, join(dir, "sol-pi"), { recursive: true });
+  await cp(join(source, "../shared"), join(dir, "shared"), { recursive: true });
   const requested = process.argv.slice(2);
   let args;
   if (requested[0] === "--typecheck") {

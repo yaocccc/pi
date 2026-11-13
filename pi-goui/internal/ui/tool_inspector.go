@@ -78,7 +78,7 @@ func (m *Model) inspectorItem(page *toolInspector) (session.Item, bool) {
 		if _, ok := m.inspectorItem(page.parent); !ok || page.parent.worker == nil {
 			return session.Item{}, false
 		}
-		items = page.parent.worker.visible
+		items = page.parent.worker.Visible
 	}
 	for _, it := range items {
 		if it.ID == page.itemID && (it.Role == "tool" || it.Role == "toolResult") {
@@ -211,7 +211,7 @@ func (m *Model) inspectorView() string {
 		line := ""
 		if row < len(rows) {
 			line = rows[row]
-			if w := m.inspector.worker; w != nil && w.activityRows[row] {
+			if w := m.inspector.worker; w != nil && w.ActivityRows[row] {
 				line = render.AnimateToolActivity(line, m.cfg.Theme, m.frame)
 			}
 			if showAction && action.y == i+2 {
@@ -227,7 +227,7 @@ func (m *Model) inspectorView() string {
 	if m.height > 3 {
 		status := fmt.Sprintf("%d–%d / %d · wheel · Esc", min(len(rows), m.inspector.offset+1), min(len(rows), m.inspector.offset+m.inspectorBodyHeight()), len(rows))
 		if m.inspector.worker != nil {
-			status = render.Clean(m.inspector.worker.replay.Status) + " · " + status
+			status = render.Clean(m.inspector.worker.Replay.Status) + " · " + status
 		}
 		out = append(out, m.paint(status, m.cfg.Theme.Muted))
 	}
@@ -268,7 +268,7 @@ func (m *Model) inspectorClick(v tea.Mouse) bool {
 			p := m.inspectorPoint(v.X, v.Y)
 			m.inspector.selection = transcriptSelection{anchor: p, end: p, dragging: true, lines: rows}
 			if m.inspector.worker != nil {
-				m.inspector.selection.content = m.inspector.worker.doc.Content
+				m.inspector.selection.content = m.inspector.worker.Doc.Content
 			}
 		}
 	}

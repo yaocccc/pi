@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,34 +12,126 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/internal/extensions/codexfast"
 	"pi-goui/internal/render"
+	"pi-goui/internal/rpc"
 )
 
-func TestCodexFastSidebarConfig(t *testing.T) {
-	m := testModel(t, "")
-	m.cfg.AgentDir = t.TempDir()
-	now := time.Now().Add(time.Second)
-	for _, tc := range []struct{ config, level string }{
-		{`{"level":"fast"}`, "fast"}, {`{"level":"ultrafast"}`, "ultrafast"}, {`{"level":"normal"}`, "normal"},
-		{`{"fast":true}`, "fast"}, {`{"ultrafast":true}`, "ultrafast"}, {`broken`, "ultrafast"}, {`{"level":"bad","fast":true}`, "normal"},
-	} {
-		if err := os.WriteFile(filepath.Join(m.cfg.AgentDir, "codex-fast.json"), []byte(tc.config), 0600); err != nil {
-			t.Fatal(err)
+func TestCodexExtensionProcess(t *testing.T) {
+	mode := os.Getenv("GOUI_CODEX_EXTENSION_CHILD")
+	if mode == "" {
+		return
+	}
+	wire, _ := os.OpenFile(os.Getenv("GOUI_CODEX_EXTENSION_WIRE"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	defer wire.Close()
+	level := "normal"
+	scanner := bufio.NewScanner(os.Stdin)
+	emit := func(v any) { _ = json.NewEncoder(os.Stdout).Encode(v) }
+	for scanner.Scan() {
+		var request map[string]any
+		_ = json.Unmarshal(scanner.Bytes(), &request)
+		_, _ = fmt.Fprintln(wire, scanner.Text())
+		data := any(map[string]any{})
+		switch request["type"] {
+		case "get_commands":
+			commands := []map[string]string{}
+			if mode != "absent" {
+				commands = append(commands, map[string]string{"name": "pi-ui-rpc", "source": "extension"})
+			}
+			data = map[string]any{"commands": commands}
+		case "prompt":
+			if mode == "absent" {
+				os.Exit(5)
+			}
+			var call struct {
+				ID, Method string
+				Params     struct{ Level string }
+			}
+			_ = json.Unmarshal([]byte(strings.TrimPrefix(request["message"].(string), "/pi-ui-rpc ")), &call)
+			response := map[string]any{"id": call.ID}
+			if mode == "missing" {
+				response["error"] = map[string]string{"code": "unavailable", "message": "capability absent"}
+			} else if mode == "readonly" && call.Method == "codex-fast.set" {
+				response["error"] = map[string]string{"code": "save-failed", "message": "disk readonly"}
+			} else {
+				if call.Method == "codex-fast.set" {
+					level = call.Params.Level
+				}
+				response["result"] = map[string]any{"level": level, "levels": codexFastLevels}
+			}
+			raw, _ := json.Marshal(response)
+			emit(map[string]any{"type": "extension_ui_request", "method": "notify", "message": "pi-ui:rpc:v1:" + string(raw)})
+			data = map[string]string{"disposition": "handled"}
 		}
-		now = now.Add(time.Second)
-		m.refreshCodexFast(now)
-		if m.codexFastMode() != tc.level {
-			t.Fatalf("%s: %s", tc.config, m.codexFastMode())
-		}
-		m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-		line := lines[m.sidebarLayout().ModeRow]
-		if !strings.Contains(line, "Mode") || !strings.Contains(line, render.CodexModeLabel(tc.level)) {
-			t.Fatalf("missing sidebar Mode: %s", line)
-		}
-		if strings.Contains(ansi.Strip(m.inputFooter(m.current()).text), " · "+tc.level+" · ") {
-			t.Fatal("mode remained in footer")
-		}
+		emit(map[string]any{"type": "response", "id": request["id"], "success": true, "data": data})
+	}
+	os.Exit(0)
+}
+func codexClient(t *testing.T, mode string) (*rpc.Client, string) {
+	t.Helper()
+	root := t.TempDir()
+	wire := filepath.Join(root, "wire")
+	t.Setenv("GOUI_CODEX_EXTENSION_CHILD", mode)
+	t.Setenv("GOUI_CODEX_EXTENSION_WIRE", wire)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := rpc.Start(rpc.Config{Bin: executable, Args: []string{"-test.run=^TestCodexExtensionProcess$", "--"}, AgentDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client, wire
+}
+func codexState(level string) codexfast.State {
+	return codexfast.State{Level: level, Levels: append([]string{}, codexFastLevels...)}
+}
+func loadCodexState(t *testing.T, m *Model) {
+	t.Helper()
+	cmd := m.requestCodexFast(m.current(), "", time.Now())
+	if cmd == nil {
+		t.Fatal("missing state request")
+	}
+	m.Update(cmd())
+}
+
+func TestCodexFastAbsentAndIndependentUserDirectory(t *testing.T) {
+	for _, mode := range []string{"absent", "missing", "normal"} {
+		t.Run(mode, func(t *testing.T) {
+			m := testModel(t, "")
+			m.cfg.AgentDir = t.TempDir()
+			// Existing unrelated user's configuration must never be read or modified.
+			path := filepath.Join(m.cfg.AgentDir, "codex-fast.json")
+			const untouched = "not JSON; frontend must not parse this"
+			if err := os.WriteFile(path, []byte(untouched), 0600); err != nil {
+				t.Fatal(err)
+			}
+			client, wire := codexClient(t, mode)
+			m.current().client = client
+			if m.codexFastMode() != "" || m.sidebarLayout().ModeRow != -1 {
+				t.Fatal("undiscovered extension shown")
+			}
+			loadCodexState(t, m)
+			expected := ""
+			if mode == "normal" {
+				expected = "normal"
+			}
+			if m.codexFastMode() != expected {
+				t.Fatalf("mode = %q", m.codexFastMode())
+			}
+			if mode != "normal" && m.sidebarLayout().ModeRow != -1 {
+				t.Fatal("absent capability shown")
+			}
+			raw, _ := os.ReadFile(path)
+			if string(raw) != untouched {
+				t.Fatal("frontend touched extension config")
+			}
+			raw, _ = os.ReadFile(wire)
+			if mode == "absent" && strings.Contains(string(raw), `"prompt"`) {
+				t.Fatal("unknown command could start model")
+			}
+		})
 	}
 }
 
@@ -47,121 +141,81 @@ func TestCodexModeDoesNotAnnotateModelName(t *testing.T) {
 	tab := m.current()
 	tab.state.Model.ID = "fast-model-ultrafast"
 	tab.state.Thinking = "high"
-	m.codexFastLabel = "normal"
 	before := ansi.Strip(m.inputFooter(tab).text)
-	if !strings.Contains(before, "fast-model-ultrafast · high") {
-		t.Fatal("model ID must be preserved verbatim")
-	}
 	for _, level := range codexFastLevels {
-		m.codexFastLabel = level
+		tab.codex.State = codexState(level)
 		if got := ansi.Strip(m.inputFooter(tab).text); got != before {
-			t.Fatalf("mode %s added a footer annotation: %s", level, got)
+			t.Fatal("mode altered model label")
 		}
 	}
 }
 
-func TestCodexFastPopupSelection(t *testing.T) {
+func TestCodexFastPopupSelectionWaitsForBackend(t *testing.T) {
 	m := testModel(t, "")
 	m.cfg.AgentDir = t.TempDir()
-	m.codexFastLabel = "normal"
+	client, _ := codexClient(t, "normal")
+	m.current().client = client
+	loadCodexState(t, m)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	target, box, ok := m.codexFastGeometry()
-	if !ok {
-		t.Fatal("missing mode geometry")
+	if !ok || box.y+box.height != target.y || box.x < m.mainWidth() || box.x+box.width > m.width {
+		t.Fatal("invalid popup geometry")
 	}
-	if target.y != m.sidebarLayout().QuotaRow+3 || box.y+box.height != target.y || box.x < m.mainWidth() || box.x+box.width > m.width || box.y < 0 {
-		t.Fatalf("popup must be above Mode below Credits within sidebar: target=%+v box=%+v", target, box)
-	}
-	for _, x := range []int{m.mainWidth() + 2, m.mainWidth() + 5, target.x - 1, target.x + target.width} {
+	for _, x := range []int{m.mainWidth() + 2, target.x - 1, target.x + target.width} {
 		m.Update(tea.MouseMotionMsg{X: x, Y: target.y})
 		if m.codexFastPopupVisible() {
-			t.Fatal("label or padding opened popup")
+			t.Fatal("padding opened popup")
 		}
-	}
-	m.Update(tea.MouseMotionMsg{X: target.x, Y: target.y})
-	if !m.codexFastPopupVisible() {
-		t.Fatal("hover did not open popup")
-	}
-	for _, level := range codexFastLevels {
-		if !strings.Contains(ansi.Strip(m.View().Content), render.CodexModeLabel(level)) {
-			t.Fatal("missing multiplier label in popup")
-		}
-	}
-	// Move through the adjacent bottom border before entering a selectable row.
-	m.Update(tea.MouseMotionMsg{X: target.x, Y: target.y - 1})
-	if !m.codexFastPopupVisible() {
-		t.Fatal("gap between target and popup")
-	}
-	before := m.View().Content
-	m.Update(tea.MouseMotionMsg{X: box.x + 2, Y: box.y + 3})
-	if !m.codexFastPopupVisible() {
-		t.Fatal("popup closed when entering")
-	}
-	if m.View().Content == before {
-		t.Fatal("hover did not highlight option")
-	}
-	m.Update(tea.MouseWheelMsg{X: box.x + 2, Y: box.y + 3, Button: tea.MouseWheelDown})
-	if m.codexFastMode() != "normal" {
-		t.Fatal("wheel modified level")
 	}
 	for i, level := range codexFastLevels {
 		target, _, _ = m.codexFastGeometry()
 		m.Update(tea.MouseMotionMsg{X: target.x, Y: target.y})
 		m.Update(tea.MouseMotionMsg{X: box.x + 2, Y: box.y + 1 + i})
-		m.Update(tea.MouseClickMsg{X: box.x + 2, Y: box.y + 1 + i, Button: tea.MouseLeft})
+		before := m.codexFastMode()
+		cmd, handled := m.codexFastClickCommand(box.x+2, box.y+1+i)
+		if !handled || cmd == nil {
+			t.Fatal("no RPC action")
+		}
+		if m.codexFastMode() != before {
+			t.Fatal("optimistic display before commit")
+		}
+		m.Update(cmd())
 		if m.codexFastMode() != level {
-			t.Fatalf("click did not set %s", level)
+			t.Fatalf("backend level not displayed: %s", level)
 		}
-		if m.codexFastPopupVisible() {
-			t.Fatal("popup remained open after selection")
+		_, newBox, _ := m.codexFastGeometry()
+		if box != newBox {
+			t.Fatal("popup moved")
 		}
-		newTarget, newBox, _ := m.codexFastGeometry()
-		if newBox != box {
-			t.Fatal("popup moved after selecting a different label")
+		line := strings.Split(ansi.Strip(m.View().Content), "\n")[m.sidebarLayout().ModeRow]
+		if !strings.Contains(line, render.CodexModeLabel(level)) {
+			t.Fatal("missing mode label")
 		}
-		line := strings.Split(ansi.Strip(m.View().Content), "\n")[newTarget.y]
-		if ansi.Cut(line, newTarget.x, newTarget.x+newTarget.width) != render.CodexModeLabel(level) {
-			t.Fatal("hit area differs from rendered value")
-		}
-		path := filepath.Join(m.cfg.AgentDir, "codex-fast.json")
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var saved map[string]string
-		if json.Unmarshal(raw, &saved) != nil || saved["level"] != level || len(saved) != 1 {
-			t.Fatalf("bad saved config: %s", raw)
-		}
-		info, _ := os.Stat(path)
-		if info.Mode().Perm() != 0600 {
-			t.Fatal("config permissions")
-		}
-	}
-	m.Update(tea.MouseMotionMsg{X: box.x - 1, Y: box.y + 1})
-	if m.codexFastPopupVisible() {
-		t.Fatal("popup remained outside target")
-	}
-	// A failed atomic replacement must not change the displayed level or leave temp files.
-	file := filepath.Join(m.cfg.AgentDir, "codex-fast.json")
-	if err := os.Remove(file); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(file, 0700); err != nil {
-		t.Fatal(err)
-	}
-	m.Update(tea.MouseMotionMsg{X: target.x, Y: target.y})
-	m.Update(tea.MouseMotionMsg{X: box.x + 2, Y: box.y + 1})
-	m.Update(tea.MouseClickMsg{X: box.x + 2, Y: box.y + 1, Button: tea.MouseLeft})
-	if m.codexFastMode() != "ultrafast" || !strings.Contains(m.current().toast.text, "failed") {
-		t.Fatal("failed save changed level or lacked notice")
 	}
 	files, _ := os.ReadDir(m.cfg.AgentDir)
-	if len(files) != 1 {
-		t.Fatal("temporary file leaked")
+	if len(files) != 0 {
+		t.Fatal("frontend persisted extension config")
 	}
-	m.current().dialogs = []*dialog{{}}
-	if m.codexFastPopupVisible() {
-		t.Fatal("popup visible behind modal")
+}
+func TestCodexFastFailureAndPerTabState(t *testing.T) {
+	m := testModel(t, "")
+	client, _ := codexClient(t, "readonly")
+	first := m.current()
+	first.client = client
+	loadCodexState(t, m)
+	cmd := m.requestCodexFast(first, "fast", time.Now())
+	m.Update(cmd())
+	if first.codex.State.Level != "normal" || !strings.Contains(first.toast.text, "failed") {
+		t.Fatal("failed save changed state")
+	}
+	m.addTab("")
+	if m.codexFastMode() != "" {
+		t.Fatal("new backend inherited another tab's state")
+	}
+	first.codex.Pending = true
+	m.codexFastResult(codexFastMsg{ID: first.id, Version: first.codex.Version, State: codexState("ultrafast")})
+	if m.current() == first || m.codexFastMode() != "" || first.codex.State.Level != "ultrafast" {
+		t.Fatal("response applied to wrong tab")
 	}
 }
 

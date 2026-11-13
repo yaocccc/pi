@@ -70,7 +70,7 @@ func (m *Model) pointerShapeAt(x, y int) string {
 		}
 		if w := m.inspector.worker; w != nil && y >= 2 && y < m.height-2 {
 			row := m.inspectorPoint(x, y).line
-			for _, b := range w.doc.Blocks {
+			for _, b := range w.Doc.Blocks {
 				if b.Foldable && row >= b.Start && row < b.End {
 					return "pointer"
 				}

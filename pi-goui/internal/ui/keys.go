@@ -45,8 +45,8 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 	}
 	if w := m.inspector.worker; w != nil && (m.inspectorFullscreen() || m.inspectorContains(m.sidebarHistory.pointerX, m.sidebarHistory.pointerY)) {
 		if match("app.thinking.toggle") {
-			w.showThinking = !w.showThinking
-			w.revision++
+			w.ShowThinking = !w.ShowThinking
+			w.Revision++
 			return nil
 		}
 	}

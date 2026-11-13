@@ -1,18 +1,22 @@
 package ui
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/internal/extensions/worker"
+	"pi-goui/internal/rpc"
 	"pi-goui/internal/session"
-	"pi-goui/internal/session/worker"
 )
 
 const workerPageID = "12345678-1234-4234-8234-123456789abc"
@@ -36,6 +40,7 @@ func workerPageFixture(t *testing.T) (*Model, *tab, string) {
 	m.document(parent)
 	parent.offset = 0
 	parent.follow = false
+	parent.client = workerTranscriptTestClient(t, path)
 	return m, parent, path
 }
 func appendWorkerLog(t *testing.T, path, text string) {
@@ -73,6 +78,28 @@ const workerLiveEvents = `{"type":"agent_start"}
 {"type":"tool_execution_end","toolCallId":"r1","toolName":"read","result":{"content":[{"type":"text","text":"FULL TOOL RESULT"}]},"isError":false}
 `
 
+func TestWorkerWithoutExtensionBackendNeverReadsLocalRecordings(t *testing.T) {
+	m := workerTaskFixture(t, true)
+	parent := m.current()
+	root := t.TempDir()
+	m.cfg.AgentDir = filepath.Join(root, "agent")
+	if err := os.Mkdir(filepath.Join(root, "worker-transcripts"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	text := `{"type":"worker_transcript_header","version":1,"id":"` + workerPageID + `","entries":[]}` + "\n" + `{"type":"message_end","message":{"role":"user","content":"PRIVATE_LOCAL_RECORDING","timestamp":1}}` + "\n"
+	if err := os.WriteFile(filepath.Join(root, "worker-transcripts", workerPageID+".jsonl"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	parent.state.Items[0].Details = json.RawMessage(`{"kind":"worker-ui","batchId":"batch","tasks":[{"index":0,"title":"Optional task","status":"completed","transcript":{"version":1,"id":"` + workerPageID + `"}}]}`)
+	receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
+	if m.inspector.worker != nil || !strings.Contains(m.inspector.fallbackReason, "不可用") {
+		t.Fatal("missing backend did not fall back")
+	}
+	if strings.Contains(strings.Join(m.inspectorRows(), "\n"), "PRIVATE_LOCAL_RECORDING") {
+		t.Fatal("frontend read a local recording without RPC")
+	}
+}
+
 func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 	m, parent, path := workerPageFixture(t)
 	original, _ := json.Marshal(parent.state)
@@ -93,7 +120,7 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 	}
 	receiveWorkerCommand(t, m, cmd)
 	appendWorkerLog(t, path, workerLiveEvents)
-	m.inspector.worker.next = time.Time{}
+	m.inspector.worker.Next = time.Time{}
 	receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
 	rows := m.inspectorRows()
 	all := ansi.Strip(strings.Join(rows, "\n"))
@@ -103,10 +130,10 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 		}
 	}
 	foundTool := false
-	for _, item := range m.inspector.worker.visible {
+	for _, item := range m.inspector.worker.Visible {
 		foundTool = foundTool || strings.Contains(item.Text, "FULL TOOL RESULT")
 	}
-	if !foundTool || len(m.inspector.worker.visible) <= 2 {
+	if !foundTool || len(m.inspector.worker.Visible) <= 2 {
 		t.Fatal("task detail lost intermediate tools")
 	}
 	if strings.Contains(all, "Other task") {
@@ -150,9 +177,9 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 		t.Fatal("inspector interaction altered parent")
 	}
 	appendWorkerLog(t, path, "{\"type\":\"worker_transcript_end\",\"status\":\"completed\",\"complete\":true}\n")
-	m.inspector.worker.next = time.Time{}
+	m.inspector.worker.Next = time.Time{}
 	receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
-	if !m.inspector.worker.replay.Stopped || m.inspector.worker.replay.Status != "completed" {
+	if !m.inspector.worker.Replay.Stopped || m.inspector.worker.Replay.Status != "completed" {
 		t.Fatal("missing terminal")
 	}
 	if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
@@ -165,7 +192,7 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 }
 func TestWorkerSummaryFallbackLifecycle(t *testing.T) {
 	m, parent, path := workerPageFixture(t)
-	beforeTabs, beforeOffset := len(m.tabs), parent.offset
+	beforeTabs, beforeOffset, beforeClient := len(m.tabs), parent.offset, parent.client
 	snapshot := func(reversed bool, transcript string, summary string) {
 		t.Helper()
 		a := `{"index":0,"title":"TASK_A","objective":"ONLY_A_GOAL","mode":"implement","status":"completed","resolvedPreset":"deep","allowedPaths":["SECRET_CONTRACT"],"activities":[{"id":"SECRET_ID","at":123,"detail":"SECRET_ACTIVITY"}],"result":{"summary":["` + summary + `"],"validation":[{"command":"go test ./...","result":"passed"}],"risks":["ONLY_A_RISK"],"execution":{"internal":"SECRET_EXECUTION"}}` + transcript + `}`
@@ -201,7 +228,7 @@ func TestWorkerSummaryFallbackLifecycle(t *testing.T) {
 	if !strings.Contains(plain, "UPDATED_SUMMARY") || strings.Contains(plain, "ONLY_B_") {
 		t.Fatal("reorder or live summary failed")
 	}
-	if m.current() != parent || len(m.tabs) != beforeTabs || parent.offset != beforeOffset || parent.client != nil {
+	if m.current() != parent || len(m.tabs) != beforeTabs || parent.offset != beforeOffset || parent.client != beforeClient {
 		t.Fatal("fallback changed parent/session")
 	}
 	// A later descriptor upgrades only on explicit re-open, never hot polling.
@@ -211,7 +238,7 @@ func TestWorkerSummaryFallbackLifecycle(t *testing.T) {
 	}
 	appendWorkerLog(t, path, workerLiveEvents)
 	receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
-	if m.inspector.worker == nil || m.inspector.fallbackReason != "" || len(m.inspector.worker.visible) == 0 {
+	if m.inspector.worker == nil || m.inspector.fallbackReason != "" || len(m.inspector.worker.Visible) == 0 {
 		t.Fatal("reopen did not upgrade to real recording")
 	}
 	m.closeInspector()
@@ -246,7 +273,7 @@ func TestWorkerFallbackReadFailuresAndRecovery(t *testing.T) {
 					t.Fatal("unsafe descriptor attempted disk read")
 				}
 			} else if kind == "permission" {
-				m.receiveWorkerTranscript(workerTranscriptMsg{owner: m.inspector.worker, err: &os.PathError{Op: "open", Path: "/PRIVATE/PATH", Err: os.ErrPermission}})
+				m.receiveWorkerTranscript(workerTranscriptMsg{Owner: m.inspector.worker, Err: &rpc.ExtensionError{Code: "transcript-permission", Message: "access denied"}})
 			} else {
 				receiveWorkerCommand(t, m, cmd)
 			}
@@ -283,7 +310,7 @@ func TestWorkerRecordingErrorRetainsReadMessages(t *testing.T) {
 		w := m.inspector.worker
 		m.inspectorRows()
 		var before []string
-		for _, item := range w.visible {
+		for _, item := range w.Visible {
 			before = append(before, item.Text)
 		}
 		if replacement {
@@ -293,15 +320,15 @@ func TestWorkerRecordingErrorRetainsReadMessages(t *testing.T) {
 		} else {
 			appendWorkerLog(t, path, "invalid tail\n")
 		}
-		w.next = time.Time{}
+		w.Next = time.Time{}
 		receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
 		m.inspectorRows()
 		var after []string
-		for _, item := range w.visible {
+		for _, item := range w.Visible {
 			after = append(after, item.Text)
 		}
-		if m.inspector.worker != w || strings.Join(before, "\n") != strings.Join(after, "\n") || !strings.Contains(w.replay.Status, "保留已读取内容") {
-			t.Fatalf("read failure discarded real conversation replacement=%v before=%q after=%q status=%s", replacement, before, after, w.replay.Status)
+		if m.inspector.worker != w || strings.Join(before, "\n") != strings.Join(after, "\n") || !strings.Contains(w.Replay.Status, "保留已读取内容") {
+			t.Fatalf("read failure discarded real conversation replacement=%v before=%q after=%q status=%s", replacement, before, after, w.Replay.Status)
 		}
 		if m.pollWorkerSession(time.Now().Add(time.Hour)) != nil {
 			t.Fatal("partial failure hot loop")
@@ -315,7 +342,7 @@ func TestWorkerRecordingErrorRetainsReadMessages(t *testing.T) {
 		if m.inspector.worker == w || m.inspector.fallbackReason != "" {
 			t.Fatal("read failure could not be retried")
 		}
-		m.receiveWorkerTranscript(workerTranscriptMsg{owner: w, err: os.ErrNotExist})
+		m.receiveWorkerTranscript(workerTranscriptMsg{Owner: w, Err: &rpc.ExtensionError{Code: "transcript-not-found", Message: "unavailable"}})
 		if m.inspector.fallbackReason != "" {
 			t.Fatal("stale failure downgraded reopened recording")
 		}
@@ -329,7 +356,7 @@ func TestWorkerConversationStaleReadAndMissingRecording(t *testing.T) {
 	m.closeInspector()
 	fresh := m.openWorkerSession(parent, "w", "index:batch:0")
 	m.receiveWorkerTranscript(cmd().(workerTranscriptMsg))
-	if m.inspector.worker == old || !m.inspector.worker.pending || m.inspector.worker.revision != 1 {
+	if m.inspector.worker == old || !m.inspector.worker.Pending || m.inspector.worker.Revision != 1 {
 		t.Fatal("stale read applied")
 	}
 	receiveWorkerCommand(t, m, fresh)
@@ -358,14 +385,14 @@ func TestWorkerConversationSwitchIgnoresPendingReads(t *testing.T) {
 	parent.state.Items[0].Details = json.RawMessage(`{"kind":"worker-ui","batchId":"batch","tasks":[{"index":0,"status":"running","transcript":{"version":1,"id":"` + workerPageID + `"}},{"index":1,"status":"running","transcript":{"version":1,"id":"` + secondID + `"}}]}`)
 	second := m.openWorkerSession(parent, "w", "index:batch:1")
 	m.receiveWorkerTranscript(first().(workerTranscriptMsg))
-	if m.inspector.worker.descriptor.ID != secondID || !m.inspector.worker.pending {
+	if m.inspector.worker.Descriptor.ID != secondID || !m.inspector.worker.Pending {
 		t.Fatal("old task read overwrote new task")
 	}
 	receiveWorkerCommand(t, m, second)
-	if len(m.tabs) != 1 || m.inspector.taskKey != "index:batch:1" || len(m.inspector.worker.replay.View().Items) == 0 {
+	if len(m.tabs) != 1 || m.inspector.taskKey != "index:batch:1" || len(m.inspector.worker.Replay.View().Items) == 0 {
 		t.Fatal("new task not displayed")
 	}
-	m.inspector.worker.next = time.Time{}
+	m.inspector.worker.Next = time.Time{}
 	pending := m.pollWorkerSession(time.Now())
 	m.addTab("")
 	m.activate(1)
@@ -380,10 +407,10 @@ func TestWorkerConversationIncompleteAndTaskLifecycle(t *testing.T) {
 		m, parent, path := workerPageFixture(t)
 		receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
 		appendWorkerLog(t, path, marker)
-		m.inspector.worker.settled = time.Now().Add(-5 * time.Second)
-		m.inspector.worker.next = time.Time{}
+		m.inspector.worker.Settled = time.Now().Add(-5 * time.Second)
+		m.inspector.worker.Next = time.Time{}
 		receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
-		if !m.inspector.worker.replay.Stopped || !strings.Contains(m.inspector.worker.replay.Status, "Incomplete") {
+		if !m.inspector.worker.Replay.Stopped || !strings.Contains(m.inspector.worker.Replay.Status, "Incomplete") {
 			t.Fatal("false completion")
 		}
 	}
@@ -401,7 +428,7 @@ func TestWorkerConversationIncompleteAndTaskLifecycle(t *testing.T) {
 	if pending != nil {
 		m.receiveWorkerTranscript(pending().(workerTranscriptMsg))
 	}
-	if m.inspector.worker != nil && len(m.inspector.worker.replay.View().Items) != 0 {
+	if m.inspector.worker != nil && len(m.inspector.worker.Replay.View().Items) != 0 {
 		t.Fatal("removed task accepted read")
 	}
 }
@@ -410,17 +437,17 @@ func TestWorkerConversationWidthDragAndLiveCache(t *testing.T) {
 	appendWorkerLog(t, path, workerLiveEvents)
 	receiveWorkerCommand(t, m, m.openWorkerSession(parent, "w", "index:batch:0"))
 	rows := m.inspectorRows()
-	oldRevision := m.inspector.worker.rendered
+	oldRevision := m.inspector.worker.Rendered
 	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: m.mainWidth(), Y: 2})
 	for _, width := range []int{70, 80, 90, 75} {
 		m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: m.width - width, Y: 2})
 		m.View()
-		if &m.inspectorRows()[0] != &rows[0] || m.inspector.worker.rendered != oldRevision {
+		if &m.inspectorRows()[0] != &rows[0] || m.inspector.worker.Rendered != oldRevision {
 			t.Fatal("drag rebuilt conversation")
 		}
 	}
 	appendWorkerLog(t, path, "{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"LIVE_AFTER_RESIZE\"}],\"timestamp\":10}}\n")
-	m.inspector.worker.next = time.Time{}
+	m.inspector.worker.Next = time.Time{}
 	receiveWorkerCommand(t, m, m.pollWorkerSession(time.Now()))
 	if &m.inspectorRows()[0] != &rows[0] {
 		t.Fatal("live event rebuilt while dragging")
@@ -448,11 +475,11 @@ func TestWorkerConversationFollowsUntilManualScroll(t *testing.T) {
 	w := m.inspector.worker
 	appendText := func() {
 		t.Helper()
-		if len(w.visible) == 0 {
-			w.visible = []session.Item{{ID: "reply", Role: "assistant"}}
+		if len(w.Visible) == 0 {
+			w.Visible = []session.Item{{ID: "reply", Role: "assistant"}}
 		}
-		w.visible[len(w.visible)-1].Text += strings.Repeat("streamed line\n\n", 40)
-		w.revision++
+		w.Visible[len(w.Visible)-1].Text += strings.Repeat("streamed line\n\n", 40)
+		w.Revision++
 		m.inspectorRows()
 	}
 	bottom := func() int { return max(0, len(m.inspector.rows)-m.inspectorBodyHeight()) }
@@ -496,20 +523,20 @@ func TestWorkerConversationActivityCache(t *testing.T) {
 	view := session.State{Items: []session.Item{
 		{ID: "live-tool", Role: "tool", ToolID: "new", Arguments: json.RawMessage(`{"x":1}`), Details: json.RawMessage(`{"x":1}`)},
 	}}
-	w.refreshVisibleMessages(view)
-	if len(w.visible) != 1 || w.visible[0].ToolID != "new" {
+	w.RefreshVisibleMessages(view)
+	if len(w.Visible) != 1 || w.Visible[0].ToolID != "new" {
 		t.Fatal("projected live tool lost from the display cache")
 	}
 	checkChange := func(mutate func()) {
 		t.Helper()
-		revision := w.revision
+		revision := w.Revision
 		mutate()
-		w.refreshVisibleMessages(view)
-		if w.revision != revision+1 {
+		w.RefreshVisibleMessages(view)
+		if w.Revision != revision+1 {
 			t.Fatal("activity change did not invalidate cache")
 		}
-		w.refreshVisibleMessages(view)
-		if w.revision != revision+1 {
+		w.RefreshVisibleMessages(view)
+		if w.Revision != revision+1 {
 			t.Fatal("unchanged activity invalidated cache")
 		}
 	}
@@ -519,7 +546,7 @@ func TestWorkerConversationActivityCache(t *testing.T) {
 	checkChange(func() { view.Items[0].Thinking = "progress" })
 	checkChange(func() { view.Busy = true })
 	checkChange(func() { view.Items[0].MessageIndex = 3 })
-	if len(w.visible) != 1 {
+	if len(w.Visible) != 1 {
 		t.Fatal("attributed tool duplicated")
 	}
 }
@@ -540,7 +567,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 					}
 					batch.Records = append(batch.Records, raw)
 				}
-				m.receiveWorkerTranscript(workerTranscriptMsg{owner: w, batch: batch})
+				m.receiveWorkerTranscript(workerTranscriptMsg{Owner: w, Batch: batch})
 				m.inspectorRows()
 			}
 			message := func(kind, role string, stamp int, content ...map[string]any) map[string]any {
@@ -561,52 +588,52 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 			}
 			header := map[string]any{"type": "worker_transcript_header", "version": 1, "id": workerPageID, "entries": entries}
 			deliver(true, header)
-			if w.replay.View().MessageCount != inherited || len(w.visible) != 0 {
-				t.Fatalf("fork context leaked: count=%d visible=%+v", w.replay.View().MessageCount, w.visible)
+			if w.Replay.View().MessageCount != inherited || len(w.Visible) != 0 {
+				t.Fatalf("fork context leaked: count=%d visible=%+v", w.Replay.View().MessageCount, w.Visible)
 			}
 			deliver(false, message("message_start", "user", 1000, text("CURRENT_TASK_INPUT")), message("message_end", "user", 1000, text("CURRENT_TASK_INPUT")))
-			if len(w.visible) != 1 || w.visible[0].Text != "CURRENT_TASK_INPUT" {
+			if len(w.Visible) != 1 || w.Visible[0].Text != "CURRENT_TASK_INPUT" {
 				t.Fatal("task input missing or duplicated")
 			}
 			deliver(false, message("message_end", "assistant", 1001, map[string]any{"type": "thinking", "thinking": "HIDDEN_THINKING"}, map[string]any{"type": "toolCall", "id": "call", "name": "read", "arguments": map[string]any{"path": "a.go"}}))
-			if len(w.visible) < 3 {
+			if len(w.Visible) < 3 {
 				t.Fatal("thinking/tool-only activity was discarded")
 			}
 			deliver(false, message("message_end", "assistant", 1002, text("EARLIER_REPLY")))
-			if w.visible[len(w.visible)-1].Text != "EARLIER_REPLY" {
+			if w.Visible[len(w.Visible)-1].Text != "EARLIER_REPLY" {
 				t.Fatal("readable reply missing")
 			}
-			rows, revision := m.inspector.rows, w.revision
+			rows, revision := m.inspector.rows, w.Revision
 			deliver(false,
 				map[string]any{"type": "tool_execution_start", "toolCallId": "call", "toolName": "read", "args": map[string]any{"path": "a.go"}},
 				map[string]any{"type": "tool_execution_end", "toolCallId": "call", "toolName": "read", "result": map[string]any{"content": []map[string]any{text("HIDDEN_TOOL_RESULT")}}, "isError": false},
 				message("message_end", "assistant", 1003, map[string]any{"type": "thinking", "thinking": "MORE_HIDDEN_THINKING"}))
-			if w.revision == revision || &rows[0] == &m.inspector.rows[0] {
+			if w.Revision == revision || &rows[0] == &m.inspector.rows[0] {
 				t.Fatal("internal activity did not invalidate the document")
 			}
-			rows, revision = m.inspector.rows, w.revision
-			w.refreshVisibleMessages(w.replay.View())
+			rows, revision = m.inspector.rows, w.Revision
+			w.RefreshVisibleMessages(w.Replay.View())
 			m.inspectorRows()
-			if w.revision != revision || &rows[0] != &m.inspector.rows[0] {
+			if w.Revision != revision || &rows[0] != &m.inspector.rows[0] {
 				t.Fatal("unchanged activity invalidated the document")
 			}
 			deliver(false, message("message_start", "assistant", 1004))
 			foundEarlier := false
-			for _, item := range w.visible {
+			for _, item := range w.Visible {
 				foundEarlier = foundEarlier || item.Text == "EARLIER_REPLY"
 			}
 			if !foundEarlier {
 				t.Fatal("empty streaming message displaced readable reply")
 			}
 			deliver(false, map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{"type": "text_delta", "contentIndex": 0, "delta": "# Final conclusion\n\n**bold** result"}})
-			if !strings.Contains(w.visible[len(w.visible)-1].Text, "Final conclusion") {
+			if !strings.Contains(w.Visible[len(w.Visible)-1].Text, "Final conclusion") {
 				t.Fatal("latest streamed text not selected")
 			}
 			conclusion := "# Final conclusion\n\n**bold** result\n\n- checked\n- done\n\n| Name | Result |\n| --- | --- |\n| test | pass |\n\n```go\n" + strings.Repeat("var 中文 = 1\n", 40) + "// FINAL_END\n```"
 			deliver(false, message("message_end", "assistant", 1004, map[string]any{"type": "thinking", "thinking": "HIDDEN_THINKING"}, text(conclusion), text("FINAL_TAIL")), map[string]any{"type": "worker_transcript_end", "status": "completed", "complete": true})
 			var allText string
 			var toolFound, thinkingFound bool
-			for _, item := range w.visible {
+			for _, item := range w.Visible {
 				allText += item.Text + "\n"
 				toolFound = toolFound || item.ToolID == "call" && item.Text == "HIDDEN_TOOL_RESULT" && len(item.Arguments) > 0
 				thinkingFound = thinkingFound || strings.Contains(item.Thinking, "HIDDEN_THINKING")
@@ -614,7 +641,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 			if !strings.Contains(allText, conclusion) || !strings.Contains(allText, "FINAL_TAIL") || !toolFound || !thinkingFound {
 				t.Fatal("task result or intermediate activity not preserved in full")
 			}
-			plain := ansi.Strip(w.doc.Text)
+			plain := ansi.Strip(w.Doc.Text)
 			for _, hidden := range []string{"INHERITED_SECRET", "**bold**"} {
 				if strings.Contains(plain, hidden) {
 					t.Fatalf("unwanted output %q", hidden)
@@ -625,20 +652,20 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 					t.Fatalf("missing formatted output %q", wanted)
 				}
 			}
-			if w.replay.View().MessageCount <= inherited+2 {
+			if w.Replay.View().MessageCount <= inherited+2 {
 				t.Fatal("filter destroyed full recording state")
 			}
-			if len(w.doc.Blocks) <= 2 {
+			if len(w.Doc.Blocks) <= 2 {
 				t.Fatal("intermediate calls missing from document")
 			}
 			// Replacement/truncation restarts the inherited boundary and display.
 			header["entries"] = []map[string]any{}
 			deliver(true, header)
-			if w.replay.View().MessageCount != 0 || len(w.visible) != 0 || strings.Contains(w.doc.Text, "FINAL_TAIL") {
+			if w.Replay.View().MessageCount != 0 || len(w.Visible) != 0 || strings.Contains(w.Doc.Text, "FINAL_TAIL") {
 				t.Fatal("reset retained previous task messages")
 			}
 			deliver(false, message("message_end", "user", 2000, text("REPLACED_INPUT")))
-			if len(w.visible) != 1 || w.visible[0].Text != "REPLACED_INPUT" {
+			if len(w.Visible) != 1 || w.Visible[0].Text != "REPLACED_INPUT" {
 				t.Fatal("reset boundary suppressed new input")
 			}
 		})
@@ -657,8 +684,8 @@ func BenchmarkWorkerConversation(b *testing.B) {
 				args, _ := json.Marshal(map[string]any{"path": "large.go", "content": strings.Repeat("var value = \"完整源码 👩‍💻 with sufficient length to wrap\"\n", count)})
 				items = append(items, session.Item{ID: "write", Role: "tool", ToolName: "write", Arguments: args, HasResult: true})
 				items = append(items, session.Item{ID: "task-input", Role: "user", Text: "Explain the result", MessageIndex: count + 1}, session.Item{ID: "final", Role: "assistant", Text: "# Conclusion\n\n```go\n" + strings.Repeat("var value = \"完整源码 👩‍💻 with sufficient length to wrap\"\n", count) + "```", MessageIndex: count + 2})
-				m.inspector.worker = &workerSession{replay: replayFixtureItems(items), revision: 1}
-				m.inspector.worker.refreshVisibleMessages(m.inspector.worker.replay.View())
+				m.inspector.worker = &workerSession{Replay: replayFixtureItems(items), Revision: 1}
+				m.inspector.worker.RefreshVisibleMessages(m.inspector.worker.Replay.View())
 				m.inspectorRows()
 				m.View()
 				press := func() { m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: m.mainWidth(), Y: 2}) }
@@ -697,4 +724,103 @@ func BenchmarkWorkerConversation(b *testing.B) {
 			})
 		}
 	}
+}
+
+// A test-only fake Pi backend makes the host tests independent of this repository's
+// TypeScript extensions. Files below are backend fixture storage, never frontend IO.
+func workerTranscriptTestClient(t *testing.T, recording string) *rpc.Client {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX RPC test wrapper")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "pi")
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	script := "#!/bin/sh\nWORKER_TRANSCRIPT_HELPER=" + quote(recording) + " exec " + quote(exe) + " -test.run=^TestWorkerTranscriptRPCBackend$ -- \"$@\"\n"
+	if err = os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	client, err := rpc.Start(rpc.Config{Bin: bin, Cwd: root, AgentDir: root, NoSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+func TestWorkerTranscriptRPCBackend(t *testing.T) {
+	name := os.Getenv("WORKER_TRANSCRIPT_HELPER")
+	if name == "" {
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	out := json.NewEncoder(os.Stdout)
+	type position struct {
+		data   []byte
+		offset int
+		info   os.FileInfo
+	}
+	positions := map[string]position{}
+	serial := 0
+	for scanner.Scan() {
+		var command struct{ ID, Type, Message string }
+		if json.Unmarshal(scanner.Bytes(), &command) != nil {
+			continue
+		}
+		if command.Type == "get_commands" {
+			_ = out.Encode(map[string]any{"type": "response", "id": command.ID, "success": true, "data": map[string]any{"commands": []any{map[string]any{"name": "pi-ui-rpc", "source": "extension"}}}})
+			continue
+		}
+		var request struct {
+			ID, Method string
+			Params     struct {
+				Descriptor worker.Transcript
+				Cursor     string
+			}
+		}
+		_ = json.Unmarshal([]byte(strings.TrimPrefix(command.Message, "/pi-ui-rpc ")), &request)
+		response := map[string]any{"id": request.ID}
+		recording := filepath.Join(filepath.Dir(name), request.Params.Descriptor.ID+".jsonl")
+		data, err := os.ReadFile(recording)
+		info, _ := os.Stat(recording)
+		if err != nil {
+			response["error"] = map[string]any{"code": "transcript-not-found", "message": "recording unavailable"}
+		} else {
+			previous, exists := positions[request.Params.Cursor]
+			reset := !exists || previous.info == nil || !os.SameFile(previous.info, info) || len(data) < previous.offset || !bytes.Equal(data[:min(previous.offset, len(data))], previous.data[:min(previous.offset, len(previous.data))])
+			start := previous.offset
+			if reset {
+				start = 0
+			}
+			pending := data[start:]
+			complete := bytes.LastIndexByte(pending, '\n') + 1
+			records := []json.RawMessage{}
+			invalid := false
+			for _, line := range bytes.Split(pending[:complete], []byte{'\n'}) {
+				if len(line) == 0 {
+					continue
+				}
+				if !json.Valid(line) {
+					invalid = true
+					break
+				}
+				records = append(records, json.RawMessage(line))
+			}
+			if invalid {
+				response["error"] = map[string]any{"code": "invalid-transcript", "message": "invalid recording"}
+			} else {
+				serial++
+				token := fmt.Sprintf("00000000-0000-0000-0000-%012d", serial)
+				positions[token] = position{data: data, offset: start + complete, info: info}
+				response["result"] = map[string]any{"cursor": token, "reset": reset, "records": records, "more": false, "partial": complete < len(pending)}
+			}
+		}
+		encoded, _ := json.Marshal(response)
+		_ = out.Encode(map[string]any{"type": "extension_ui_request", "method": "notify", "message": "pi-ui:rpc:v1:" + string(encoded), "notifyType": "info"})
+		_ = out.Encode(map[string]any{"type": "response", "id": command.ID, "success": true, "data": map[string]any{"disposition": "handled"}})
+	}
+	os.Exit(0)
 }

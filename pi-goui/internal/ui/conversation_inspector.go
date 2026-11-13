@@ -1,14 +1,12 @@
 package ui
 
 import (
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
+	"pi-goui/internal/extensions/hostui"
 	"pi-goui/internal/render"
 	"pi-goui/internal/session"
-	"pi-goui/internal/session/worker"
 )
 
 // Shared presentation policy for the editable transcript and the read-only
@@ -35,50 +33,10 @@ func toggleDocumentBlock(doc render.Document, row int, folds map[string]bool) bo
 	return false
 }
 
-type conversationTarget struct {
-	id   string
-	rect hitRect
-}
+type conversationTarget = hostui.ConversationTarget
 
-// Build hit regions once per document, not once per pointer-motion event. The
-// coordinates are document cells; the viewport only translates and clips them.
 func conversationTargets(doc render.Document, lines []string, items []session.Item) []conversationTarget {
-	tools := map[string]bool{}
-	workers := map[string]bool{}
-	for _, it := range items {
-		if it.Role == "tool" || it.Role == "toolResult" {
-			tools[it.ID] = true
-			workers[it.ID] = it.ToolName == "worker" || strings.HasSuffix(it.ToolName, ".worker")
-		}
-	}
-	var out []conversationTarget
-	for _, b := range doc.Blocks {
-		top := b.Start + 1
-		if !tools[b.ID] || !b.Expanded || top >= len(lines) {
-			continue
-		}
-		s := ansi.Strip(lines[top])
-		l, r := strings.IndexAny(s, "╭┌"), strings.LastIndexAny(s, "╮┐")
-		if l < 0 || r < l {
-			continue
-		}
-		left, right := ansi.StringWidth(s[:l]), ansi.StringWidth(s[:r])
-		width := ansi.StringWidth(toolInspectButton)
-		if right-left-1 < width {
-			continue
-		}
-		if !workers[b.ID] && top+1 < b.End {
-			out = append(out, conversationTarget{b.ID, hitRect{x: right - width, y: top + 1, width: width}})
-		}
-		if workers[b.ID] {
-			for _, child := range doc.Blocks {
-				if child.InspectorParent == b.ID && child.InspectorTask != "" {
-					out = append(out, conversationTarget{child.ID, hitRect{x: right - width, y: child.Start, width: width}})
-				}
-			}
-		}
-	}
-	return out
+	return hostui.ConversationTargets(doc, lines, items, toolInspectButton)
 }
 func (m *Model) conversationInspectTarget(x, y int) (string, hitRect, bool) {
 	w := m.inspector.worker
@@ -92,15 +50,15 @@ func (m *Model) conversationInspectTarget(x, y int) (string, hitRect, bool) {
 	}
 	var id string
 	var found hitRect
-	for _, target := range w.targets {
-		rect := target.rect
+	for _, target := range w.Targets {
+		rect := hitRect{x: target.Rect.X, y: target.Rect.Y, width: target.Rect.Width}
 		rect.x += left + inset
 		rect.y += 2 - m.inspector.offset
 		if rect.y < 2 || rect.y >= m.height-2 || rect.x+rect.width > left+width-inset {
 			continue
 		}
 		if nearInspectorButton(rect, x, y) {
-			id, found = target.id, rect
+			id, found = target.ID, rect
 			if rect.contains(x, y) {
 				return id, found, true
 			}
@@ -114,11 +72,11 @@ func (m *Model) conversationClick(v tea.Mouse) tea.Cmd {
 		return nil
 	}
 	if key, ok := m.workerInputTarget(v.X, v.Y); ok {
-		if w.inputExpanded == nil {
-			w.inputExpanded = map[string]bool{}
+		if w.InputExpanded == nil {
+			w.InputExpanded = map[string]bool{}
 		}
-		w.inputExpanded[key] = !w.inputExpanded[key]
-		w.revision++
+		w.InputExpanded[key] = !w.InputExpanded[key]
+		w.Revision++
 		m.inspector.followPaused = true
 		return nil
 	}
@@ -126,9 +84,9 @@ func (m *Model) conversationClick(v tea.Mouse) tea.Cmd {
 		return m.openConversationDetail(id)
 	}
 	point := m.inspectorPoint(v.X, v.Y)
-	for _, link := range w.doc.ImageLinks {
+	for _, link := range w.Doc.ImageLinks {
 		if point.line == link.Row && point.cell >= link.Start && point.cell < link.End {
-			for _, item := range w.visible {
+			for _, item := range w.Visible {
 				if item.ID == link.ItemID && link.ImageIndex >= 0 && link.ImageIndex < len(item.Images) {
 					return openImagePreview(m.imagePreviews, m.current().id, item.Images[link.ImageIndex])
 				}
@@ -136,11 +94,11 @@ func (m *Model) conversationClick(v tea.Mouse) tea.Cmd {
 			return nil
 		}
 	}
-	if w.folds == nil {
-		w.folds = map[string]bool{}
+	if w.Folds == nil {
+		w.Folds = map[string]bool{}
 	}
-	if toggleDocumentBlock(w.doc, m.inspectorPoint(v.X, v.Y).line, w.folds) {
-		w.revision++
+	if toggleDocumentBlock(w.Doc, m.inspectorPoint(v.X, v.Y).line, w.Folds) {
+		w.Revision++
 	}
 	return nil
 }
@@ -150,7 +108,7 @@ func (m *Model) openConversationDetail(id string) tea.Cmd {
 		return nil
 	}
 	itemID, key := id, ""
-	for _, b := range w.doc.Blocks {
+	for _, b := range w.Doc.Blocks {
 		if b.ID == id && b.InspectorTask != "" {
 			itemID, key = b.InspectorParent, b.InspectorTask
 			break
@@ -159,19 +117,14 @@ func (m *Model) openConversationDetail(id string) tea.Cmd {
 	var child *workerSession
 	title, fallbackReason := "", ""
 	if key != "" {
-		for _, item := range w.visible {
+		for _, item := range w.Visible {
 			if item.ID == itemID {
 				selected, t, found := render.WorkerTaskResult(item, key)
 				if !found {
 					return nil
 				}
 				title = t
-				d, _, valid := selectedWorkerDescriptor(selected)
-				if valid {
-					child = &workerSession{descriptor: d, replay: worker.Replay{Status: "正在读取"}, revision: 1, showThinking: w.showThinking}
-				} else {
-					fallbackReason = workerMissingRecordingReason(selected)
-				}
+				child, fallbackReason = hostui.NewWorkerSession(selected, w.ShowThinking, w.Client)
 				break
 			}
 		}

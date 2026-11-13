@@ -438,30 +438,13 @@ func (m *Model) extension(t *tab, raw json.RawMessage) tea.Cmd {
 		} else {
 			d.editor.SetValue(e.DefaultValue)
 		}
-		if e.Method == "input" && e.Title == "pi-goui:ask-question:v1" {
-			var q questionnaire
-			if json.Unmarshal([]byte(e.Placeholder), &q) == nil && len(q.Questions) > 0 {
-				q.Answers = make([]questionAnswer, len(q.Questions))
-				d.questionnaire = &q
-				d.kind = "questionnaire"
-				d.editor.SetValue("")
-				m.refreshQuestionnaire(d)
-			}
-		}
-		if d.questionnaire == nil {
-			d.editor.Area.Placeholder = e.Placeholder
-		} else {
-			d.editor.Area.Placeholder = "请输入你的答案"
-		}
-		if e.Method == "input" && e.Title == "pi-goui:worker-settings:v1" {
-			if !m.openWorkerSettings(d, e.Placeholder) {
-				t.notify("无法打开 Worker 设置：无效数据")
-				return respond(t, d, map[string]any{"cancelled": true})
-			}
-		}
-		if e.Method == "input" && e.Title == "pi-goui:codex-fast:v1" {
-			if !m.openCodexFastSettings(d, e.Placeholder) {
-				t.notify("无法打开 Codex 设置：无效数据")
+		d.editor.Area.Placeholder = e.Placeholder
+		if e.Method == "input" {
+			h, view, commit := m.extensionDialog(t, d)
+			reason := h.OpenExtensionDialog(view, e.Title, e.Placeholder)
+			commit()
+			if reason != "" {
+				t.notify(reason)
 				return respond(t, d, map[string]any{"cancelled": true})
 			}
 		}

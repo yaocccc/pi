@@ -28,6 +28,7 @@ function harness({ summaryResult = () => fauxAssistantMessage("Checkpoint"), ...
   let model = { id: "test", provider: "faux", api: "faux", contextWindow: 1000000, maxTokens: 4096, reasoning: false };
   const parent = new AbortController();
   const pi = {
+    events: { emit: (_channel, { event }) => notices.push(event) },
     on(name, fn) { handlers.set(name, fn); },
     registerTool(tool) { tools.set(tool.name, tool); },
     getActiveTools() { return active; }, setActiveTools(next) { active = next; },
@@ -36,7 +37,7 @@ function harness({ summaryResult = () => fauxAssistantMessage("Checkpoint"), ...
   const ctx = {
     sessionManager: { getSessionFile: () => "persistent-test.jsonl", getSessionId: () => manager.getSessionId(), getBranch: () => manager.getBranch(), getLeafId: () => manager.getLeafId() },
     get model() { return model; }, signal: parent.signal, getSystemPrompt: () => "test", thinkingLevel: "off",
-    mode: "tui", hasUI: true, ui: { notify: (...args) => notices.push(args) },
+    mode: "tui", hasUI: true,
     modelRegistry: { streamSimple(_model, _context, options) {
       nestedSignal = options.signal;
       requests.push({ model: _model, options });
@@ -55,7 +56,7 @@ function harness({ summaryResult = () => fauxAssistantMessage("Checkpoint"), ...
     manager.appendMessage(toolResult);
     return handlers.get("turn_end")({ outcome: "completed", message, toolResults: [toolResult], entries: [], continue: false }, ctx);
   };
-  return { handlers, tools, ctx, ready, finish, boundary, notices, requests, parent, manager: () => manager, signal: () => nestedSignal,
+  return { pi, handlers, tools, ctx, ready, finish, boundary, notices, requests, parent, manager: () => manager, signal: () => nestedSignal,
     replaceSession: () => { manager = SessionManager.inMemory(); },
     replaceModel: () => { model = { ...model, id: "changed" }; },
     mutateModel: () => { model.id = "mutated-in-place"; },
@@ -111,7 +112,7 @@ test("background summary does not block, survives another run, preserves new mes
   h.finish(); await tick();
   assert.equal(h.requests.length, 1);
   assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0][0], /摘要已就绪/);
+  assert.equal(h.notices[0].name, "context.ready");
   assert.equal(h.manager().getBranch().some(e => e.type === "compaction"), false);
   const draft = settle(h);
   assert.equal(draft.entries[0].type, "compaction");
@@ -131,8 +132,7 @@ test("applied notification measures the committed boundary, includes the reminde
   h.manager().appendMessage({ role: "user", content: "DURING SUMMARY " + "x".repeat(1000), timestamp: 4 });
   now = 3500;
   h.finish(); await tick();
-  assert.match(h.notices[0][0], /生成耗时 2\.5s/);
-  assert.doesNotMatch(h.notices[0][0], /tokens|已压缩/);
+  assert.deepEqual(h.notices[0], { name: "context.ready", data: { generationMs: 2500 } });
   now = 8500;
   const draft = settle(h), compacted = draft.entries[0];
   assert.equal(h.notices.length, 1, "not applied until the draft is committed");
@@ -159,10 +159,8 @@ test("applied notification measures the committed boundary, includes the reminde
   });
   assert.deepEqual(buildSessionProjection(h.manager().getBranch()).messages, messages, "metrics are display-only");
   assert.equal(h.notices.length, 2);
-  const message = h.notices[1][0];
-  assert.ok(message.includes(`约 ${before.toLocaleString("en-US")} → ${after.toLocaleString("en-US")} tokens`));
-  assert.ok(message.includes(`减少 ${(before - after).toLocaleString("en-US")}，${((before - after) / before * 100).toFixed(1)}%`));
-  assert.match(message, /生成 2\.5s，总耗时 8\.0s（含等待安全边界）/);
+  assert.equal(h.notices[1].name, "context.applied");
+  assert.deepEqual(h.notices[1].data, metrics[0].data);
   h.handlers.get("agent_settled")({}, h.ctx);
   assert.equal(h.notices.length, 2);
   assert.equal(h.manager().getBranch().filter(e => e.customType === ONLINE_METRICS_ENTRY).length, 1);
@@ -186,11 +184,9 @@ for (const hasUI of [false, true]) test(`committed metrics persist with hasUI=${
   h.handlers.get("turn_start")({}, h.ctx);
   const metrics = h.manager().getBranch().find(e => e.customType === ONLINE_METRICS_ENTRY);
   assert.ok(metrics?.data.beforeTokens > metrics?.data.afterTokens);
-  if (hasUI) {
-    const notice = JSON.parse(h.notices.at(-1)[0].slice("pi-goui:event:v1:".length));
-    assert.equal(notice.name, "context.applied");
-    assert.deepEqual(notice.data, metrics.data);
-  } else assert.deepEqual(h.notices, []);
+  const notice = h.notices.at(-1);
+  assert.equal(notice.name, "context.applied");
+  assert.deepEqual(notice.data, metrics.data, "facts are available without a frontend");
   h.handlers.get("agent_settled")({}, h.ctx);
   assert.equal(h.manager().getBranch().filter(e => e.customType === ONLINE_METRICS_ENTRY).length, 1);
 });
@@ -207,8 +203,8 @@ test("token notification reports growth rather than claiming savings for a large
   const compacted = settle(h).entries[0];
   h.manager().appendCompaction(compacted.summary, compacted.firstKeptEntryId, 1000, compacted.details);
   h.handlers.get("agent_settled")({}, h.ctx);
-  assert.match(h.notices[1][0], /tokens（增加 [\d,]+，\d+\.\d%）/);
-  assert.doesNotMatch(h.notices[1][0], /减少|-\d/);
+  assert.equal(h.notices[1].name, "context.applied");
+  assert.ok(h.notices[1].data.afterTokens > h.notices[1].data.beforeTokens);
 });
 
 test("one running job deduplicates further boundaries; completed plan needs no continuation", async () => {
@@ -318,9 +314,8 @@ test("provider summary failure displays its reason without changing the configur
   });
   await h.boundary(); await h.ready; h.finish(); await tick();
   assert.equal(h.notices.length, 1);
-  assert.equal(h.notices[0][1], "warning");
-  assert.match(h.notices[0][0], /原因：.*400 Unsupported value for service_tier: fast/);
-  assert.doesNotMatch(h.notices[0][0], /tokens|已压缩/);
+  assert.equal(h.notices[0].name, "context.failed");
+  assert.match(h.notices[0].data.reason, /400 Unsupported value for service_tier: fast/);
   assert.equal(settle(h), undefined);
   assert.equal(h.requests.length, 1, "no silent fallback or extra request");
   assert.equal((await h.requests[0].options.onPayload({}, h.ctx.model)).service_tier, "fast");
@@ -332,13 +327,13 @@ test("summary failure details are bounded, single-line and redact common credent
     "https://user:pass@example.test/api?key=url-secret sk-key-secret eyJhbGci.test.signature " + "x".repeat(500),
   ); } });
   await h.boundary(); await h.ready; h.finish(); await tick();
-  const notice = h.notices[0][0], reason = notice.split("原因：")[1];
+  const reason = h.notices[0].data.reason;
   assert.match(reason, /^401 denied/);
   assert.match(reason, /\[REDACTED\]/);
   assert.match(reason, /\[URL\]/);
   assert.ok(reason.length <= 301);
   assert.ok(reason.endsWith("…"));
-  assert.doesNotMatch(notice, /bearer-secret|api-secret|token-secret|user:pass|url-secret|key-secret|eyJhbGci|[\u0000-\u001f\u007f-\u009f]/);
+  assert.doesNotMatch(reason, /bearer-secret|api-secret|token-secret|user:pass|url-secret|key-secret|eyJhbGci|[\u0000-\u001f\u007f-\u009f]/);
   assert.equal(settle(h), undefined);
 });
 
@@ -347,7 +342,7 @@ for (const thrown of ["network disconnected", {}, undefined]) {
     const h = harness({ summaryResult: () => { throw thrown; } });
     await h.boundary(); await h.ready; h.finish(); await tick();
     assert.equal(h.notices.length, 1);
-    assert.ok(h.notices[0][0].endsWith(`原因：${typeof thrown === "string" ? thrown : "未知错误"}`));
+    assert.equal(h.notices[0].data.reason, typeof thrown === "string" ? thrown : "未知错误");
     assert.equal(settle(h), undefined);
   });
 }
@@ -367,7 +362,7 @@ test("obsolete summary failures stay silent and do not prevent the next job", as
   await h.boundary(); await tick();
   assert.ok(h.requests.length > requestsBefore, "a fresh job can generate its native summary sections");
   assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0][0], /摘要已就绪/);
+  assert.equal(h.notices[0].name, "context.ready");
   assert.ok(settle(h));
 });
 
@@ -377,26 +372,16 @@ test("invalid summary configuration fails open with one warning", async () => {
   assert.equal(h.requests.length, 0);
   assert.equal(settle(h), undefined);
   assert.equal(h.notices.length, 1);
-  assert.equal(h.notices[0][1], "warning");
-  assert.match(h.notices[0][0], /未完成（耗时 \d+\.\ds）/);
-  assert.match(h.notices[0][0], /原因：bad config/);
-  assert.doesNotMatch(h.notices[0][0], /tokens|已压缩/);
+  assert.equal(h.notices[0].name, "context.failed");
+  assert.equal(h.notices[0].data.reason, "bad config");
+  assert.ok(h.notices[0].data.durationMs >= 0);
 });
 
-test("update_plan renderers emit no rows for calls and all result states", () => {
-  const h = harness();
-  const tool = h.tools.get("update_plan");
-  assert.equal(tool.renderShell, "self");
-  const callComponent = tool.renderCall({ steps }, {});
-  assert.deepEqual(callComponent.render(80), []);
-  assert.deepEqual(callComponent.render(1), []);
-  for (const isPartial of [true, false]) {
-    for (const details of [undefined, { boundary: false }, { boundary: true }]) {
-      const component = tool.renderResult({ content: [], details, isError: false }, { isPartial }, {});
-      assert.deepEqual(component.render(80), []);
-      assert.deepEqual(component.render(1), []);
-    }
-  }
+test("update_plan capability does not register terminal renderers", () => {
+  const tool = harness().tools.get("update_plan");
+  assert.equal(tool.renderShell, undefined);
+  assert.equal(tool.renderCall, undefined);
+  assert.equal(tool.renderResult, undefined);
 });
 
 for (const event of ["session_start", "session_tree", "session_before_tree", "session_before_switch", "session_before_fork", "model_select", "session_shutdown", "input"]) {
@@ -445,13 +430,12 @@ for (const event of ["session_shutdown", "session_before_switch", "no_lifecycle_
   });
 }
 
-test("a throwing UI cannot turn an optional background job into an unhandled rejection", async () => {
+test("a throwing observer cannot break an optional background job", async () => {
   const h = harness();
   await h.boundary(); await h.ready;
-  h.ctx.ui.notify = () => { throw new Error("UI became unavailable"); };
+  h.pi.events.emit = () => { throw new Error("Observer became unavailable"); };
   h.finish(); await tick(); await tick();
-  assert.equal(h.signal().aborted, true);
-  assert.equal(settle(h), undefined, "failed completion must not leave a ready draft");
+  assert.ok(settle(h), "observers cannot discard a successful summary");
 });
 
 test("Worker depth skips all OCC registration, not just execution", () => {

@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	"pi-goui/internal/extensions/toolrender/cards"
 	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/session"
 )
@@ -185,17 +186,8 @@ func gitRow(g *GitStatus, theme config.Theme, width int) string {
 	return fit(paint(fit(branch, max(1, width-ansi.StringWidth(suffix))), theme.Muted)+paint(suffix, color), width)
 }
 
-// CodexModeLabel is presentation-only; persisted mode values remain unchanged.
-func CodexModeLabel(mode string) string {
-	switch mode {
-	case "fast":
-		return "fast x2.5"
-	case "ultrafast":
-		return "ultrafast x8"
-	default:
-		return "normal x1"
-	}
-}
+// CodexModeLabel remains a compatibility facade; its labels belong to the adapter.
+func CodexModeLabel(mode string) string { return cards.CodexModeLabel(mode) }
 
 // SidebarModeValue shares the displayed value and its offset within the inner
 // sidebar row with pointer hit testing. The label and separating space are not

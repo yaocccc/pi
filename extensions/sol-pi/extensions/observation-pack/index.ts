@@ -20,7 +20,6 @@
 
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { hiddenRenderer } from "../../tui.ts";
 import { Type } from "typebox";
 import { runtimeRoot } from "../../runtime-paths.ts";
 import { createLedger, type Ledger } from "./ledger.ts";
@@ -67,7 +66,6 @@ export function createObservationPackExtension(): ExtensionFactory {
 			label: "Recall Observation",
 			description: "Read a stored large tool result by observation id and byte offset.",
 			promptSnippet: "Recall a paged excerpt from a previously replaced large tool result",
-			renderShell: "self",
 			parameters: Type.Object({
 				id: Type.String({ description: "Observation id from a placeholder" }),
 				offset: Type.Optional(Type.Integer({ minimum: 0, description: "Byte offset, default 0" })),
@@ -113,8 +111,6 @@ export function createObservationPackExtension(): ExtensionFactory {
 					},
 				};
 			},
-			renderCall: hiddenRenderer,
-			renderResult: hiddenRenderer,
 		});
 
 		pi.on("context", async (event, ctx: ExtensionContext) => {

@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/config"
+	"pi-goui/internal/extensionapi"
 	frames "pi-goui/internal/render/frame"
 	"pi-goui/internal/session"
 )
@@ -47,18 +48,7 @@ type Document struct {
 
 // Start is inclusive and End exclusive, in zero-based terminal lines of Text.
 // Tool blocks inside an assistant bubble have their own non-overlapping ranges.
-type Block struct {
-	ID, Role string
-	// InspectorParent/Task identify an isolated Worker task independently of
-	// transcript positions or the mutable order of snapshot arrays.
-	InspectorParent, InspectorTask string
-	MessageIndex                   int
-	Start, End                     int
-	Foldable                       bool
-	// Expanded is the effective state after global and per-ID overrides.
-	// toolGroup ranges cover only their header; children have separate ranges.
-	Expanded bool
-}
+type Block = extensionapi.Block
 
 // Clean removes all terminal commands and control characters from untrusted
 // records before Markdown parsing. Renderer-generated SGR is never fed into it.

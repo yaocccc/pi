@@ -276,7 +276,7 @@ func (s *State) LoadEntries(raw json.RawMessage) error {
 				if m.ToolCallID == s.livePlanTool {
 					planCaughtUp = true
 				}
-				if m.ToolName == "update_plan" && (m.IsError == nil || !*m.IsError) {
+				if m.ToolName == updatePlanTool && (m.IsError == nil || !*m.IsError) {
 					if steps, ok := parsePlan(m.Details); ok {
 						plan = steps
 					}
@@ -343,7 +343,7 @@ func (s *State) LoadMessages(raw json.RawMessage) error {
 	var fallbackPlan []PlanStep
 	fallbackPlanFound := false
 	for _, m := range v.Messages {
-		if len(s.records) == 0 && s.livePlanEntry == "" && s.livePlanTool == "" && m.Role == "toolResult" && m.ToolName == "update_plan" && (m.IsError == nil || !*m.IsError) {
+		if len(s.records) == 0 && s.livePlanEntry == "" && s.livePlanTool == "" && m.Role == "toolResult" && m.ToolName == updatePlanTool && (m.IsError == nil || !*m.IsError) {
 			if steps, ok := parsePlan(m.Details); ok {
 				fallbackPlan, fallbackPlanFound = steps, true
 			}
@@ -366,7 +366,7 @@ func (s *State) LoadMessages(raw json.RawMessage) error {
 }
 func (s *State) upsert(m message, finished bool) {
 	s.init()
-	if finished && m.Role == "toolResult" && m.ToolName == "update_plan" && (m.IsError == nil || !*m.IsError) {
+	if finished && m.Role == "toolResult" && m.ToolName == updatePlanTool && (m.IsError == nil || !*m.IsError) {
 		if steps, ok := parsePlan(m.Details); ok {
 			revision := s.PlanRevision
 			s.setPlan(steps)
@@ -565,7 +565,7 @@ func (s *State) Apply(raw json.RawMessage) bool {
 		r.projection = nil
 		s.project()
 	case "tool_execution_start", "tool_execution_update", "tool_execution_end":
-		if e.Type == "tool_execution_end" && e.ToolName == "update_plan" && (e.IsError == nil || !*e.IsError) {
+		if e.Type == "tool_execution_end" && e.ToolName == updatePlanTool && (e.IsError == nil || !*e.IsError) {
 			var result message
 			if json.Unmarshal(e.Result, &result) == nil && (result.IsError == nil || !*result.IsError) {
 				if steps, ok := parsePlan(result.Details); ok {

@@ -1,3 +1,4 @@
+import { isPrimarySession } from "./session-policy.ts";
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { basename } from 'node:path';
 import TelegramBot from 'node-telegram-bot-api';
@@ -115,7 +116,7 @@ export default (pi: ExtensionAPI) => {
     registerTelegramToolWatcher(pi, sendToTelegram, buildNotification);
 
     pi.on('agent_end', async (event, ctx) => {
-        if (!ctx.hasUI) return;
+        if (!isPrimarySession()) return;
 
         const projectName = basename(ctx.cwd) || ctx.cwd;
         const sessionName = pi.getSessionName();

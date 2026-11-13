@@ -24,27 +24,16 @@ function setup() {
   return { tool, contextHandler };
 }
 
-test("all background tool cards stay hidden for calls, progress, success and errors", () => {
+test("background capabilities do not register terminal renderers", () => {
   const tools = [setup().tool];
   registerOnlineTools({ registerTool: (tool) => tools.push(tool) }, {
-    updatePlan: async () => { throw new Error("rendering must not execute tools"); },
+    updatePlan: async () => { throw new Error("registration must not execute tools"); },
   });
   assert.deepEqual(tools.map((tool) => tool.name), ["obs_recall", "update_plan"]);
   for (const tool of tools) {
-    assert.equal(tool.renderShell, "self", "suppress the native tool shell as well");
-    const components = [tool.renderCall({}, {})];
-    for (const isPartial of [true, false]) {
-      for (const isError of [true, false]) {
-        for (const details of [undefined, { bytes: 42, lines: 3 }, { boundary: true }]) {
-          components.push(tool.renderResult({ content: [{ type: "text", text: "result" }], details, isError }, { isPartial }, {}));
-        }
-      }
-    }
-    for (const component of components) {
-      for (const width of [1, 80, 120]) assert.deepEqual(component.render(width), []);
-      component.invalidate();
-      assert.deepEqual(component.render(80), []);
-    }
+    assert.equal(tool.renderShell, undefined);
+    assert.equal(tool.renderCall, undefined);
+    assert.equal(tool.renderResult, undefined);
   }
 });
 

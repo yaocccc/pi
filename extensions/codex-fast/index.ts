@@ -1,14 +1,10 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAgentDir, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { emitFrontendEvent, isGoUI } from '../shared/frontend.ts';
-import { notifyNativeError, notifyNativeSaved, notifyNativeUnavailable, selectNativeLevel } from './native-ui.ts';
+import { registerCapability } from './capabilities.ts';
+import { CODEX_FAST_CAPABILITY, CODEX_FAST_CHANGED, InvalidFastLevelError, type CodexFastService, type FastConfig, type FastLevel } from './api.ts';
 
-type FastLevel = 'normal' | 'fast' | 'ultrafast';
-interface FastConfig {
-    level: FastLevel;
-}
-const levels: FastLevel[] = ['normal', 'fast', 'ultrafast'];
+const levels: readonly FastLevel[] = Object.freeze(['normal', 'fast', 'ultrafast']);
 
 const configPath = join(getAgentDir(), 'codex-fast.json');
 
@@ -38,36 +34,23 @@ const saveConfig = (config: FastConfig): void => {
 export default function (pi: ExtensionAPI) {
     let config = loadConfig();
 
-    pi.registerCommand('codex-fast', {
-        description: '设置 Codex 档位：normal / fast / ultrafast',
-        handler: async (_args, ctx) => {
-            if (!ctx.hasUI) {
-                if (!isGoUI(ctx)) notifyNativeUnavailable(ctx);
-                return;
-            }
-
+    const service: CodexFastService = {
+        levels,
+        getConfig() {
             config = loadConfig(config);
-            const goUI = isGoUI(ctx);
-            const selected = goUI
-                ? await ctx.ui.input('pi-goui:codex-fast:v1', JSON.stringify({ level: config.level }))
-                : await selectNativeLevel(ctx, config.level);
-            if (selected === undefined) return;
-            if (!levels.includes(selected as FastLevel)) {
-                if (goUI) emitFrontendEvent(ctx, 'codex.settings-error', { code: 'invalid-level', message: selected });
-                return;
-            }
-            const nextConfig: FastConfig = { level: selected as FastLevel };
-            try {
-                saveConfig(nextConfig);
-                config = nextConfig;
-                if (goUI) emitFrontendEvent(ctx, 'codex.settings-saved', { level: config.level });
-                else notifyNativeSaved(ctx, config.level);
-            } catch (error) {
-                if (goUI) emitFrontendEvent(ctx, 'codex.settings-error', { message: error instanceof Error ? error.message : String(error) });
-                else notifyNativeError(ctx, error);
-            }
+            return { ...config };
         },
-    });
+        setLevel(level) {
+            if (typeof level !== 'string' || !levels.includes(level as FastLevel)) throw new InvalidFastLevelError(level);
+            const nextConfig: FastConfig = { level: level as FastLevel };
+            saveConfig(nextConfig);
+            config = nextConfig;
+            // Observers cannot turn a successful commit into a reported failure.
+            try { pi.events.emit(CODEX_FAST_CHANGED, { ...config }); } catch {}
+            return { ...config };
+        },
+    };
+    registerCapability(pi, CODEX_FAST_CAPABILITY, service);
 
     pi.on('before_provider_request', (event, ctx) => {
         const model = ctx.model;
@@ -81,7 +64,7 @@ export default function (pi: ExtensionAPI) {
             return;
         }
 
-        // GUI and other sessions atomically replace the shared level file.
+        // Other capability sessions or external editors may replace the shared file.
         // Reload for each eligible request; transient read failures retain the last level.
         config = loadConfig(config);
         const serviceTier = config.level === 'ultrafast' && model.id === 'gpt-6-astra'

@@ -65,6 +65,11 @@ export interface WorkspaceSnapshot {
 
 export type WorkerUiStatus = "queued" | "running" | "completed" | "blocked" | "failed";
 export type WorkerUiActivityStatus = "running" | "completed" | "failed";
+/** Stable protocol identifiers; phase/label remain display-only, including old history. */
+export type WorkerPhaseCode = "queued" | "running" | "routing" | "snapshot_workspace" | "workspace_snapshotted"
+	| "starting" | "waiting_slot" | "slot_acquired" | "validating" | "cleanup"
+	| "cancelling" | "terminating_timeout" | "terminating_output"
+	| "completed" | "blocked" | "failed" | "cancelled" | "timed_out";
 
 export interface WorkerUsage {
 	input: number;
@@ -79,6 +84,7 @@ export interface WorkerUsage {
 export interface WorkerUiActivity {
 	id: string;
 	type: "phase" | "tool" | "thinking";
+	phaseCode?: WorkerPhaseCode;
 	status: WorkerUiActivityStatus;
 	label: string;
 	detail?: string;
@@ -98,6 +104,7 @@ export interface WorkerTranscript {
 export interface ChildProgress {
 	transcript?: WorkerTranscript;
 	phase: string;
+	phaseCode?: WorkerPhaseCode;
 	activities: WorkerUiActivity[];
 	toolCalls: number;
 	usage: WorkerUsage;
@@ -118,6 +125,7 @@ export interface WorkerUiTask {
 	thinking?: Thinking;
 	attempt: number;
 	phase: string;
+	phaseCode?: WorkerPhaseCode;
 	startedAt?: number;
 	finishedAt?: number;
 	activities: WorkerUiActivity[];

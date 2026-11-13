@@ -1,14 +1,36 @@
 {
-  "name": "extensions",
+  "name": "pi-local-capabilities",
   "version": "1.0.0",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
+  "private": true,
+  "description": "Optional Pi capabilities and frontend adapters, installed without replacing user configuration.",
   "license": "ISC",
-  "description": "",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "test:package": "node --experimental-transform-types --test package.test.ts",
+    "typecheck": "tsc --noEmit",
+    "sync:portable": "node scripts/sync-portable.mjs"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./ask-question/index.ts",
+      "./autoname/index.ts",
+      "./codex-fast/index.ts",
+      "./filter-output/index.ts",
+      "./sol-pi/index.ts",
+      "./telegram/index.ts",
+      "./worker/index.ts",
+      "./pi-ui/index.ts"
+    ],
+    "skills": [
+      "./worker/SKILL.md"
+    ]
+  },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^1.5.0",
     "@earendil-works/pi-ai": "^1.5.0",

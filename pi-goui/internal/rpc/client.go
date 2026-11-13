@@ -45,6 +45,7 @@ type Client struct {
 	done, stop, readDone chan struct{}
 	mu                   sync.Mutex
 	pending              map[string]chan reply
+	extensionPending     map[string]chan reply
 	exitErr              error
 	stderrTail           []byte
 	next                 atomic.Uint64
@@ -287,6 +288,9 @@ func (c *Client) readLoop() {
 			if !c.emit(Event{Err: fmt.Errorf("invalid pi JSONL: %w", err)}) {
 				return
 			}
+			continue
+		}
+		if c.extensionReply(raw) {
 			continue
 		}
 		if envelope.Type == "response" && envelope.ID != "" {

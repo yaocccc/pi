@@ -1,3 +1,4 @@
+import { isPrimarySession } from "./session-policy.ts";
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { basename } from 'node:path';
 
@@ -88,7 +89,7 @@ export const registerTelegramToolWatcher = (
     buildNotification: TelegramNotificationBuilder,
 ): void => {
     pi.on('tool_call', (event, ctx) => {
-        if (!ctx.hasUI || event.toolName !== 'ask_question') return;
+        if (!isPrimarySession() || event.toolName !== 'ask_question') return;
         const questionMessage = buildAskQuestionMessage(event.input as AskQuestionInput);
         if (!questionMessage) return;
 

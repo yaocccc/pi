@@ -38,7 +38,7 @@ func chooseSettings(t *testing.T, m *Model, tab *tab, d *dialog, value string) t
 			return m.confirmDialog(tab, d)
 		}
 	}
-	t.Fatalf("missing option %q on %s", value, d.workerSettings.page)
+	t.Fatalf("missing option %q on %s", value, d.workerSettings.Page)
 	return nil
 }
 
@@ -51,7 +51,7 @@ func TestWorkerSettingsGoOwnsFlowAndDirtyCancellation(t *testing.T) {
 	chooseSettings(t, m, tab, d, "fast")
 	chooseSettings(t, m, tab, d, "model")
 	chooseSettings(t, m, tab, d, "test/plain")
-	if d.workerSettings.draft.Fast.Thinking != "high" || !strings.Contains(d.message, "不支持") {
+	if d.workerSettings.Draft.Fast.Thinking != "high" || !strings.Contains(d.message, "不支持") {
 		t.Fatal("model change silently downgraded thinking")
 	}
 	chooseSettings(t, m, tab, d, "thinking")
@@ -61,11 +61,11 @@ func TestWorkerSettingsGoOwnsFlowAndDirtyCancellation(t *testing.T) {
 	chooseSettings(t, m, tab, d, "off")
 	chooseSettings(t, m, tab, d, "back")
 	m.dialogKey(tab, tea.KeyPressMsg{Code: tea.KeyEsc}, "esc")
-	if len(tab.dialogs) != 1 || d.workerSettings.page != "discard" {
+	if len(tab.dialogs) != 1 || d.workerSettings.Page != "discard" {
 		t.Fatal("dirty Escape must request consent")
 	}
 	chooseSettings(t, m, tab, d, "no")
-	if d.workerSettings.page != "main" || d.workerSettings.draft.Fast.Model != "test/plain" {
+	if d.workerSettings.Page != "main" || d.workerSettings.Draft.Fast.Model != "test/plain" {
 		t.Fatal("continue editing lost draft")
 	}
 	chooseSettings(t, m, tab, d, "cancel")
@@ -81,30 +81,30 @@ func TestWorkerSettingsNumericValidationAndEscape(t *testing.T) {
 	for _, value := range []string{"", "abc", "2.5", "0", "17"} {
 		d.editor.SetValue(value)
 		m.confirmDialog(tab, d)
-		if d.workerSettings.page != "number" || d.workerSettings.draft.MaxConcurrentWorkers != 3 {
+		if d.workerSettings.Page != "number" || d.workerSettings.Draft.MaxConcurrentWorkers != 3 {
 			t.Fatal("invalid input changed draft")
 		}
 	}
 	d.editor.SetValue("4")
 	m.confirmDialog(tab, d)
-	if d.workerSettings.draft.MaxConcurrentWorkers != 4 || d.workerSettings.page != "main" {
+	if d.workerSettings.Draft.MaxConcurrentWorkers != 4 || d.workerSettings.Page != "main" {
 		t.Fatal("valid value not applied")
 	}
 	chooseSettings(t, m, tab, d, "defaultTimeoutMs")
 	d.editor.SetValue("30")
 	m.confirmDialog(tab, d)
-	if d.workerSettings.draft.DefaultTimeoutMs != 30000 {
+	if d.workerSettings.Draft.DefaultTimeoutMs != 30000 {
 		t.Fatal("seconds not converted to milliseconds")
 	}
 	chooseSettings(t, m, tab, d, "maxOutputBytes")
 	d.editor.SetValue("8")
 	m.confirmDialog(tab, d)
-	if d.workerSettings.draft.MaxOutputBytes != 8192 {
+	if d.workerSettings.Draft.MaxOutputBytes != 8192 {
 		t.Fatal("KiB not converted to bytes")
 	}
 	chooseSettings(t, m, tab, d, "fast")
 	m.cancelWorkerSettings(tab, d)
-	if len(tab.dialogs) != 1 || d.workerSettings.page != "main" {
+	if len(tab.dialogs) != 1 || d.workerSettings.Page != "main" {
 		t.Fatal("subpage Escape must return, not cancel RPC")
 	}
 }
@@ -144,7 +144,7 @@ func TestWorkerSettingsRetryPreservesOriginalAndShowsLocalError(t *testing.T) {
 		t.Fatal("retry did not preserve dirty/error state")
 	}
 	m.cancelWorkerSettings(tab, d)
-	if d.workerSettings.page != "discard" {
+	if d.workerSettings.Page != "discard" {
 		t.Fatal("retry cancellation must still confirm dirty state")
 	}
 }
