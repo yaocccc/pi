@@ -72,6 +72,8 @@ type State struct {
 	runActive          bool
 	loadedState        bool
 	entriesCache       *snapshotCache
+	deferProjection    bool
+	projectionPending  bool
 }
 type Summary struct {
 	ID, Path, Name, FirstMessage, Cwd string

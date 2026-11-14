@@ -51,9 +51,13 @@ type Client struct {
 	relayExtensions      bool
 	writes               chan *writeRequest
 	events               chan Event
+	eventBatches         chan []Event
+	batchNotify          chan struct{}
+	batchMode            atomic.Bool
 	incoming             chan Event
 	done, stop, readDone chan struct{}
 	writeDone            chan struct{}
+	stderrDone           chan struct{}
 	mu                   sync.Mutex
 	pending              map[string]chan reply
 	extensionPending     map[string]chan reply
@@ -122,7 +126,7 @@ func startDirect(cfg Config) (*Client, error) {
 	cmd.Stdin = inR
 	cmd.Stdout = outW
 	cmd.Stderr = errW
-	c := &Client{cmd: cmd, relayExtensions: cfg.relayExtensions, stdin: inW, stdout: outR, stderr: errR, writes: make(chan *writeRequest, 32), events: make(chan Event), incoming: make(chan Event, 32), done: make(chan struct{}), stop: make(chan struct{}), readDone: make(chan struct{}), writeDone: make(chan struct{}), closeDone: make(chan struct{}), pending: make(map[string]chan reply)}
+	c := &Client{cmd: cmd, relayExtensions: cfg.relayExtensions, stdin: inW, stdout: outR, stderr: errR, stderrDone: make(chan struct{}), writes: make(chan *writeRequest, 32), events: make(chan Event), eventBatches: make(chan []Event), batchNotify: make(chan struct{}), incoming: make(chan Event, 32), done: make(chan struct{}), stop: make(chan struct{}), readDone: make(chan struct{}), writeDone: make(chan struct{}), closeDone: make(chan struct{}), pending: make(map[string]chan reply)}
 	if err = cmd.Start(); err != nil {
 		for _, f := range []*os.File{inR, inW, outR, outW, errR, errW} {
 			f.Close()
@@ -182,7 +186,44 @@ func (c *Client) PID() int {
 	}
 	return c.cmd.Process.Pid
 }
+
+// Events and EventBatches consume the same ordered stream. A consumer should
+// choose one API, not read both concurrently.
 func (c *Client) Events() <-chan Event { return c.events }
+
+// EventBatches delivers up to 64 queued events or 256 KiB without waiting to fill
+// a batch. One legal oversized event is delivered alone. Payloads are not copied;
+// each returned slice remains valid after subsequent reads. Like Events, closing
+// this channel means the stream ended; Err retains its final failure.
+func (c *Client) EventBatches() <-chan []Event {
+	// Existing single-event consumers need not allocate and copy queue prefixes.
+	// Wake a loop already waiting to deliver Events when batching is first used.
+	if c.eventBatches != nil && c.batchMode.CompareAndSwap(false, true) && c.batchNotify != nil {
+		close(c.batchNotify)
+	}
+	return c.eventBatches
+}
+
+// Err reports why the transport ended. Call it after Events or EventBatches
+// closes to recover terminal failures that could not be queued for delivery.
+func (c *Client) Err() error {
+	select {
+	case <-c.readDone:
+	case <-c.stop:
+	default:
+		return nil
+	}
+	return c.failure()
+}
+
+func (c *Client) setFailure(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.exitErr == nil || errors.Is(c.exitErr, io.EOF) {
+		c.exitErr = err
+	}
+}
+
 func (c *Client) failure() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -345,21 +386,18 @@ func (c *Client) writeLoop() {
 // Invalidate synchronously, then kill rather than allowing graceful stdin drain
 // to deliver a timed-out command. Cleanup never waits on the calling writer.
 func (c *Client) failWrite(err error) {
-	c.mu.Lock()
-	if c.exitErr == nil {
-		c.exitErr = fmt.Errorf("pi RPC write failed: %w", err)
-	}
-	c.mu.Unlock()
+	c.setFailure(fmt.Errorf("pi RPC write failed: %w", err))
 	c.beginClose()
 	c.kill()
 }
 
 func (c *Client) readLoop() {
-	defer close(c.readDone)
+	// Publish the terminal state before eventLoop can close Events.
 	defer close(c.incoming)
+	defer close(c.readDone)
 	defer c.stdout.Close()
 	scanner := bufio.NewScanner(c.stdout)
-	limit := 64 * 1024 * 1024
+	limit := nativeFrameLimit
 	if c.shared != nil {
 		// The native backend retains its original limit. A shared frame can
 		// additionally carry the executor's small, bounded progress projection.
@@ -375,6 +413,7 @@ func (c *Client) readLoop() {
 			Type, ID, Command string
 			Message           json.RawMessage
 			Success           bool
+			Fatal             bool
 			Data              json.RawMessage
 			Error             string
 		}
@@ -389,7 +428,11 @@ func (c *Client) readLoop() {
 			if err := json.Unmarshal(envelope.Message, &message); err != nil {
 				message = "invalid shared RPC error: " + err.Error()
 			}
-			if !c.emit(Event{Err: errors.New(message)}) {
+			err := errors.New(message)
+			if envelope.Fatal {
+				c.setFailure(err)
+			}
+			if !c.emit(Event{Err: err}) || envelope.Fatal {
 				return
 			}
 			continue
@@ -422,16 +465,54 @@ func (c *Client) readLoop() {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		c.emit(Event{Err: fmt.Errorf("read pi stdout: %w", err)})
-		go c.Close()
-	} else {
-		select {
-		case <-c.stop:
-		default:
-			c.emit(Event{Err: fmt.Errorf("pi stdout closed: %w", c.failure())})
+		c.setFailure(fmt.Errorf("read pi stdout: %w", err))
+		c.kill()
+	}
+	if c.shared == nil {
+		c.finishProcessRead()
+	}
+	select {
+	case <-c.stop:
+	default:
+		if c.shared != nil {
+			c.setFailure(errors.New("shared RPC connection closed"))
+		} else {
+			c.setFailure(errors.New("pi stdout closed"))
 		}
+		c.emit(Event{Err: c.failure()})
 	}
 }
+
+// EOF makes the RPC transport unusable, but can precede both Wait and the last
+// stderr read. Finish the owned process before publishing its terminal reason,
+// without dropping already accepted events or waiting forever on a broken child.
+func (c *Client) finishProcessRead() {
+	c.stdin.Close()
+	select {
+	case <-c.done:
+	case <-c.stop:
+		return
+	case <-time.After(2 * time.Second):
+		c.setFailure(errors.New("pi stdout closed before process exit"))
+		c.kill()
+		select {
+		case <-c.done:
+		case <-c.stop:
+			return
+		case <-time.After(time.Second):
+		}
+	}
+	select {
+	case <-c.stderrDone:
+	case <-c.stop:
+		return
+	case <-time.After(time.Second):
+		// A descendant outside our process group may still hold stderr open.
+		c.stderr.Close()
+		<-c.stderrDone
+	}
+}
+
 func (c *Client) emit(e Event) bool {
 	select {
 	case c.incoming <- e:
@@ -444,38 +525,62 @@ func (c *Client) emit(e Event) bool {
 // Queue independently of the UI so a background session never blocks stdout.
 func (c *Client) eventLoop() {
 	defer close(c.events)
+	if c.eventBatches != nil {
+		defer close(c.eventBatches)
+	}
 	in := c.incoming
-	var queue []Event
-	for in != nil || len(queue) > 0 {
+	batchNotify := c.batchNotify
+	var queue eventBacklog[Event]
+	var batch []Event
+	for in != nil || queue.count > 0 {
 		var out chan Event
+		var batches chan []Event
 		var next Event
-		if len(queue) > 0 {
+		if queue.count > 0 {
 			out = c.events
-			next = queue[0]
+			next = queue.first()
+			if c.batchMode.Load() {
+				if batch == nil {
+					batch = queue.batch(eventBatchLimit, eventBatchBytes)
+				}
+				batches = c.eventBatches
+			}
 		}
 		select {
 		case <-c.stop:
 			return
+		case <-batchNotify:
+			batchNotify = nil
 		case e, ok := <-in:
 			if !ok {
 				in = nil
 			} else {
-				if c.shared != nil && len(queue) >= 1024 {
+				payloadBytes := len(e.Data) + len(e.owner)
+				if e.Err != nil {
+					payloadBytes += len(e.Err.Error())
+				}
+				if c.shared != nil && !queue.accepts(payloadBytes) {
 					c.mu.Lock()
-					c.exitErr = errors.New("shared event backlog exceeded; reconnect and rebuild session state")
+					c.exitErr = queue.overflow("client", payloadBytes)
 					c.mu.Unlock()
 					c.beginClose()
 					return
 				}
-				queue = append(queue, e)
+				queue.append(e, payloadBytes)
 			}
 		case out <- next:
-			queue[0] = Event{}
-			queue = queue[1:]
+			queue.remove()
+			batch = nil
+		case batches <- batch:
+			for range batch {
+				queue.remove()
+			}
+			batch = nil
 		}
 	}
 }
 func (c *Client) stderrLoop() {
+	defer close(c.stderrDone)
 	defer c.stderr.Close()
 	buf := make([]byte, 4096)
 	for {

@@ -383,6 +383,26 @@ func (s *State) upsert(m message, finished bool) {
 	}
 	s.project()
 }
+
+// ApplyBatch applies every event in order, including extension observations,
+// but rebuilds the transcript projection only once. Callers must flush the batch
+// before acting on an event that needs the intermediate projected state.
+func (s *State) ApplyBatch(events []json.RawMessage) (refresh bool) {
+	deferred := s.deferProjection
+	s.deferProjection = true
+	defer func() {
+		s.deferProjection = deferred
+		if !deferred && s.projectionPending {
+			s.projectionPending = false
+			s.project()
+		}
+	}()
+	for _, raw := range events {
+		refresh = s.Apply(raw) || refresh
+	}
+	return refresh
+}
+
 func (s *State) Apply(raw json.RawMessage) bool {
 	var e struct {
 		Type                  string
@@ -578,6 +598,10 @@ func (s *State) Apply(raw json.RawMessage) bool {
 	return refresh
 }
 func (s *State) project() {
+	if s.deferProjection {
+		s.projectionPending = true
+		return
+	}
 	var items []Item
 	messageIndex := 0
 	toolIndex := map[string]int{}

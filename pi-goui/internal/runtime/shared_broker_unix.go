@@ -48,28 +48,150 @@ type brokerSession struct {
 	uiState         map[string]json.RawMessage
 	inFlight        map[string]int
 }
+
+const brokerPeerWriteTimeout = 5 * time.Second
+
 type brokerPeer struct {
 	id      string
 	conn    net.Conn
-	out     chan json.RawMessage
+	out     chan json.RawMessage // The FIFO head, staged for the socket writer.
 	done    chan struct{}
 	ctx     context.Context
 	cancel  context.CancelFunc
 	once    sync.Once
 	session *brokerSession
+
+	// initial is frozen under b.mu before the writer starts. Live events have
+	// their own bounded queue, so a large replay cannot overflow it on attach.
+	initial []json.RawMessage
+	// mu serializes sends with finishing and FIFO advancement. Once finishing
+	// is closed no frames can be appended, but accepted frames still drain.
+	backlog        eventBacklog[json.RawMessage]
+	mu             sync.Mutex
+	finishing      chan struct{}
+	terminal       json.RawMessage
+	finishDeadline time.Time
+	finishTimer    *time.Timer
 }
 
-func (p *brokerPeer) stop() { p.once.Do(func() { close(p.done); p.cancel(); p.conn.Close() }) }
+func (p *brokerPeer) stop() {
+	p.once.Do(func() {
+		p.mu.Lock()
+		close(p.done)
+		if p.finishTimer != nil {
+			p.finishTimer.Stop()
+		}
+		p.mu.Unlock()
+		p.cancel()
+		p.conn.Close()
+	})
+}
 func (p *brokerPeer) send(raw json.RawMessage) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	select {
 	case <-p.done:
 		return
 	default:
 	}
+	if !p.finishDeadline.IsZero() {
+		return
+	}
+	if !p.backlog.accepts(len(raw)) {
+		p.finishLocked(p.backlog.overflow("broker", len(raw)))
+		return
+	}
+	p.backlog.append(bytes.Clone(raw), len(raw))
+	if p.backlog.count == 1 {
+		p.out <- p.backlog.first()
+	}
+}
+
+// The writer has taken the staged head. Release its budget and stage the next
+// frame under the same lock as send, so no sender can overtake older frames.
+func (p *brokerPeer) advance() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.backlog.remove()
+	if p.backlog.count != 0 {
+		p.out <- p.backlog.first()
+	}
+}
+
+func (p *brokerPeer) finish(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.finishLocked(err)
+}
+
+// Called with p.mu held. Finishing rejects new commands/events immediately,
+// but leaves the socket open for one bounded drain, including the final error.
+// The timer also bounds peers whose writer has not started (handshake/replay).
+func (p *brokerPeer) finishLocked(err error) {
 	select {
-	case p.out <- bytes.Clone(raw):
+	case <-p.done:
+		return
 	default:
-		p.stop()
+	}
+	if !p.finishDeadline.IsZero() {
+		return
+	}
+	p.terminal = brokerJSON(map[string]any{"type": "goui_rpc_error", "fatal": true, "message": err.Error()})
+	p.finishDeadline = time.Now().Add(brokerPeerWriteTimeout)
+	p.finishTimer = time.AfterFunc(brokerPeerWriteTimeout, p.stop)
+	close(p.finishing)
+	p.cancel()
+}
+
+func (p *brokerPeer) writeFrame(data json.RawMessage) bool {
+	p.mu.Lock()
+	deadline := p.finishDeadline
+	p.mu.Unlock()
+	if deadline.IsZero() {
+		deadline = time.Now().Add(brokerPeerWriteTimeout)
+	}
+	if err := p.conn.SetWriteDeadline(deadline); err != nil {
+		return false
+	}
+	frame := append(data, '\n')
+	n, err := p.conn.Write(frame)
+	return err == nil && n == len(frame)
+}
+
+func (p *brokerPeer) writeLoop() {
+	defer p.stop()
+	for i, raw := range p.initial {
+		if !p.writeFrame(raw) {
+			return
+		}
+		p.initial[i] = nil
+	}
+	p.initial = nil
+	for {
+		select {
+		case <-p.done:
+			return
+		case data := <-p.out:
+			p.advance()
+			if !p.writeFrame(data) {
+				return
+			}
+		case <-p.finishing:
+			// finishLocked prevents further sends. Do not drop a response or
+			// message_end just because the backend has already exited.
+			for {
+				select {
+				case data := <-p.out:
+					p.advance()
+					if !p.writeFrame(data) {
+						return
+					}
+				default:
+					p.writeFrame(p.terminal)
+					return
+				}
+			}
+		}
 	}
 }
 func brokerJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
@@ -273,18 +395,7 @@ func (b *sessionBroker) handle(conn net.Conn) {
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
-		for {
-			select {
-			case <-p.done:
-				return
-			case data := <-p.out:
-				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				if _, e := conn.Write(append(data, '\n')); e != nil {
-					p.stop()
-					return
-				}
-			}
-		}
+		p.writeLoop()
 	}()
 	defer func() { p.stop(); <-writerDone }()
 	slots := make(chan struct{}, 16)
@@ -301,6 +412,9 @@ func (b *sessionBroker) handle(conn net.Conn) {
 		}
 		select {
 		case slots <- struct{}{}:
+		case <-p.finishing:
+			<-writerDone
+			return
 		case <-p.done:
 			return
 		}
@@ -309,6 +423,9 @@ func (b *sessionBroker) handle(conn net.Conn) {
 		go func() { defer calls.Done(); defer func() { <-slots }(); b.command(p, command, written) }()
 		select {
 		case <-written:
+		case <-p.finishing:
+			<-writerDone
+			return
 		case <-p.done:
 			return
 		}
@@ -471,22 +588,21 @@ func (b *sessionBroker) attach(cfg Config, conn net.Conn) (*brokerPeer, *brokerS
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &brokerPeer{id: sharedID(), conn: conn, out: make(chan json.RawMessage, 256), done: make(chan struct{}), ctx: ctx, cancel: cancel, session: s}
+	p := &brokerPeer{id: sharedID(), conn: conn, out: make(chan json.RawMessage, 1), done: make(chan struct{}), finishing: make(chan struct{}), ctx: ctx, cancel: cancel, session: s}
 	s.clients[p.id] = p
 	b.clients[p.id] = p
-	// Registration, state replay and subsequent events share b.mu. The bounded
-	// peer queue disconnects on overflow, never silently loses an event.
-	p.send(brokerJSON(map[string]any{"type": "goui_session_snapshot", "initial": true}))
-	// Queue the compact projection under the same lock as live publication.
+	// Registration, the frozen replay and subsequent live publication share
+	// b.mu. Only retained state is copied here; network I/O starts after unlock.
+	p.initial = append(p.initial, brokerJSON(map[string]any{"type": "goui_session_snapshot", "initial": true}))
 	if view := s.working.View(); view.Present {
 		view.Revision = s.workingRevision
-		p.send(withWorkingSnapshot(brokerJSON(map[string]any{"type": "goui_working_snapshot"}), view))
+		p.initial = append(p.initial, withWorkingSnapshot(brokerJSON(map[string]any{"type": "goui_working_snapshot"}), view))
 	}
 	for _, raw := range s.uiState {
-		p.send(raw)
+		p.initial = append(p.initial, bytes.Clone(raw))
 	}
 	for _, raw := range s.pendingUI {
-		p.send(raw)
+		p.initial = append(p.initial, bytes.Clone(raw))
 	}
 	b.record.Keys = []string{s.key}
 	b.record.IdentityPending = incompleteIdentity(b.record.Keys)
@@ -587,6 +703,13 @@ func (b *sessionBroker) command(p *brokerPeer, command map[string]any, written c
 	var once sync.Once
 	release := func() { once.Do(func() { p.session.opMu.Unlock(); close(written) }) }
 	defer release()
+	select {
+	case <-p.finishing:
+		return
+	case <-p.done:
+		return
+	default:
+	}
 	id, _ := command["id"].(string)
 	respond := func(data json.RawMessage, err error) {
 		if id == "" {
@@ -751,7 +874,7 @@ func (s *brokerSession) events() {
 		s.closed = true
 		b.removeSession(s)
 		for _, p := range s.clients {
-			p.stop()
+			p.finish(fmt.Errorf("pi backend stopped: %w", s.backend.failure()))
 		}
 	}
 }

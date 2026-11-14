@@ -33,6 +33,7 @@ type tab struct {
 	awaitingStart, interruptRequested                                              bool
 	id                                                                             int
 	client                                                                         *rpc.Client
+	lastEventErr                                                                   error // Scoped to client; reset when a connection opens.
 	state                                                                          session.State
 	editor                                                                         input.Editor
 	doc                                                                            render.Document
@@ -351,8 +352,7 @@ func (m *Model) start(t *tab) tea.Cmd {
 	return tea.Batch(connect, m.previewSession(t), m.inspectSession(t, false, false, time.Now()))
 }
 func nextEvent(t *tab) tea.Cmd {
-	id, c := t.id, t.client
-	return func() tea.Msg { e, ok := <-c.Events(); return eventMsg{id: id, client: c, event: e, closed: !ok} }
+	return nextEventCommand(t.id, t.client)
 }
 func (m *Model) Init() tea.Cmd {
 	t := m.current()
@@ -439,6 +439,16 @@ func (m *Model) refresh(t *tab) tea.Cmd {
 	}
 }
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Single-event messages use the same path as transport batches.
+	if event, ok := msg.(eventMsg); ok {
+		batch := eventBatchMsg{id: event.id, client: event.client, closed: event.closed}
+		if event.closed {
+			batch.err = event.event.Err
+		} else {
+			batch.events = []rpc.Event{event.event}
+		}
+		msg = batch
+	}
 	var cmds []tea.Cmd
 	renderNow := true
 	switch v := msg.(type) {
@@ -499,6 +509,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		t.client = v.client
+		t.lastEventErr = nil
 		if v.err != nil {
 			t.dead = true
 			if t.resume.pending {
@@ -512,82 +523,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmds = append(cmds, nextEvent(t), m.refresh(t))
 		}
-	case eventMsg:
+	case eventBatchMsg:
 		// Streaming events only invalidate the document. Tick batches Markdown work.
 		renderNow = false
 		t := m.byID(v.id)
 		if t == nil || (v.client != nil && v.client != t.client) {
 			return m, nil
 		}
+		if !v.closed && t.client != nil {
+			cmds = append(cmds, nextEventCommand(t.id, t.client))
+		}
+		var eventCmds []tea.Cmd
+		eventCmds, renderNow = m.applyEventBatch(t, v.events)
+		cmds = append(cmds, eventCmds...)
 		if v.closed {
-			if t.mutation != nil {
-				t.mutation.disconnected = true
-			}
-			t.revision++
-			t.dead = true
-			t.state.Busy = false
-			t.sending = false
-			if t.resume.pending {
-				m.failResume(t, errors.New("连接在初始化完成前关闭"))
-			} else {
-				t.status = "pi stopped · /new to start another session"
-			}
-			return m, nil
-		}
-		if t.client != nil {
-			cmds = append(cmds, nextEvent(t))
-		}
-		if v.event.Err != nil {
-			t.status = v.event.Err.Error()
-		}
-		if len(v.event.Data) > 0 {
-			if handled, cmd := m.sharedSessionEvent(t, v.event.Data); handled {
-				cmds = append(cmds, cmd)
-				renderNow = true
-				break
-			}
-			var env struct{ Type string }
-			_ = json.Unmarshal(v.event.Data, &env)
-			wasWorking := t.working.Active
-			if env.Type == "agent_start" && !wasWorking {
-				t.workingStart = len(t.state.Items)
-			}
-			if t.client == nil || !t.client.Shared() || !t.working.applyShared(v.event.Data) {
-				t.working.apply(v.event.Data, time.Now())
-			}
-			if env.Type == "goui_working_snapshot" {
-				// Progress is not transcript content: keep pending layout work and
-				// let the regular tick update the footer without a full re-render.
-				break
-			}
-			if env.Type == "extension_ui_request" {
-				cmds = append(cmds, m.extension(t, v.event.Data))
-			} else {
-				t.revision++
-				if t.state.Apply(v.event.Data) {
-					cmds = append(cmds, m.refresh(t))
-				}
-				t.invalidateStream()
-				if env.Type == "agent_start" {
-					t.status = ""
-					t.sending = false
-					t.awaitingStart = false
-					if t.interruptRequested {
-						t.status = "Stopping…"
-						cmds = append(cmds, call(t, "abort", nil))
-					}
-				}
-				if env.Type == "agent_settled" {
-					if wasWorking {
-						t.saveAssistantStats()
-					}
-					t.status = "Ready"
-					t.sending = false
-					t.awaitingStart, t.interruptRequested = false, false
-				}
-				if t != m.current() && (env.Type == "message_end" || env.Type == "agent_settled") {
-					t.unread++
-				}
+			m.closeEventStream(t, v.err)
+			if len(v.events) == 0 {
+				return m, nil
 			}
 		}
 	case forkSnapshotMsg:

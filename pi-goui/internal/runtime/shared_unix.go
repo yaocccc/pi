@@ -435,7 +435,7 @@ func startShared(cfg Config) (*Client, error) {
 		conn.Close()
 		return nil, err
 	}
-	c := &Client{stdin: conn, stdout: conn, shared: &sharedConnection{record: record, id: welcome.Client, pid: welcome.PID}, idPrefix: welcome.Client + "-", writes: make(chan *writeRequest, 32), events: make(chan Event), incoming: make(chan Event, 32), done: make(chan struct{}), stop: make(chan struct{}), readDone: make(chan struct{}), writeDone: make(chan struct{}), closeDone: make(chan struct{}), pending: make(map[string]chan reply)}
+	c := &Client{stdin: conn, stdout: conn, shared: &sharedConnection{record: record, id: welcome.Client, pid: welcome.PID}, idPrefix: welcome.Client + "-", writes: make(chan *writeRequest, 32), events: make(chan Event), eventBatches: make(chan []Event), batchNotify: make(chan struct{}), incoming: make(chan Event, 32), done: make(chan struct{}), stop: make(chan struct{}), readDone: make(chan struct{}), writeDone: make(chan struct{}), closeDone: make(chan struct{}), pending: make(map[string]chan reply)}
 	go c.readLoop()
 	go c.writeLoop()
 	go c.eventLoop()
