@@ -83,7 +83,7 @@ func TestSidebarTodoWindowCapacity(t *testing.T) {
 		{"fits ten", 10, 40, 10},
 		{"fits fewer", 7, 40, 7},
 		{"over ten", 12, 40, 10},
-		{"short screen", 10, 27, 5},
+		{"short screen", 10, 27, 8},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := SidebarContext{History: []string{"Recent"}}
@@ -117,8 +117,8 @@ func TestSidebarTodoLatestAndGeometry(t *testing.T) {
 		{ID: "6", Goal: "Sixth step", Status: "pending"},
 		{ID: "7", Goal: "Seventh step", Status: "pending"},
 	}}
-	layout := SidebarGeometry(27, ctx)
-	if layout.TodoCount != 5 || layout.TodoOffset != 2 || layout.TodoRow <= layout.SessionsStart || layout.TodoStart+layout.TodoCount != 26 {
+	layout := SidebarGeometry(24, ctx)
+	if layout.TodoCount != 5 || layout.TodoOffset != 2 || layout.TodoRow <= layout.SessionsStart || layout.TodoStart+layout.TodoCount != 23 {
 		t.Fatalf("layout: %+v", layout)
 	}
 	theme := testTheme()
@@ -129,7 +129,7 @@ func TestSidebarTodoLatestAndGeometry(t *testing.T) {
 			if dimColor == "" {
 				dimColor = theme.Muted
 			}
-			rendered := Sidebar(session.State{}, nil, theme, 36, 27, ctx)
+			rendered := Sidebar(session.State{}, nil, theme, 36, 24, ctx)
 			for _, want := range []string{
 				" " + paint("✓", theme.Success) + " " + paint("3.", theme.Muted) + " " + paint("Third step", theme.Muted),
 				paint(" ○ 4. ", dimColor) + animateTodoText("Fourth step", ctx.TodoFrame),
@@ -141,7 +141,7 @@ func TestSidebarTodoLatestAndGeometry(t *testing.T) {
 			}
 		}
 	}
-	plain := ansi.Strip(Sidebar(session.State{}, nil, testTheme(), 36, 27, ctx))
+	plain := ansi.Strip(Sidebar(session.State{}, nil, testTheme(), 36, 24, ctx))
 	for _, want := range []string{"✓ 3. Third step", "○ 4. Fourth step", "○ 5. Fifth step", "RECENTS", "┃"} {
 		if !strings.Contains(plain, want) {
 			t.Fatal("missing", want)
@@ -161,11 +161,11 @@ func TestSidebarTodoLatestAndGeometry(t *testing.T) {
 		t.Fatal("session cards overlap todos")
 	}
 	ctx.TodoScroll = 100
-	layout = SidebarGeometry(27, ctx)
+	layout = SidebarGeometry(24, ctx)
 	if layout.TodoOffset != 0 {
 		t.Fatal("did not clamp earlier scroll")
 	}
-	plain = ansi.Strip(Sidebar(session.State{}, nil, testTheme(), 36, 27, ctx))
+	plain = ansi.Strip(Sidebar(session.State{}, nil, testTheme(), 36, 24, ctx))
 	if !strings.Contains(plain, "○ 1. First step") || !strings.Contains(plain, "✓ 3. Third step") || strings.Contains(plain, "Seventh step") {
 		t.Fatal("wrong scrolled window")
 	}
@@ -190,14 +190,14 @@ func TestSidebarTodoLatestAndGeometry(t *testing.T) {
 		session.PlanStep{Goal: "Tenth step", Status: "pending"},
 	)
 	ctx.TodoScroll = 0
-	plain = ansi.Strip(Sidebar(session.State{}, nil, theme, 36, 27, ctx))
+	plain = ansi.Strip(Sidebar(session.State{}, nil, theme, 36, 24, ctx))
 	for _, want := range []string{" ○  9. Ninth step", " ○ 10. Tenth step"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing aligned step: %q", want)
 		}
 	}
 	ctx.TodoScroll = 100
-	plain = ansi.Strip(Sidebar(session.State{}, nil, theme, 36, 27, ctx))
+	plain = ansi.Strip(Sidebar(session.State{}, nil, theme, 36, 24, ctx))
 	if !strings.Contains(plain, " ○  1. First step") {
 		t.Fatal("scrolling must preserve full-plan number alignment")
 	}

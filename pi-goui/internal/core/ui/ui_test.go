@@ -13,8 +13,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/render"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
+	rpc "pi-goui/internal/runtime"
 )
 
 func testModel(t *testing.T, keys string) *Model {
@@ -174,6 +174,7 @@ func TestStreamingRenderCoalescedAndBackgroundScoped(t *testing.T) {
 		t.Fatal("streaming event eagerly rendered Markdown")
 	}
 	m.Update(tickMsg(time.Now()))
+	finishStreamingDocument(m)
 	if !strings.Contains(ansi.Strip(first.doc.Text), "stream updated") {
 		t.Fatal("tick did not flush streaming render")
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -117,6 +118,9 @@ func (s *State) LoadState(raw json.RawMessage) error {
 		s.MessageCount = 0
 		s.extensionState.Reset()
 	}
+	if s.ID != v.SessionID || s.File != v.SessionFile {
+		s.entriesCache = nil
+	}
 	s.ID = v.SessionID
 	s.File = v.SessionFile
 	s.Name = v.SessionName
@@ -182,51 +186,18 @@ func (s *State) LoadEntries(raw json.RawMessage) error {
 
 // loadEntries is used only on the detached preparation state.
 func (s *State) loadEntries(raw json.RawMessage, history *[]entry) error {
-	var v struct {
-		Entries []entry         `json:"entries"`
-		LeafID  json.RawMessage `json:"leafId"`
-	}
-	if err := json.Unmarshal(raw, &v); err != nil {
+	parsed, err := s.parsedSnapshot(raw)
+	if err != nil {
 		return err
 	}
-	index := map[string]entry{}
-	for _, e := range v.Entries {
-		if e.ID != "" {
-			if _, exists := index[e.ID]; exists {
-				return fmt.Errorf("duplicate session entry %s", e.ID)
-			}
-			index[e.ID] = e
-		}
-	}
-	leaf := ""
-	if len(v.LeafID) == 0 {
-		for _, e := range v.Entries {
-			if e.Type != "session" && e.ID != "" {
-				leaf = e.ID
-			}
-		}
-	} else if string(v.LeafID) != "null" {
-		if err := json.Unmarshal(v.LeafID, &leaf); err != nil {
-			return err
-		}
-	}
-	var path []entry
-	seen := map[string]bool{}
-	for id := leaf; id != ""; {
-		if seen[id] {
-			return fmt.Errorf("cycle in session branch at %s", id)
-		}
-		seen[id] = true
-		e, ok := index[id]
-		if !ok {
-			return fmt.Errorf("missing session entry %s", id)
-		}
-		path = append(path, e)
-		if e.ParentID == nil {
-			break
-		}
-		id = *e.ParentID
-	}
+	s.loadParsedEntries(parsed, history)
+	return nil
+}
+
+// loadParsedEntries reconciles an immutable parsed snapshot with the detached
+// preparation state, regardless of whether it came from RPC or native JSONL.
+func (s *State) loadParsedEntries(parsed *snapshotCache, history *[]entry) {
+	leaf, path, seen := parsed.leaf, parsed.path, parsed.pathIDs
 	s.init()
 	branchChanged := s.leaf != "" && leaf != s.leaf && !seen[s.leaf]
 	priorDetails := map[string]json.RawMessage{}
@@ -259,9 +230,11 @@ func (s *State) loadEntries(raw json.RawMessage, history *[]entry) error {
 	persistedTools := map[string]bool{}
 	usedIDs := map[string]bool{}
 	displayIDs := map[string]string{}
+	previousRecords := map[string]record{}
 	for _, r := range s.records {
 		if r.entryID != "" {
 			displayIDs[r.entryID] = r.id
+			previousRecords[r.entryID] = r
 		}
 	}
 	for i := len(path) - 1; i >= 0; i-- {
@@ -269,18 +242,16 @@ func (s *State) loadEntries(raw json.RawMessage, history *[]entry) error {
 		extensionProjection.observeEntry(e)
 		switch e.Type {
 		case "message":
-			var m message
-			if err := json.Unmarshal(e.Message, &m); err != nil {
-				return fmt.Errorf("entry %s: %w", e.ID, err)
-			}
+			cached := parsed.messages[e.ID]
+			m, k := cached.message, cached.key
 			if m.Role == "toolResult" {
 				persistedTools[m.ToolCallID] = true
-				if len(m.Details) == 0 {
+				if len(m.Details) == 0 && len(priorDetails[m.ToolCallID]) > 0 {
 					m.Details = priorDetails[m.ToolCallID]
+					k = keyOf(m) // Fallback details belong to this reconciliation only.
 				}
 			}
 			extensionProjection.observeMessage(m)
-			k := keyOf(m)
 			id := displayIDs[e.ID]
 			if id == "" {
 				id = s.aliases[k]
@@ -291,7 +262,11 @@ func (s *State) loadEntries(raw json.RawMessage, history *[]entry) error {
 			}
 			usedIDs[id] = true
 			keys[k] = true
-			next = append(next, record{id: id, entryID: e.ID, key: k, msg: m})
+			r := record{id: id, entryID: e.ID, key: k, msg: m}
+			if previous := previousRecords[e.ID]; previous.id == id && previous.key == k {
+				r.projection = previous.projection
+			}
+			next = append(next, r)
 		case "compaction":
 			next = append(next, record{id: e.ID, summary: "Context compacted — earlier messages retained\n" + e.Summary, compaction: extensionProjection.compaction(e.ID)})
 		case "branch_summary":
@@ -318,15 +293,10 @@ func (s *State) loadEntries(raw json.RawMessage, history *[]entry) error {
 	s.live = remaining
 	s.records = next
 	s.leaf = leaf
-	s.pathIDs = seen
+	s.pathIDs = maps.Clone(seen)
+	s.entriesCache = parsed
 	s.project()
-	// Extension snapshots only need metadata. Do not retain another copy of
-	// every message body alongside the prepared records.
-	for i := range path {
-		path[i].Message = nil
-	}
 	*history = path
-	return nil
 }
 
 // LoadMessages is only a compatibility fallback. Once full entries are loaded,

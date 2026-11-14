@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager, VERSION } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createProvider, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall, fauxText } from "@earendil-works/pi-ai/providers/faux";
@@ -20,9 +20,12 @@ const plan = (done = false, final = false) => [
 const call = (id, steps, text = "") => fauxAssistantMessage([
   ...(text ? [fauxText(text)] : []), fauxToolCall("update_plan", { steps }, { id }),
 ], { stopReason: "toolUse" });
+// A real 1×1 RGBA PNG, small enough for either SDK to deliver byte-for-byte.
+// Pi 1.5.2 omits malformed queued images with a text hint at delivery, which
+// correctly invalidates OCC's conservative unchanged-input match.
+const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
 async function setup(t, options = {}) {
-  assert.equal(VERSION, "1.0.4");
   const cwd = await mkdtemp(join(tmpdir(), "occ-session-"));
   const agentDir = join(cwd, "agent");
   await mkdir(agentDir);
@@ -194,7 +197,7 @@ for (const kind of ["manual", "overflow"]) test(`native ${kind} compaction super
   assert.deepEqual(h.counts.errors, []);
 });
 
-// Pi 1.0.4 test-only access: dispatch its real scheduled refresh immediately,
+// Installed SDK test-only access: dispatch its real scheduled refresh immediately,
 // without sleeps, remote providers, or mocking away the SDK's replayed onPayload.
 async function warmNow(session, manager, counts, concurrent = false) {
   const warmer = session._cacheWarmer;
@@ -873,7 +876,7 @@ for (const source of ["interactive", "rpc"]) test(`queued ${source} follow-up ha
   const running = h.run();
   await h.started;
   const queued = restoreOnlineState(h.manager.getBranch());
-  const images = [{ type: "image", data: "dGVzdA==", mimeType: "image/png" }];
+  const images = [{ type: "image", data: tinyPng, mimeType: "image/png" }];
   assert.equal(await h.session.followUp("Task B", images, { source }), "queued");
   assert.deepEqual(restoreOnlineState(h.manager.getBranch()), queued, "A is still active at input time");
   h.release();
@@ -900,8 +903,33 @@ for (const source of ["interactive", "rpc"]) test(`queued ${source} follow-up ha
   const delivered = h.events.findLastIndex(e => e[0] === "message_start" && e[1] === "user");
   assert.equal(h.events[delivered - 1][0], "turn_start");
   assert.equal(h.events[delivered + 1][0], "request");
+  const user = h.manager.getBranch().filter(e => e.type === "message" && e.message.role === "user").at(-1).message;
+  assert.deepEqual(user.content, [{ type: "text", text: "Task B" }, ...images], "the SDK must deliver this fixture unchanged");
   assert.equal(h.counts.summary, 0);
   assert.equal(h.counts.settled, 1);
+  assert.deepEqual(h.counts.errors, []);
+});
+
+for (const source of ["interactive", "rpc"]) test(`queued ${source} follow-up with transformed images cannot authorize a handoff`, async t => {
+  const h = await queuedHandoffSession(t, { after: pi => pi.on("input", event => event.text === "Task B"
+    ? { action: "transform", text: event.text, images: [] } : undefined) });
+  const running = h.run();
+  await h.started;
+  const queued = restoreOnlineState(h.manager.getBranch());
+  const images = [{ type: "image", data: tinyPng, mimeType: "image/png" }];
+  assert.equal(await h.session.followUp("Task B", images, { source }), "queued");
+  assert.deepEqual(restoreOnlineState(h.manager.getBranch()), queued, "queueing cannot hand off A");
+  h.release();
+  await running;
+  const [, finalA, firstB] = h.snapshots;
+  assert.equal(h.snapshots.length, 3);
+  const user = h.manager.getBranch().filter(e => e.type === "message" && e.message.role === "user").at(-1).message;
+  assert.deepEqual(user.content, [{ type: "text", text: "Task B" }], "the image was removed after OCC observed the input");
+  assert.deepEqual(finalA.plan, plan(true, true));
+  assert.deepEqual(firstB.plan, finalA.plan, "text alone is not evidence of an unchanged external input");
+  assert.deepEqual(firstB.completedBoundaryRequestCounts, finalA.completedBoundaryRequestCounts);
+  assert.equal(firstB.epoch, finalA.epoch);
+  assert.equal(h.counts.summary, 0);
   assert.deepEqual(h.counts.errors, []);
 });
 

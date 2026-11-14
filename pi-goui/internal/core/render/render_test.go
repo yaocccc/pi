@@ -136,7 +136,7 @@ func TestSidebarSectionsDimensionsAndRows(t *testing.T) {
 			t.Fatalf("width %d", ansi.StringWidth(r))
 		}
 	}
-	for _, term := range []string{"SESSION", "STATS", "Main", "$0.12", "42.5%", "in 12K", "out 1.8K", "cache 20.0%", "cost $0.12"} {
+	for _, term := range []string{"󰉖", "STATS", "Main", "$0.12", "42.5%", "in 12K", "out 1.8K", "cache 20.0%", "cost $0.12"} {
 		if !strings.Contains(plain, term) {
 			t.Errorf("missing %s", term)
 		}

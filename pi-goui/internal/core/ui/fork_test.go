@@ -101,7 +101,7 @@ func TestForkNewestFirstAndIndependentTab(t *testing.T) {
 	if !strings.Contains(text, "aborted") || strings.Contains(text, "SUFFIX") || !strings.Contains(text, "last") || !strings.Contains(text, "earlier answer") {
 		t.Fatal("incorrect fork boundary:", text)
 	}
-	if fork.state.Busy || fork.working.present || fork.assistantStats != nil || len(fork.dialogs) != 0 {
+	if fork.state.Busy || fork.working.Present || fork.assistantStats != nil || len(fork.dialogs) != 0 {
 		t.Fatal("inherited source UI state")
 	}
 	records := wireRecords(t, wire, 1)

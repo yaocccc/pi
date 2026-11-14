@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"pi-goui/internal/core/rpc"
+	rpc "pi-goui/internal/runtime"
 )
 
 // Fork preparation happens before returning to Update, so the fixture must

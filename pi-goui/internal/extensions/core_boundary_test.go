@@ -17,8 +17,13 @@ func TestInternalDirectoryLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || !entries[0].IsDir() || entries[0].Name() != "core" || !entries[1].IsDir() || entries[1].Name() != "extensions" {
-		t.Fatal("internal must contain only the core and extensions directories")
+	if len(entries) != 3 {
+		t.Fatal("internal must contain only the core, extensions and runtime directories")
+	}
+	for i, name := range []string{"core", "extensions", "runtime"} {
+		if !entries[i].IsDir() || entries[i].Name() != name {
+			t.Fatalf("unexpected internal entry: %s", entries[i].Name())
+		}
 	}
 }
 

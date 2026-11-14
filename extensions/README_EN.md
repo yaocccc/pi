@@ -6,7 +6,7 @@ Capabilities own execution, authoritative validation, state, and persistence. Op
 
 ## Install the whole package
 
-Use your existing Pi installation and your own models/credentials. The current installation and TypeScript test baseline is **Node 22.19+ / Pi SDK 1.5.2**; this does not certify every historical suite against that version.
+Use your existing Pi installation and your own models/credentials. **Node 22.19+** is required. Complete extension regression uses repository SDK **1.5.0**; SoL-Pi also passes differential, session and strict type checks against installed global SDK **1.5.2**. Other SDK versions require revalidation.
 
 ```sh
 SRC=/path/to/repository/extensions
@@ -75,4 +75,4 @@ npm --prefix extensions run typecheck
 npm --prefix extensions test
 ```
 
-Tests cover documentation JSON/real schemas, copy layouts, helper synchronization, capability boundaries, and RPC. The historical SoL-Pi .mjs suite is **not included** in npm test; see its [version limits](sol-pi/README_EN.md#compatibility-and-validation). These checks do not replace real-terminal, cross-platform, or model end-to-end verification.
+The default runner discovers all `.test.ts` and `.test.mjs` files, including historical SoL-Pi suites. Coverage includes documentation JSON/real schemas, copy layouts, helper synchronization, capability boundaries, RPC and native-session differentials; only the existing archived-UI interaction test is skipped. It uses temporary HOME/agent directories, filters caller credentials and session environment, and never calls a real model. See [SoL-Pi validation](sol-pi/README_EN.md#compatibility-and-validation) for the separate offline global-SDK runner and version boundaries, and [frontend validation](../pi-goui/README_EN.md#verification) for Go/PTY/Web coverage. These checks do not replace physical-terminal, other-platform or real-model acceptance.

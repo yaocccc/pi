@@ -12,7 +12,7 @@ import (
 // Freeze the same run metrics shown by working, attached to a visible block.
 // Separate storage keeps them after the working row is dismissed or restarted.
 func (t *tab) saveAssistantStats() {
-	if t.working.active || !t.working.present {
+	if t.working.Active || !t.working.Present {
 		return
 	}
 	for i := len(t.state.Items) - 1; i >= t.workingStart; i-- {
@@ -21,14 +21,14 @@ func (t *tab) saveAssistantStats() {
 			if t.assistantStats == nil {
 				t.assistantStats = map[string]string{}
 			}
-			t.assistantStats[item.ID] = strings.TrimPrefix(t.working.formatLine(t.working.ended, config.Theme{}, false), "✓ ")
+			t.assistantStats[item.ID] = strings.TrimPrefix(t.working.formatLine(t.working.Ended, config.Theme{}, false), "✓ ")
 			return
 		}
 	}
 }
 
 func (t *tab) dismissCompletedWorking() {
-	if !t.working.active {
+	if !t.working.Active {
 		t.working.reset()
 	}
 }
@@ -36,19 +36,19 @@ func (t *tab) dismissCompletedWorking() {
 // Only this method feeds styled, trusted foreground sequences to the status row.
 func (m *Model) workingLine(t *tab) string {
 	line := t.working.line(time.Now(), m.cfg.Theme)
-	if t.working.active {
+	if t.working.Active {
 		line = render.AnimateWorkingLine(line, m.cfg.Theme, m.frame)
 	}
 	if line == "" || t.dead || t.state.Compacting || t.sending || len(t.dialogs) > 0 {
 		status := m.status(t)
-		if status == "Ready" || status == "ready" {
+		if status == "Ready" || status == "ready" || strings.EqualFold(status, "queued") {
 			status = ""
 		}
 		line = ""
 		if status != "" {
 			line = m.paint(render.Clean(status), m.cfg.Theme.Muted)
 		}
-	} else if t.status != "" && t.status != "Ready" {
+	} else if t.status != "" && t.status != "Ready" && !strings.EqualFold(t.status, "queued") {
 		line += " · " + m.paint(render.Clean(t.status), m.cfg.Theme.Muted)
 	}
 	keys := make([]string, 0, len(t.statuses))

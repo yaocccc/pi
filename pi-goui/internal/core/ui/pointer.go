@@ -4,7 +4,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/core/render"
-	"strings"
 	"time"
 )
 
@@ -124,7 +123,7 @@ func (m *Model) pointerShapeAt(x, y int) string {
 	}
 	if m.height >= 8 && y >= m.chatTop(m.current()) && y < m.chatTop(m.current())+m.transcriptHeight(t) {
 		row := y - m.chatTop(m.current()) + t.offset
-		if row >= strings.Count(t.doc.Text, "\n")+1 {
+		if row >= len(t.documentLines()) {
 			return "text"
 		}
 		for _, link := range t.doc.ImageLinks {

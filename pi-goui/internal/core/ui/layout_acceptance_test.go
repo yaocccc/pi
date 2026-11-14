@@ -74,7 +74,7 @@ func TestWorkingCompletionPersistsUntilNewMainInput(t *testing.T) {
 	tab.working.apply([]byte(`{"type":"agent_start"}`), time.Now())
 	tab.state.Busy = true
 	press(m, 'x', 0, "x")
-	if !tab.working.active {
+	if !tab.working.Active {
 		t.Fatal("typing steering draft interrupted active metrics")
 	}
 }

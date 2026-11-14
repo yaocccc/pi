@@ -8,8 +8,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
+	rpc "pi-goui/internal/runtime"
 )
 
 type forkSnapshotMsg struct {

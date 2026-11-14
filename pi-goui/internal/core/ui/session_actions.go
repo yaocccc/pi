@@ -10,8 +10,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
+	rpc "pi-goui/internal/runtime"
 )
 
 // A dialog captures a stable target, never a row index or whichever tab happens
@@ -196,6 +196,10 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 	m.sessionActions[a.key] = a
 	a.name = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(value))
 	origin.dialogs = origin.dialogs[1:]
+	// Saved rows may belong to a backend in another goui. Opening a temporary
+	// client joins that same session host before requesting a mutation lease.
+	cfg := rpc.Config{Bin: m.opts.Bin, Cwd: m.tabDirectory(origin), AgentDir: m.cfg.AgentDir, SessionFile: a.path, Args: append([]string(nil), m.opts.PiArgs...)}
+	pool := m.pool
 	return func() tea.Msg {
 		result := sessionActionMsg{action: a}
 		var file *session.MutationFile
@@ -210,10 +214,21 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 			result.err = errors.New("no session file selected")
 			return result
 		}
-		if a.client != nil {
+		client := a.client
+		temporary := client == nil && a.path != ""
+		if temporary {
+			var err error
+			client, err = pool.start(cfg)
+			if err != nil {
+				result.err = err
+				return result
+			}
+			defer client.Close()
+		}
+		if client != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			state, err := a.client.Call(ctx, map[string]any{"type": "get_state"})
+			state, err := client.Call(ctx, map[string]any{"type": "get_state"})
 			if err != nil {
 				result.err = err
 				return result
@@ -230,19 +245,24 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 				result.err = errors.New("RPC session changed since selection")
 				return result
 			}
-			if a.kind == "rename" {
-				_, result.err = a.client.Call(ctx, map[string]any{"type": "set_session_name", "name": a.name})
+			if a.kind == "rename" && !temporary {
+				_, result.err = client.Call(ctx, map[string]any{"type": "set_session_name", "name": a.name})
 				return result
 			}
-			if err = a.client.Close(); err != nil {
+			release, err := client.BeginFileMutation(ctx)
+			if err != nil {
 				result.err = err
 				return result
 			}
-			result.closed = true
-		}
-		if a.kind == "rename" {
-			result.err = file.Rename(a.name)
-			return result
+			// The shared host may stop its sole writer when granting this
+			// lease. Do not issue RPC calls after acquisition. The lease
+			// outlives Client.Close and excludes attachments until release.
+			defer release()
+			if err = client.Close(); err != nil {
+				result.err = err
+				return result
+			}
+			result.closed = a.client != nil
 		}
 		if a.path != "" {
 			// Close can flush a final native record; accept appends, not replacement.
@@ -258,7 +278,11 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 				result.err = errors.New("session file was replaced while stopping its writer")
 				return result
 			}
-			result.err = final.Delete()
+			if a.kind == "rename" {
+				result.err = final.Rename(a.name)
+			} else {
+				result.err = final.Delete()
+			}
 		}
 		return result
 	}
@@ -292,7 +316,7 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 			target.interruptRequested = false
 			target.refreshing = false
 			target.refreshAgain = false
-			target.working.active = false
+			target.working.Active = false
 			target.status = message + "; history and draft retained. Resume the history to reconnect."
 			m.patchSessionSelectors(a, target, false)
 		}
@@ -309,12 +333,17 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 				}
 			}
 		}
+		if target != nil && !target.dead && !v.closed && target.client != nil && target.client.Shared() {
+			// A refused lease keeps this session alive; catch changes received
+			// while the pending delete temporarily suppressed its UI updates.
+			return m.refresh(target)
+		}
 		return nil
 	}
 	if a.kind == "rename" {
 		if target != nil {
 			target.state.Name = a.name
-			target.dirty = true
+			target.invalidateDocument()
 			target.revision++
 		}
 		m.patchSessionSelectors(a, target, false)

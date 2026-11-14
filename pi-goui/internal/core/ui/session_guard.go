@@ -9,8 +9,7 @@ import (
 	"pi-goui/internal/core/session"
 )
 
-const unfinishedWarning = "⚠ 会话可能仍在执行或曾被中断；继续输入前需确认，避免多个窗口同时对话。"
-const uncertainWarning = "⚠ 无法确认会话已结束；继续输入前需确认，避免多个窗口同时对话。"
+const uncertainWarning = "⚠ 暂时无法读取或校验会话历史；继续前请检查历史文件状态。"
 
 type sessionGuard struct {
 	path                string
@@ -19,6 +18,7 @@ type sessionGuard struct {
 	pending, submitting bool
 	sequence            uint64
 	approved, prompted  bool
+	history             os.FileInfo // Last successful, stable inspection; immutable after capture.
 }
 type sessionGuardMsg struct {
 	id                                       int
@@ -26,12 +26,12 @@ type sessionGuardMsg struct {
 	sequence, draftRevision, imageGeneration uint64
 	draft                                    string
 	submit, follow                           bool
-	unfinished                               bool
 	err                                      error
+	history                                  os.FileInfo
 }
 
 func (t *tab) ownRunActive() bool {
-	return t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.working.active
+	return t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.working.Active
 }
 
 // Schedule inspection from ticks/load or input attempts; never do IO in View
@@ -54,14 +54,53 @@ func (m *Model) inspectSession(t *tab, submit, follow bool, now time.Time) tea.C
 	// Pi allocates a path before persisting a new session's first message.
 	// Only that empty, locally created session may legitimately have no file.
 	newEmpty := t.newSession && t.state.MessageCount == 0 && len(t.state.Items) == 0
+	history := g.history
 	return func() tea.Msg {
-		msg.unfinished, msg.err = session.UnfinishedFile(msg.path)
+		msg.history, msg.err = inspectSessionHistory(msg.path, history)
 		if newEmpty && errors.Is(msg.err, os.ErrNotExist) {
 			msg.err = nil
 		}
 		return msg
 	}
 }
+
+// Only successful inspections of the same unchanged regular file may be reused.
+// Keep IO inside the command; FileInfo snapshots never mutate live tab state.
+func inspectSessionHistory(path string, cached os.FileInfo) (os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, errors.New("session history is not a regular file")
+	}
+	if sameSessionHistory(cached, before) {
+		return cached, nil
+	}
+	// An unfinished persisted branch may simply be an interrupted run.
+	// It is not evidence of another writer; only inspection errors gate input.
+	if _, err := session.UnfinishedFile(path); err != nil {
+		return nil, err
+	}
+	return stableSessionHistory(path, before)
+}
+
+func stableSessionHistory(path string, before os.FileInfo) (os.FileInfo, error) {
+	after, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !sameSessionHistory(before, after) {
+		return nil, errors.New("session history changed during inspection")
+	}
+	return after, nil
+}
+
+func sameSessionHistory(before, after os.FileInfo) bool {
+	return before != nil && after != nil && before.Mode().IsRegular() && after.Mode().IsRegular() &&
+		os.SameFile(before, after) && before.Size() == after.Size() && before.ModTime().Equal(after.ModTime()) && before.Mode() == after.Mode()
+}
+
 func (m *Model) sessionGuardResult(v sessionGuardMsg) tea.Cmd {
 	t := m.byID(v.id)
 	if t == nil || t.state.File != v.path || t.sessionGuard.sequence != v.sequence {
@@ -70,11 +109,12 @@ func (m *Model) sessionGuardResult(v sessionGuardMsg) tea.Cmd {
 	g := &t.sessionGuard
 	g.pending, g.submitting = false, false
 	g.checked = time.Now()
+	g.history = nil
+	if v.err == nil {
+		g.history = v.history
+	}
 	previous := g.warning
 	g.warning = ""
-	if v.unfinished {
-		g.warning = unfinishedWarning
-	}
 	if v.err != nil {
 		g.warning = uncertainWarning
 	}
@@ -117,6 +157,12 @@ func (m *Model) gateSession(t *tab) (bool, tea.Cmd) {
 		return false, nil
 	}
 	g := &t.sessionGuard
+	// A resume is already inspecting history in background. Let early typing
+	// remain local instead of eating the first keystroke. Submission still
+	// performs the normal asynchronous guard, and known warnings still gate.
+	if t.resume.pending && (g.path != t.state.File || g.warning == "") {
+		return false, nil
+	}
 	if g.path != t.state.File || g.checked.IsZero() {
 		return true, m.inspectSession(t, false, false, time.Now())
 	}
@@ -134,7 +180,7 @@ func (m *Model) sessionGateDialog(t *tab) tea.Cmd {
 	}
 	g := &t.sessionGuard
 	g.prompted = true
-	d := m.newDialog("session-send-confirm", "确认继续未结束会话", "")
+	d := m.newDialog("session-send-confirm", "确认继续使用异常会话历史", "")
 	d.message = g.warning
 	d.options = []option{{Label: "确认，继续此会话", Value: "continue"}}
 	d.sessionSend = &sessionGuardMsg{path: t.state.File}

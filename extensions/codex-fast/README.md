@@ -44,7 +44,9 @@ Pi 1.5.2 提供 SDK、`pi-tui`、`typebox`，这两个目录运行不需要复�
 
 通过 `getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY)` 发现服务：
 
-- `getConfig()` 重新读取持久化状态，返回独立快照。
+配置文件仅在扩展启动时读取。设置档位立即更新当前进程并保存为以后启动的默认值，不影响其他已运行进程的显示或请求；多个窗口保存时，最后一次成功保存决定下次启动的默认值。
+
+- `getConfig()` 返回当前进程状态的独立快照，不重读配置文件。
 - `levels` 提供不可变的支持档位列表。
 - `setLevel(unknown)` 校验并原子保存，返回独立状态；无效档位抛出 `invalid-level`，保存失败不更新已提交内存状态。
 - 成功保存发布 `codex-fast:changed` 的 `{level}` 事实。外部文件变化在下一次读取/请求时加载，不视为服务保存事件。
@@ -124,7 +126,7 @@ Pi 1.5.2 提供 SDK、`pi-tui`、`typebox`，这两个目录运行不需要复�
 }
 ~~~
 
-可据此刷新或标记显示过期，但不能代替请求响应关联。它不是覆盖所有外部文件修改或其他后端进程的推送源：切回页面时重新查询，如需实时同步可有界轮询。每个标签/后端的状态独立保存。
+可据此刷新或标记显示过期，但不能代替请求响应关联。切回页面时重新查询当前后端的进程内状态，不同步外部文件修改或其他后端进程。每个标签/后端的显示状态独立保存。
 
 ### 也可以使用设置对话框
 也可走标准对话框：发现命令后发送 `/codex-fast`。结构化模式会收到 `extension_ui_request`，`method:"input"`、标题 `pi-goui:codex-fast:v1`，`placeholder` 是 `{"level":"normal"}` 的 JSON 字符串（仅当前档位）。v1 档位为 `normal`、`fast`、`ultrafast`；`codex-fast.get` API 还会提供受支持的 `levels` 数组。回复匹配对话 ID 的 `extension_ui_response`，`value` 为普通字符串 `"fast"`，不是再次 JSON 编码的字符串；`cancelled:true` 不保存。未启用结构化模式时使用标准 select/notify。
@@ -139,7 +141,7 @@ import { CODEX_FAST_CAPABILITY, CODEX_FAST_CHANGED, type CodexFastService } from
 const service = getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY); // "codex-fast"
 if (service) {
   const choices = service.levels;
-  const current = service.getConfig(); // {level}，重读持久化状态
+  const current = service.getConfig(); // {level}，当前进程状态
   const committed = service.setLevel("fast"); // 权威校验，可能抛错
 }
 const unsubscribe = pi.events.on(CODEX_FAST_CHANGED, config => {

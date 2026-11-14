@@ -75,7 +75,7 @@ func (m *Model) finishPanelResize() {
 	// Update only the current editor now. Activation already resizes other
 	// editors; dirty flags retain any streamed updates while display was frozen.
 	for _, t := range m.tabs {
-		t.dirty = true
+		t.invalidateDocument()
 	}
 	if t := m.current(); t != nil {
 		m.resizeEditor(t)

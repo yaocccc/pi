@@ -142,7 +142,7 @@ func (m *Model) View() tea.View {
 	} else {
 		completions := m.completion(t)
 		height := m.transcriptHeightFor(t, len(completions))
-		lines := strings.Split(t.doc.Text, "\n")
+		lines := t.documentLines()
 		offset := min(max(0, t.offset), len(lines))
 		bottom := min(len(lines), offset+height)
 		visible := append([]string(nil), lines[offset:bottom]...)
@@ -207,7 +207,11 @@ func (m *Model) View() tea.View {
 		rows := make([]render.SessionRow, 0, end-start)
 		for i, other := range m.tabs[start:end] {
 			status := "idle"
-			if other.dead {
+			if other.resume.failed {
+				status = "连接失败"
+			} else if other.resumingHistory() {
+				status = ""
+			} else if other.dead {
 				status = "stopped"
 			} else if len(other.dialogs) > 0 {
 				status = "input"

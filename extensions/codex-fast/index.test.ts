@@ -20,21 +20,24 @@ async function setup(t: TestContext, initial?: unknown) {
     });
     const file = join(root, 'codex-fast.json');
     if (initial !== undefined) writeFileSync(file, JSON.stringify(initial));
-    const bus = new EventEmitter();
-    const handlers = new Map<string, any>();
-    const pi = {
-        events: {
-            emit: (name: string, data: unknown) => { bus.emit(name, data); },
-            on: (name: string, handler: (data: any) => void) => { bus.on(name, handler); return () => { bus.off(name, handler); }; },
-        },
-        on: (name: string, handler: any) => handlers.set(name, handler),
-        registerCommand: () => { throw new Error('Capability must not register UI commands'); },
-    } as unknown as ExtensionAPI;
     const { default: extension } = await import(`./index.ts?capability=${++importId}`);
-    extension(pi);
-    const service = getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY)!;
-    assert.ok(service);
-    return { service, bus, file, handlers };
+    function start() {
+        const bus = new EventEmitter();
+        const handlers = new Map<string, any>();
+        const pi = {
+            events: {
+                emit: (name: string, data: unknown) => { bus.emit(name, data); },
+                on: (name: string, handler: (data: any) => void) => { bus.on(name, handler); return () => { bus.off(name, handler); }; },
+            },
+            on: (name: string, handler: any) => handlers.set(name, handler),
+            registerCommand: () => { throw new Error('Capability must not register UI commands'); },
+        } as unknown as ExtensionAPI;
+        extension(pi);
+        const service = getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY)!;
+        assert.ok(service);
+        return { service, bus, file, handlers };
+    }
+    return { ...start(), start };
 }
 
 test('headless service exposes levels, validates and atomically saves without a UI', async (t) => {
@@ -67,8 +70,36 @@ test('headless service preserves legacy migration and provider-specific tiers', 
     assert.equal(request({ payload: {} }, { model: { ...model, id: 'other' } }).service_tier, 'priority');
     assert.equal(request({ payload: {} }, { model: { ...model, provider: 'other' } }), undefined);
     writeFileSync(file, JSON.stringify({ level: 'normal' }));
-    assert.equal(request({ payload: {} }, { model }), undefined);
-    assert.equal(service.getConfig().level, 'normal');
+    assert.equal(request({ payload: {} }, { model }).service_tier, 'ultrafast');
+    assert.equal(service.getConfig().level, 'ultrafast');
+});
+
+test('instances keep independent live settings and new instances use the last saved default', async (t) => {
+    const first = await setup(t, { level: 'normal' });
+    const second = first.start();
+    const model = { id: 'gpt-6-astra', provider: 'openai-codex', api: 'openai-codex-responses' };
+    const tier = (instance: typeof second) => instance.handlers.get('before_provider_request')({ payload: {} }, { model })?.service_tier;
+    let firstChanges = 0;
+    let secondChanges = 0;
+    first.bus.on(CODEX_FAST_CHANGED, () => firstChanges++);
+    second.bus.on(CODEX_FAST_CHANGED, () => secondChanges++);
+
+    first.service.setLevel('fast');
+    assert.equal(second.service.getConfig().level, 'normal');
+    assert.equal(tier(second), undefined);
+    assert.equal(secondChanges, 0);
+
+    second.service.setLevel('ultrafast');
+    assert.equal(first.service.getConfig().level, 'fast');
+    assert.equal(tier(first), 'priority');
+    assert.equal(tier(second), 'ultrafast');
+    assert.equal(firstChanges, 1);
+    assert.equal(secondChanges, 1);
+    assert.equal(JSON.parse(readFileSync(first.file, 'utf8')).level, 'ultrafast');
+
+    const third = first.start();
+    assert.equal(third.service.getConfig().level, 'ultrafast');
+    assert.equal(tier(third), 'ultrafast');
 });
 
 test('failed persistence leaves committed state unchanged and emits no event', async (t) => {

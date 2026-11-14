@@ -15,8 +15,8 @@ import (
 )
 
 // Default positions with empty history and no quota. Use SidebarGeometry for hit tests.
-const SidebarNewRow = 13
-const SidebarSessionStart = 15
+const SidebarNewRow = 10
+const SidebarSessionStart = 12
 
 // Each history entry occupies one row.
 const SidebarHistoryRows = 1
@@ -65,34 +65,37 @@ func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 	quotaRow := -1
 	modeRow := -1
 	if context.Quota != nil {
-		quotaRow = 10
+		quotaRow = 6
 		extra += 4
 	}
 	if context.Mode != "" {
-		modeRow = 10 + extra
+		modeRow = 6 + extra
 		if context.Quota != nil {
 			modeRow-- // Insert directly after Credits, before the separator.
 		}
 		extra++
+		if context.Quota == nil {
+			extra++ // Separator between Mode and CWD.
+		}
 	}
-	todoRow, todoCount := -1, min(10, len(context.Todo), max(0, height-(10+extra)-11-min(1, len(context.History))))
+	todoRow, todoCount := -1, min(10, len(context.Todo), max(0, height-(7+extra)-11-min(1, len(context.History))))
 	todoHeight := 0
 	if todoCount > 0 {
 		todoHeight = todoCount + 1 // Separator followed immediately by steps.
 		todoRow = height - 1 - todoHeight
 	}
-	historyRow := 10 + extra
+	historyRow := 7 + extra
 	// Keep only complete history entries and room for New session and one open-session card.
 	historyCount := min(5, len(context.History), max(0, (height-historyRow-todoHeight-8)/SidebarHistoryRows))
 	extra += historyCount * SidebarHistoryRows
 	newRow := SidebarNewRow + extra
 	start := SidebarSessionStart + extra
 	directoryRow := -1
-	if height > 4 {
-		directoryRow = 3
+	if height > historyRow {
+		directoryRow = historyRow - 1
 	}
 	return SidebarLayout{
-		DirectoryRow: directoryRow, ContextRow: 4, StatsRow: 6, QuotaRow: quotaRow, ModeRow: modeRow,
+		DirectoryRow: directoryRow, ContextRow: 4, StatsRow: 1, QuotaRow: quotaRow, ModeRow: modeRow,
 		TodoRow: todoRow, TodoStart: todoRow + 1, TodoCount: todoCount,
 		TodoOffset: max(0, len(context.Todo)-todoCount-max(0, context.TodoScroll)),
 		HistoryRow: historyRow, HistoryStart: historyRow + 2, HistoryCount: historyCount,
@@ -132,25 +135,26 @@ func progressRow(state session.State, theme config.Theme, width int) string {
 		pct = fmt.Sprintf("%.1f%%", percent)
 	}
 	suffix := pct + " " + used + "/" + total
-	cells := width - 4 - 1 - ansi.StringWidth(suffix)
+	// Start the percentage in the same column as the STATS right label (cost).
+	gap := min(2, max(0, width))
+	rightStart := max(0, (width-gap)/2) + gap
+	cells := min(8, rightStart-4-1)
 	if cells < 1 {
-		return fit(paint("CTX "+suffix, theme.Muted), width)
+		return fit(paint("ctx "+suffix, theme.Muted), width)
 	}
-	filled := 0
-	if percent >= 0 {
-		filled = int(math.Round(float64(cells) * min(100.0, percent) / 100))
+	filledCells := 0
+	if percent > 0 {
+		filledCells = max(1, int(math.Round(float64(cells)*min(100.0, percent)/100)))
 	}
+	filled := strings.Repeat("━", filledCells)
+	empty := cells - filledCells
 	color := theme.Accent
-	if percent >= 90 {
-		color = theme.Error
-	} else if percent >= 75 {
-		color = theme.Warning
-	}
 	dim := theme.Dim
 	if dim == "" {
 		dim = theme.Muted
 	}
-	return paint("CTX ", theme.Muted) + paint(strings.Repeat("━", filled), color) + paint(strings.Repeat("━", cells-filled), dim) + " " + paint(suffix, theme.Text)
+	bar := paint(filled, color) + paint(strings.Repeat("─", empty), dim)
+	return paint("ctx ", theme.Muted) + bar + strings.Repeat(" ", rightStart-4-cells) + paint(fit(suffix, max(0, width-rightStart)), theme.Text)
 }
 
 func gitRow(g *GitStatus, theme config.Theme, width int) string {
@@ -284,7 +288,7 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 	title := func(s string) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Text)).Bold(true).Render(s)
 	}
-	rows := []string{border("┌", "┐"), cell(title("SESSION")), cell(paint(oneLine(session.DisplayName(state)), theme.Text)), cell(paint(oneLine(ctx.Directory), theme.Text))}
+	rows := []string{border("┌", "┐"), cell(title("STATS"))}
 	st := state.Stats
 	cache := "—"
 	denominator := float64(st.Input) + float64(st.CacheRead) + float64(st.CacheWrite)
@@ -295,9 +299,9 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 	if st.HasCost && !math.IsNaN(st.Cost) && !math.IsInf(st.Cost, 0) {
 		cost = fmt.Sprintf("$%.2f", st.Cost)
 	}
-	rows = append(rows, cell(progressRow(state, theme, inner)), separator(), cell(title("STATS")),
-		cell(statsColumns("in", number(st.Input), "out", number(st.Output), inner, theme)),
-		cell(statsColumns("cache", cache, "cost", cost, inner, theme)), separator())
+	rows = append(rows, cell(statsColumns("in", number(st.Input), "out", number(st.Output), inner, theme)),
+		cell(statsColumns("cache", cache, "cost", cost, inner, theme)),
+		cell(progressRow(state, theme, inner)), separator())
 	if q := ctx.Quota; q != nil {
 		rows = append(rows, cell(sidebarPair("Weekly limit", quotaPercent(q.RemainingPercent), inner, theme)),
 			cell(sidebarPair("Resets in", quotaCountdown(q), inner, theme)),
@@ -307,11 +311,11 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 		value, _ := SidebarModeValue(ctx.Mode, inner)
 		rows = append(rows, cell(sidebarPair("Mode", value, inner, theme)))
 	}
-	if ctx.Quota != nil {
+	if ctx.Quota != nil || ctx.Mode != "" {
 		rows = append(rows, separator())
 	}
 	layout := SidebarGeometry(height, ctx)
-	rows = append(rows, cell(title("RECENTS")), cell(""))
+	rows = append(rows, cell(title("󰉖")+" "+paint(oneLine(ctx.Directory), theme.Muted)), cell(title("RECENTS")), cell(""))
 	historyRows := layout.HistoryCount * SidebarHistoryRows
 	for row := 0; row < historyRows; row++ {
 		i := layout.HistoryOffset + row/SidebarHistoryRows

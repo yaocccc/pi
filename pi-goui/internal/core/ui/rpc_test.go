@@ -14,7 +14,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"pi-goui/internal/core/rpc"
+	rpc "pi-goui/internal/runtime"
 )
 
 // Executed only by a temporary wrapper pointed at this test binary, never pi.

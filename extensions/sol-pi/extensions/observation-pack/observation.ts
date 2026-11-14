@@ -49,8 +49,8 @@ export function estimateTokens(text: string): number {
 export function countLines(text: string): number {
 	if (text.length === 0) return 0;
 	let lines = text.endsWith("\n") ? 0 : 1;
-	for (const character of text) {
-		if (character === "\n") lines += 1;
+	for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+		lines += 1;
 	}
 	return lines;
 }
@@ -78,7 +78,12 @@ function textFromResult(message: ToolResultMessage): string {
 }
 
 function containsReducerReceipt(text: string): boolean {
-	return text.split("\n").some((line) => line === EVIDENCE_REDUCER_RECEIPT_PREFIX);
+	const marker = EVIDENCE_REDUCER_RECEIPT_PREFIX;
+	for (let index = text.indexOf(marker); index !== -1; index = text.indexOf(marker, index + marker.length)) {
+		const end = index + marker.length;
+		if ((index === 0 || text[index - 1] === "\n") && (end === text.length || text[end] === "\n")) return true;
+	}
+	return false;
 }
 
 /**
@@ -158,23 +163,33 @@ export async function ensureStored(observation: Observation): Promise<void> {
 }
 
 function completeLineExcerpt(text: string, budgetBytes: number, fromEnd: boolean): string {
-	const lines = text.split(/(?<=\n)/);
-	const selected: string[] = [];
-	let selectedBytes = 0;
-	let index = fromEnd ? lines.length - 1 : 0;
-
-	while (index >= 0 && index < lines.length) {
-		const line = lines[index];
-		if (line === undefined) break;
-		const lineBytes = Buffer.byteLength(line, "utf8");
-		if (selectedBytes + lineBytes > budgetBytes) break;
-		if (fromEnd) selected.unshift(line);
-		else selected.push(line);
-		selectedBytes += lineBytes;
-		index += fromEnd ? -1 : 1;
+	let boundary = fromEnd ? text.length : 0;
+	let remaining = budgetBytes;
+	while (remaining > 0 && (fromEnd ? boundary > 0 : boundary < text.length)) {
+		let start: number;
+		let end: number;
+		// UTF-8 needs at least one byte per UTF-16 code unit. Search only a
+		// budget-sized window, even when one line spans the entire observation.
+		if (fromEnd) {
+			end = boundary;
+			const windowStart = Math.max(0, end - remaining - 1);
+			const searchEnd = end - (text[end - 1] === "\n" ? 1 : 0);
+			const previous = text.slice(windowStart, searchEnd).lastIndexOf("\n");
+			if (previous === -1 && windowStart > 0) break;
+			start = previous === -1 ? 0 : windowStart + previous + 1;
+		} else {
+			start = boundary;
+			const windowEnd = Math.min(text.length, start + remaining);
+			const next = text.slice(start, windowEnd).indexOf("\n");
+			if (next === -1 && windowEnd < text.length) break;
+			end = next === -1 ? text.length : start + next + 1;
+		}
+		const bytes = Buffer.byteLength(text.slice(start, end), "utf8");
+		if (bytes > remaining) break;
+		remaining -= bytes;
+		boundary = fromEnd ? start : end;
 	}
-
-	return selected.join("");
+	return fromEnd ? text.slice(boundary) : text.slice(0, boundary);
 }
 
 export function placeholderFor(observation: Observation): string {

@@ -71,6 +71,7 @@ type State struct {
 	active             string
 	runActive          bool
 	loadedState        bool
+	entriesCache       *snapshotCache
 }
 type Summary struct {
 	ID, Path, Name, FirstMessage, Cwd string

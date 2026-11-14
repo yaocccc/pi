@@ -112,7 +112,7 @@ func TestSidebarHistoryHoverFollowsPointer(t *testing.T) {
 		t.Fatal("hover remained outside sidebar")
 	}
 	move(x, layout.HistoryStart)
-	m.Update(sidebarHistoryMsg{cwd: m.sidebarHistory.cwd, sessions: nil})
+	m.Update(sidebarHistoryMsg{generation: m.sidebarHistory.generation, cwd: m.sidebarHistory.cwd, sessions: nil})
 	if len(m.sidebarContext().HistoryHovered) != 0 {
 		t.Fatal("refresh retained stale hover")
 	}
@@ -156,11 +156,11 @@ func TestSidebarHistoryScrollingAndRefresh(t *testing.T) {
 	if m.sidebarOffset != 3 || m.sidebarHistory.offset != 7 {
 		t.Fatal("open-tab wheel changed history")
 	}
-	m.Update(sidebarHistoryMsg{cwd: cwd, sessions: m.sidebarHistory.sessions[:6]})
+	m.Update(sidebarHistoryMsg{generation: m.sidebarHistory.generation, cwd: cwd, sessions: m.sidebarHistory.sessions[:6]})
 	if m.sidebarHistory.offset != 1 {
 		t.Fatal("refresh did not clamp history offset")
 	}
-	m.Update(sidebarHistoryMsg{cwd: "different", sessions: m.sidebarHistory.sessions})
+	m.Update(sidebarHistoryMsg{generation: m.sidebarHistory.generation, cwd: "different", sessions: m.sidebarHistory.sessions})
 	if m.sidebarHistory.offset != 0 {
 		t.Fatal("directory change did not reset history")
 	}

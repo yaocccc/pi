@@ -22,6 +22,26 @@ func status(t *testing.T, s *State, want string) {
 	}
 }
 
+func TestCloneOwnsPlanAndSnapshotIdentity(t *testing.T) {
+	var original State
+	original.ObserveMessage(planMessage("live", "in_progress"), true)
+	next := original.Clone()
+	if next.liveTool != original.liveTool || next.PlanRevision != original.PlanRevision {
+		t.Fatal("clone lost reconciliation cursors")
+	}
+	next.Plan[0].Goal = "background goal"
+	if original.Plan[0].Goal == next.Plan[0].Goal {
+		t.Fatal("clone shares mutable plan storage")
+	}
+	snapshot := original.NewSnapshot(nil)
+	snapshot.ObserveMessage(planMessage("live", "completed"))
+	next.Commit(snapshot, true)
+	status(t, next, "in_progress")
+	next.ObserveMessage(planMessage("live", "completed"), true)
+	status(t, &original, "in_progress")
+	status(t, next, "completed")
+}
+
 func TestLiveToolSurvivesStaleSnapshotUntilPersistence(t *testing.T) {
 	var s State
 	s.ObserveMessage(planMessage("live", "completed"), true)

@@ -86,7 +86,7 @@ func (m *Model) receiveUpdateCheck(msg updateCheckMsg) {
 	}
 	m.updates.notice = "↑ Updates available: " + strings.Join(items, " · ")
 	for _, t := range m.tabs {
-		t.dirty = true
+		t.invalidateDocument()
 	}
 }
 
@@ -133,7 +133,7 @@ func (m *Model) releaseNotesCommand() tea.Cmd {
 func (m *Model) receiveReleaseNotes(msg releaseNotesMsg) {
 	m.updates.notes = msg.notes
 	for _, t := range m.tabs {
-		t.dirty = true
+		t.invalidateDocument()
 		if t.newSession && len(t.state.Items) == 0 && msg.notes.Markdown != "" {
 			t.follow = false
 			t.offset = 0

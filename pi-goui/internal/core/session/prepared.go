@@ -34,6 +34,13 @@ func detachedState(s State) State {
 	return s
 }
 
+// Detached captures an independent state for ordered background replay. Call it
+// on the owner's goroutine. Native record versions are immutable; mutable
+// containers are copied. No extension capability is retained: the recipient
+// must attach its own independently owned projection before replaying events.
+// Treat exported item payloads as read-only, just as with the original State.
+func (s *State) Detached() State { return detachedState(*s) }
+
 func (s *State) SnapshotPreparation() SnapshotPreparation {
 	return SnapshotPreparation{base: detachedState(*s)}
 }
@@ -66,6 +73,27 @@ func (p SnapshotPreparation) Prepare(state, entries, stats json.RawMessage) (*Pr
 	return out, err
 }
 
+// PrepareFile prepares a read-only native history preview without encoding and
+// reparsing a get_entries envelope. It provides no backend/queue authority;
+// callers must still validate the captured owner and revision before applying.
+func (p SnapshotPreparation) PrepareFile(path string) (Header, *PreparedSnapshot, error) {
+	header, entries, leaf, err := readPreviewEntries(path)
+	if err != nil {
+		return header, nil, err
+	}
+	next := detachedState(p.base)
+	parsed, err := next.snapshotFromEntries(entries, leaf)
+	if err != nil {
+		return header, nil, err
+	}
+	out := &PreparedSnapshot{hasEntries: true}
+	previousLeaf := next.leaf
+	next.loadParsedEntries(parsed, &out.path)
+	out.branched = previousLeaf != "" && next.leaf != previousLeaf && !next.pathIDs[previousLeaf]
+	out.state = next
+	return header, out, nil
+}
+
 // ApplySnapshot performs only capability-owned metadata replay and container
 // adoption. Record bodies and their projections have already been prepared.
 // Extension capabilities stay on the event loop, never in the async result.
@@ -89,6 +117,7 @@ func (s *State) ApplySnapshot(p *PreparedSnapshot) {
 		next.tools, next.toolIDs = history.tools, history.toolIDs
 		next.aliases, next.pathIDs = history.aliases, history.pathIDs
 		next.leaf, next.serial, next.active = history.leaf, history.serial, history.active
+		next.entriesCache = history.entriesCache
 		for _, e := range p.path {
 			if e.Type == "session_info" {
 				next.Name = p.state.Name

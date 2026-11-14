@@ -6,6 +6,7 @@ package sessionview
 import (
 	"encoding/json"
 	"pi-goui/internal/core/extensionapi"
+	"slices"
 
 	"pi-goui/internal/extensions/solpi"
 	"pi-goui/internal/extensions/web"
@@ -23,6 +24,16 @@ type State struct {
 	Plan                []solpi.Step
 	PlanRevision        uint64
 	liveEntry, liveTool string
+}
+
+// Clone transfers no mutable projection storage to a background replay owner.
+func (s *State) Clone() *State {
+	if s == nil {
+		return &State{}
+	}
+	next := *s
+	next.Plan = slices.Clone(s.Plan)
+	return &next
 }
 
 func (s *State) setPlan(steps []solpi.Step) {

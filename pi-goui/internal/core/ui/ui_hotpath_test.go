@@ -176,16 +176,16 @@ func TestWorkingFinishedPrefilterPreservesContentChecks(t *testing.T) {
 	// The same timestamp alone is not a completed-message identity: new
 	// content must still be counted, even with a misleading delta attached.
 	workingApply(&w, `{"type":"message_update","message":{"role":"assistant","timestamp":1,"content":[{"type":"text","text":"abcdefgh"}]},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"wrong"}}`, now)
-	if !w.current || w.estimate() != 2 {
+	if !w.Current || (w.view().Output-w.Total.Output) != 2 {
 		t.Fatal("timestamp collision or unverified delta replaced the snapshot")
 	}
 	workingApply(&w, `{"type":"message_update","message":{"role":"assistant","timestamp":2,"content":[{"type":"text","text":"abcdefghijkl"}]}}`, now)
 	workingApply(&w, workingFinal(1, 6), now)
-	if !w.current || w.currentTimestamp != "2" || w.estimate() != 3 || w.total.output != 6 {
+	if !w.Current || w.CurrentTimestamp != "2" || (w.view().Output-w.Total.Output) != 3 || w.Total.Output != 6 {
 		t.Fatal("late usage correction disturbed the current message")
 	}
 	workingApply(&w, `{"type":"message_update","message":{"role":"assistant","timestamp":1,"content":[{"text":"completed","type":"text"}]}}`, now)
-	if w.currentTimestamp != "2" || w.estimate() != 3 {
+	if w.CurrentTimestamp != "2" || (w.view().Output-w.Total.Output) != 3 {
 		t.Fatal("canonical duplicate reopened an earlier message")
 	}
 }
@@ -196,7 +196,7 @@ func TestWorkingFinishedIdentityCanonicalizesNullTimestamp(t *testing.T) {
 	workingApply(&w, `{"type":"agent_start"}`, now)
 	workingApply(&w, `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"output":2}}}`, now)
 	workingApply(&w, `{"type":"message_update","message":{"role":"assistant","timestamp":null,"content":[{"text":"done","type":"text"}]}}`, now)
-	if w.current || w.total.output != 2 || w.turn != 1 {
+	if w.Current || w.Total.Output != 2 || w.Turn != 1 {
 		t.Fatal("missing versus null timestamp bypassed canonical deduplication")
 	}
 }

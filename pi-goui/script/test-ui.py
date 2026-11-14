@@ -233,7 +233,7 @@ class Harness:
 
 
 def acceptance(h):
-    h.visible('+ New session'); h.visible('STATS'); h.visible('SESSION')
+    h.visible('+ New session'); h.visible('STATS'); h.visible('󰉖')
     assert 'SESSIONS' not in h.screen.text
     assert 'Ready' not in h.screen.text
     assert not any(label in h.screen.text for label in ('FILES', 'GIT STATUS', 'THEMES', 'PLUGINS')), 'Unexpected sidebar section'

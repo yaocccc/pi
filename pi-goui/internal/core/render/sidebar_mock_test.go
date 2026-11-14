@@ -37,15 +37,15 @@ func TestMockSidebarOptionalSectionsAndHitGeometry(t *testing.T) {
 			if !strings.HasPrefix(plain[0], "┌") || !strings.HasSuffix(plain[0], "┐") || !strings.HasPrefix(plain[35], "└") || !strings.HasSuffix(plain[35], "┘") {
 				t.Fatal("incorrect outer frame")
 			}
-			if !strings.Contains(plain[1], "SESSION") || !strings.Contains(plain[layout.StatsRow], "STATS") {
+			if strings.Contains(strings.Join(plain, "\n"), "SESSION") || !strings.Contains(plain[layout.StatsRow], "STATS") {
 				t.Fatal("headings must have own row")
 			}
-			for _, index := range []int{1, layout.StatsRow} {
+			for _, index := range []int{layout.StatsRow} {
 				if !strings.Contains(rows[index], "\x1b[1;") && !strings.Contains(rows[index], "\x1b[1m") {
 					t.Fatalf("heading not bold: %q", rows[index])
 				}
 			}
-			if !strings.HasPrefix(plain[layout.StatsRow-1], "│ ─") || !strings.HasPrefix(plain[layout.StatsRow+3], "│ ─") {
+			if !strings.HasPrefix(plain[layout.ContextRow+1], "│ ─") || !strings.HasPrefix(plain[layout.DirectoryRow-1], "│ ─") {
 				t.Fatal("missing inset dividers")
 			}
 			if !strings.Contains(plain[layout.NewRow], "+ New") || !strings.Contains(plain[layout.SessionsStart], "1 idle") {

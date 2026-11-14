@@ -7,10 +7,19 @@ import (
 	"pi-goui/internal/core/render"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions"
+	rpc "pi-goui/internal/runtime"
 	"time"
 )
 
 type extensionRuntime = extension.Runtime
+
+// Both desktop and Web hidden frontends link this composition point before
+// entering runtime's helper branch. Install only a factory: no UI or IO starts.
+func init() {
+	rpc.ConfigureSharedWorkingUsage(func() rpc.WorkingUsageObserver {
+		return extension.New(extensions.New()).NewUsage()
+	})
+}
 
 func (m *Model) initExtensions(t *tab) {
 	if m.extensions == nil {
@@ -18,8 +27,9 @@ func (m *Model) initExtensions(t *tab) {
 	}
 	t.state.SetExtensionProjection(m.extensions.NewProjection())
 	t.extensions = m.extensions.NewSessions()
-	t.working.newExtensions = m.extensions.NewUsage
-	t.working.extensions = m.extensions.NewUsage()
+	usage := m.extensions.NewUsage
+	t.working.NewExtensions = func() workingUsageObserver { return usage() }
+	t.working.Extensions = usage()
 }
 
 // Only generic modal state and host operations cross the adapter boundary.

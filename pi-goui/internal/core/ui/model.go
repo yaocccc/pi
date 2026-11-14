@@ -15,9 +15,9 @@ import (
 	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/input"
 	"pi-goui/internal/core/render"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/core/ui/imagepreview"
+	rpc "pi-goui/internal/runtime"
 )
 
 type Options struct {
@@ -37,6 +37,11 @@ type tab struct {
 	editor                                                                         input.Editor
 	doc                                                                            render.Document
 	renderCache                                                                    render.TranscriptCache
+	docLinesText                                                                   string
+	docLines                                                                       []string
+	streamDirty                                                                    bool
+	layoutGeneration                                                               uint64
+	documentJob                                                                    *documentJob
 	dirty, follow, expanded, showThinking, dead, sending, refreshing, refreshAgain bool
 	offset, unread, historyIndex                                                   int
 	history                                                                        []string
@@ -63,6 +68,7 @@ type tab struct {
 	origin                  session.Header
 	originJump              *branchJump
 	sessionGuard            sessionGuard
+	resume                  resumeConnection
 }
 type command struct{ Name, Description string }
 type dialog struct {
@@ -84,6 +90,7 @@ type Model struct {
 	pointerShape                   string
 	inspector                      toolInspector
 	sidebarHistory                 sidebarHistoryState
+	resumePreload                  resumePreloadState
 	branchEpoch                    uint64
 	updates                        updateState
 	sessionActions                 map[string]*sessionAction
@@ -209,6 +216,10 @@ func (m *Model) addTab(file string) *tab {
 	t.state.Cwd = m.opts.Cwd
 	t.state.File = file
 	t.status = "Starting pi…"
+	if file != "" {
+		t.resume.pending = true
+		t.status = ""
+	}
 	t.showThinking = true
 	if hide, ok := m.cfg.Settings["hideThinkingBlock"].(bool); ok {
 		t.showThinking = !hide
@@ -235,9 +246,10 @@ func (m *Model) activate(i int) tea.Cmd {
 	m.finishPanelResize()
 	m.inspector = toolInspector{}
 	m.active = i
+	m.restoreSidebarHistory()
 	t := m.current()
 	t.unread = 0
-	t.dirty = true
+	t.invalidateDocument()
 	m.completionHidden = false
 	m.completionIndex = 0
 	m.searching = ""
@@ -287,6 +299,7 @@ type openedMsg struct {
 }
 type eventMsg struct {
 	id     int
+	client *rpc.Client
 	event  rpc.Event
 	closed bool
 }
@@ -298,6 +311,7 @@ type replyMsg struct {
 	text          string
 	images        []map[string]any
 	draftRevision uint64
+	deferred      bool // Local intent captured before the first authoritative snapshot.
 }
 type snapshotMsg struct {
 	id                              int
@@ -330,14 +344,15 @@ func (m *Model) start(t *tab) tea.Cmd {
 	id, file := t.id, t.state.File
 	opts, agentDir, pool := m.opts, m.cfg.AgentDir, m.pool
 	opts.Cwd = m.tabDirectory(t)
-	return func() tea.Msg {
+	connect := func() tea.Msg {
 		c, e := pool.start(rpc.Config{Bin: opts.Bin, Cwd: opts.Cwd, AgentDir: agentDir, SessionFile: file, NoSession: opts.NoSession, Args: opts.PiArgs})
 		return openedMsg{id, c, e}
 	}
+	return tea.Batch(connect, m.previewSession(t), m.inspectSession(t, false, false, time.Now()))
 }
 func nextEvent(t *tab) tea.Cmd {
 	id, c := t.id, t.client
-	return func() tea.Msg { e, ok := <-c.Events(); return eventMsg{id: id, event: e, closed: !ok} }
+	return func() tea.Msg { e, ok := <-c.Events(); return eventMsg{id: id, client: c, event: e, closed: !ok} }
 }
 func (m *Model) Init() tea.Cmd {
 	t := m.current()
@@ -419,11 +434,7 @@ func (m *Model) refresh(t *tab) tea.Cmd {
 			s.preparationDone = true
 			return s
 		}
-		s.stats, s.err = c.Call(ctx, map[string]any{"type": "get_session_stats"})
-		if s.err != nil {
-			return finish()
-		}
-		s.commands, s.err = c.Call(ctx, map[string]any{"type": "get_commands"})
+		// Commit the authoritative body before optional statistics/commands.
 		return finish()
 	}
 }
@@ -431,6 +442,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	renderNow := true
 	switch v := msg.(type) {
+	case documentResult:
+		m.receiveDocument(v)
 	case footerReplyMsg:
 		cmds = append(cmds, m.footerReply(v))
 	case releaseNotesMsg:
@@ -448,7 +461,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.revealSidebar()
 		for _, t := range m.tabs {
 			t.selection = transcriptSelection{}
-			t.dirty = true
+			t.invalidateDocument()
 			m.resizeEditor(t)
 		}
 	case filesMsg:
@@ -470,6 +483,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if hadGit != (m.sidebarContext().Git != nil) {
 			m.revealSidebar()
 		}
+	case resumeSubmitReadyMsg:
+		cmds = append(cmds, m.resumeSubmissionReady(v))
+	case resumePreloadMsg:
+		cmds = append(cmds, m.receiveResumePreload(v))
+	case resumePreviewMsg:
+		cmds = append(cmds, m.receiveResumePreview(v))
+		renderNow = false
 	case openedMsg:
 		t := m.byID(v.id)
 		if t == nil {
@@ -481,16 +501,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		t.client = v.client
 		if v.err != nil {
 			t.dead = true
-			t.status = v.err.Error()
+			if t.resume.pending {
+				m.failResume(t, v.err)
+			} else {
+				t.status = v.err.Error()
+			}
 		} else {
-			t.status = "Ready"
+			if !t.resume.pending {
+				t.status = "Ready"
+			}
 			cmds = append(cmds, nextEvent(t), m.refresh(t))
 		}
 	case eventMsg:
 		// Streaming events only invalidate the document. Tick batches Markdown work.
 		renderNow = false
 		t := m.byID(v.id)
-		if t == nil {
+		if t == nil || (v.client != nil && v.client != t.client) {
 			return m, nil
 		}
 		if v.closed {
@@ -501,7 +527,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.dead = true
 			t.state.Busy = false
 			t.sending = false
-			t.status = "pi stopped · /new to start another session"
+			if t.resume.pending {
+				m.failResume(t, errors.New("连接在初始化完成前关闭"))
+			} else {
+				t.status = "pi stopped · /new to start another session"
+			}
 			return m, nil
 		}
 		if t.client != nil {
@@ -511,13 +541,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.status = v.event.Err.Error()
 		}
 		if len(v.event.Data) > 0 {
+			if handled, cmd := m.sharedSessionEvent(t, v.event.Data); handled {
+				cmds = append(cmds, cmd)
+				renderNow = true
+				break
+			}
 			var env struct{ Type string }
 			_ = json.Unmarshal(v.event.Data, &env)
-			wasWorking := t.working.active
+			wasWorking := t.working.Active
 			if env.Type == "agent_start" && !wasWorking {
 				t.workingStart = len(t.state.Items)
 			}
-			t.working.apply(v.event.Data, time.Now())
+			if t.client == nil || !t.client.Shared() || !t.working.applyShared(v.event.Data) {
+				t.working.apply(v.event.Data, time.Now())
+			}
+			if env.Type == "goui_working_snapshot" {
+				// Progress is not transcript content: keep pending layout work and
+				// let the regular tick update the footer without a full re-render.
+				break
+			}
 			if env.Type == "extension_ui_request" {
 				cmds = append(cmds, m.extension(t, v.event.Data))
 			} else {
@@ -525,7 +567,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if t.state.Apply(v.event.Data) {
 					cmds = append(cmds, m.refresh(t))
 				}
-				t.dirty = true
+				t.invalidateStream()
 				if env.Type == "agent_start" {
 					t.status = ""
 					t.sending = false
@@ -554,6 +596,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.forkCreated(v))
 	case branchOpenMsg:
 		cmds = append(cmds, m.branchOpenResult(v))
+	case snapshotMetadataMsg:
+		m.applySnapshotMetadata(v)
 	case snapshotMsg:
 		t := m.byID(v.id)
 		if t == nil || (v.client != nil && (t.client != v.client || t.state.File != v.file || t.state.ID != v.sourceID)) {
@@ -579,15 +623,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if prepareErr != nil {
 				t.status = prepareErr.Error()
 			}
+			if t.resume.pending && prepared == nil && (v.err != nil || prepareErr != nil) {
+				err := v.err
+				if err == nil {
+					err = prepareErr
+				}
+				m.failResume(t, err)
+			}
 			// A later optional endpoint failure must not throw away valid history.
 			// Invalid history cannot publish ancestry/navigation, but must still
 			// allow a queued refresh below to run.
 			if prepared != nil {
 				t.state.ApplySnapshot(prepared)
+				if t.resume.pending && len(v.state) > 0 && len(v.entries) > 0 {
+					t.resume.pending = false
+					t.resume.authoritative = true
+					if v.err == nil && prepareErr == nil {
+						t.status = "Ready"
+					}
+					cmds = append(cmds, m.flushResumeSubmission(t))
+				}
 				if v.origin != nil {
 					t.origin = *v.origin
 				}
-				t.dirty = true
+				t.invalidateDocument()
 				if len(v.entries) > 0 {
 					m.finishOriginJump(t)
 				}
@@ -598,6 +657,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
+				cmds = append(cmds, m.snapshotMetadata(t))
 			}
 		}
 		if !t.dead && v.revision != t.revision {
@@ -628,8 +688,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebarHistory.cwd = v.cwd
 		if v.err == nil {
 			m.sidebarHistory.sessions = v.sessions
-		} else {
-			m.sidebarHistory.sessions = nil
 		}
 		m.revealSidebar()
 	case sessionsMsg:
@@ -824,9 +882,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.inspector.itemID != "" && !m.inspectorOpen() {
 		m.closeInspector()
 	}
-	cmds = append(cmds, m.ensureFileCompletion(), m.ensureCwdCompletion())
+	cmds = append(cmds, m.ensureFileCompletion(), m.ensureCwdCompletion(), m.ensureResumePreload())
 	if t := m.current(); renderNow && t != nil && t.dirty {
-		m.document(t)
+		if t.streamDirty {
+			if _, tick := msg.(tickMsg); tick {
+				cmds = append(cmds, m.scheduleDocument(t))
+			}
+		} else {
+			m.document(t)
+		}
 	}
 	cmds = append(cmds, m.markReleaseNotesDisplayed(), m.updatePointer())
 	return m, tea.Batch(cmds...)
@@ -836,28 +900,20 @@ func (m *Model) document(t *tab) {
 	if t.selection.dragging || m.panelResize.dragging {
 		return
 	}
+	t.layoutGeneration++ // Invalidate any older asynchronous layout.
 	if m.showStartupInfo(t) {
 		if t.doc.Text == "" {
 			t.follow = false
 		}
 		t.doc = m.startupDocument(t)
 	} else {
-		opts := conversationOptions(t.state, m.mainWidth(), t.expanded, t.showThinking, t.folds)
-		opts.Tools = m.extensions.Tools
-		opts.ShowToolActivity = opts.ShowToolActivity && !t.dead
-		opts.AssistantStats = t.assistantStats
-		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, opts)
+		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, m.documentOptions(t))
 	}
-	// A side-by-side recording must not discard the parent's selected text.
-	// Its immutable selection snapshot remains copyable across panel reflow.
-	if t.selection.document != t.doc.Text && !((m.inspector.view().Conversation || m.inspector.parent != nil) && m.inspector.tabID == t.id) {
-		t.selection = transcriptSelection{}
-	}
-	t.dirty = false
-	m.clampScroll(t)
+	t.dirty, t.streamDirty = false, false
+	m.finishDocument(t)
 }
 func (m *Model) clampScroll(t *tab) {
-	bottom := max(0, len(strings.Split(t.doc.Text, "\n"))-m.transcriptHeight(t))
+	bottom := max(0, len(t.documentLines())-m.transcriptHeight(t))
 	if t.follow {
 		t.offset = bottom
 	} else {
@@ -869,7 +925,7 @@ func (m *Model) scroll(t *tab, delta int) {
 	t.follow = false
 	t.offset += delta
 	m.clampScroll(t)
-	bottom := max(0, len(strings.Split(t.doc.Text, "\n"))-m.transcriptHeight(t))
+	bottom := max(0, len(t.documentLines())-m.transcriptHeight(t))
 	t.follow = t.offset >= bottom
 }
 func (m *Model) editTarget(t *tab, action string, msg tea.Msg) tea.Cmd {
@@ -935,7 +991,16 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 	}
 	if v.err != nil {
 		t.status = v.err.Error()
-		if v.op == "prompt" && (v.text != "" || len(v.images) > 0) && t.draftRevision == v.draftRevision {
+		if v.op == "prompt" {
+			// In particular, an unknown completion must be visible while busy.
+			// Restore for manual recovery only; never automatically resubmit.
+			t.notify(v.err.Error())
+		}
+		if v.op == "prompt" && v.deferred {
+			// This intent was captured before newer typing. Keep both drafts
+			// for manual recovery, including unknown completion; never retry.
+			m.restoreResumeDraft(t, &resumeSubmission{original: v.text, images: v.images})
+		} else if v.op == "prompt" && (v.text != "" || len(v.images) > 0) && t.draftRevision == v.draftRevision {
 			t.setValue(v.text)
 			t.images = v.images
 			m.resizeEditor(t)
@@ -1053,6 +1118,12 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 	return m.refresh(t)
 }
 func (m *Model) status(t *tab) string {
+	if t.resume.failed {
+		return "● " + t.status
+	}
+	if t.resume.submit != nil {
+		return "◌ 待发送"
+	}
 	if t.dead {
 		return "● stopped · " + t.status
 	}

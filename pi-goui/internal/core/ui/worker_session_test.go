@@ -5,10 +5,12 @@ import (
 
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -16,9 +18,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions/worker"
+	rpc "pi-goui/internal/runtime"
 )
 
 const workerPageID = "12345678-1234-4234-8234-123456789abc"
@@ -69,6 +71,32 @@ func receiveWorkerCommand(t *testing.T, m *Model, cmd tea.Cmd) {
 	}
 	m.receiveInspectorMessage(msg)
 	m.document(m.current())
+}
+
+type workerBatchClient struct{ batch worker.Batch }
+
+func (c *workerBatchClient) CallExtension(context.Context, string, any) (json.RawMessage, error) {
+	return json.Marshal(struct {
+		worker.Batch
+		Cursor string `json:"cursor"`
+	}{c.batch, workerPageID})
+}
+
+// Feed synthetic protocol records through the same async preparation boundary
+// as RPC reads, rather than constructing an unprepared UI result.
+func deliverWorkerBatch(t *testing.T, m *Model, w *hostui.WorkerSession, batch worker.Batch) {
+	t.Helper()
+	w.Client = &workerBatchClient{batch: batch}
+	w.Next, w.Draining = time.Time{}, true
+	details, err := json.Marshal(map[string]any{"tasks": []any{map[string]any{"transcript": w.Descriptor, "status": "running"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, reason := w.Poll(session.Item{Details: details}, time.Now())
+	if reason != "" {
+		t.Fatal(reason)
+	}
+	receiveWorkerCommand(t, m, cmd)
 }
 
 const workerLiveEvents = `{"type":"agent_start"}
@@ -275,7 +303,9 @@ func TestWorkerFallbackReadFailuresAndRecovery(t *testing.T) {
 					t.Fatal("unsafe descriptor attempted disk read")
 				}
 			} else if kind == "permission" {
-				m.receiveInspectorMessage(hostui.WorkerTranscriptResult{Owner: m.inspector.content.(*hostui.Inspector).Worker, Err: &rpc.ExtensionError{Code: "transcript-permission", Message: "access denied"}})
+				msg := cmd().(hostui.WorkerTranscriptResult)
+				msg.Err = &rpc.ExtensionError{Code: "transcript-permission", Message: "access denied"}
+				m.receiveInspectorMessage(msg)
 			} else {
 				receiveWorkerCommand(t, m, cmd)
 			}
@@ -347,6 +377,30 @@ func TestWorkerRecordingErrorRetainsReadMessages(t *testing.T) {
 		m.receiveInspectorMessage(hostui.WorkerTranscriptResult{Owner: w, Err: &rpc.ExtensionError{Code: "transcript-not-found", Message: "unavailable"}})
 		if m.inspector.content.(*hostui.Inspector).Fallback != "" {
 			t.Fatal("stale failure downgraded reopened recording")
+		}
+	}
+}
+
+func TestWorkerInvalidNativeHistoryDoesNotBecomeCompleted(t *testing.T) {
+	for _, readable := range []bool{false, true} {
+		m, parent, path := workerPageFixture(t)
+		if readable {
+			appendWorkerLog(t, path, workerLiveEvents)
+		}
+		receiveWorkerCommand(t, m, m.openExtensionInspector(parent, "w", "index:batch:0"))
+		w := m.inspector.content.(*hostui.Inspector).Worker
+		before := append([]session.Item(nil), w.Visible...)
+		deliverWorkerBatch(t, m, w, worker.Batch{Reset: true, Records: []json.RawMessage{
+			json.RawMessage(`{"type":"worker_transcript_header","entries":[{"type":"message","id":"bad","parentId":"missing","message":{"role":"user","content":"invalid replacement"}}],"leafId":"bad"}`),
+			json.RawMessage(`{"type":"worker_transcript_end","status":"completed","complete":true}`),
+		}})
+		inspector := m.inspector.content.(*hostui.Inspector)
+		if readable {
+			if inspector.Worker != w || !reflect.DeepEqual(w.Visible, before) || !strings.Contains(w.Replay.Status, "保留已读取内容") {
+				t.Fatal("corrupt reset erased readable messages or looked completed")
+			}
+		} else if inspector.Worker != nil || inspector.Fallback == "" {
+			t.Fatal("initial corrupt native history was shown as completed")
 		}
 	}
 }
@@ -569,7 +623,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 					}
 					batch.Records = append(batch.Records, raw)
 				}
-				m.receiveInspectorMessage(hostui.WorkerTranscriptResult{Owner: w, Batch: batch})
+				deliverWorkerBatch(t, m, w, batch)
 				m.inspectorRows()
 			}
 			message := func(kind, role string, stamp int, content ...map[string]any) map[string]any {

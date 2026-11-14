@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions/sessionview"
@@ -11,11 +12,14 @@ import (
 // value is ready to read; callers only schedule reads and render View().
 type Replay struct {
 	initialized       bool
+	projection        *sessionview.State
 	state             session.State
 	inheritedMessages int
 	// Status and Stopped are read-only results for presentation and polling.
 	Status  string
 	Stopped bool
+	// Err is sticky until a validated reset. A later end record cannot hide it.
+	Err error
 }
 
 // ReplayRead contains facts from a read and the caller's polling policy.
@@ -28,28 +32,76 @@ type ReplayRead struct {
 	TaskEnded  bool
 }
 
-// Apply replays one read in order. It reports whether the conversation view
-// may have changed, including activity changes caused by an empty/error read.
+// Detached is captured on the owning goroutine. Both the native state and its
+// optional projection get independent mutable containers; replaying this copy
+// never changes the currently displayed recording.
+func (r *Replay) Detached() Replay {
+	next := *r
+	next.state = r.state.Detached()
+	next.projection = r.projection.Clone()
+	next.initialized = false
+	return next
+}
+
+// Apply validates a read transactionally. A malformed replacement keeps the
+// previous readable recording and cannot be hidden by a subsequent end record.
+// Hosts run nonempty reads on a detached background owner, not the UI loop.
 func (r *Replay) Apply(read ReplayRead) bool {
-	wasBusy := r.state.Busy
-	if read.Batch.Reset {
-		*r = Replay{Status: "实时 · 只读"}
+	if r.Err != nil && !read.Batch.Reset {
+		return false
 	}
+	if read.Err != nil {
+		r.Err = read.Err
+		r.Status = "会话记录不可用: " + read.Err.Error()
+		r.Stopped, r.state.Busy = true, false
+		return true
+	}
+	wasBusy := r.state.Busy
+	if !read.Batch.Reset && len(read.Batch.Records) == 0 {
+		r.bindProjection()
+		r.finish(read)
+		return wasBusy != r.state.Busy
+	}
+	next := r.Detached()
+	if read.Batch.Reset {
+		next = Replay{Status: "实时 · 只读"}
+	}
+	if err := next.replay(read.Batch); err != nil {
+		r.Err = err
+		r.Status = "Incomplete recording · " + err.Error()
+		r.Stopped, r.state.Busy = true, false
+		return true
+	}
+	next.finish(read)
+	*r = next
+	return true
+}
+
+func (r *Replay) bindProjection() {
 	if !r.initialized {
-		r.state.SetExtensionProjection(&sessionview.State{})
+		if r.projection == nil {
+			r.projection = &sessionview.State{}
+		}
+		r.state.SetExtensionProjection(r.projection)
 		r.initialized = true
 	}
-	for _, raw := range eventBatch(read.Batch.Records) {
+}
+
+func (r *Replay) replay(batch Batch) error {
+	r.bindProjection()
+	for _, raw := range eventBatch(batch.Records) {
 		var event struct {
 			Type, Status, Error, Cwd string
 			Complete                 bool
 		}
-		if json.Unmarshal(raw, &event) != nil {
-			continue
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("invalid Worker record: %w", err)
 		}
 		switch event.Type {
 		case "worker_transcript_header":
-			r.state.LoadEntries(raw)
+			if err := r.state.LoadEntries(raw); err != nil {
+				return fmt.Errorf("invalid Worker history: %w", err)
+			}
 			// The fork is projection context, not part of this task's conversation.
 			r.inheritedMessages = r.state.MessageCount
 			r.state.Cwd = event.Cwd
@@ -64,17 +116,16 @@ func (r *Replay) Apply(read ReplayRead) bool {
 			r.state.Apply(raw)
 		}
 	}
+	return nil
+}
+
+func (r *Replay) finish(read ReplayRead) {
 	if read.Descriptor.Incomplete {
 		r.Status = "Incomplete recording · " + read.Descriptor.Error
 		if !read.Batch.More {
 			r.Stopped = true
 			r.state.Busy = false
 		}
-	}
-	if read.Err != nil {
-		r.Status = "会话记录不可用: " + read.Err.Error()
-		r.Stopped = true
-		r.state.Busy = false
 	}
 	if !r.Stopped && read.TaskEnded && !read.Batch.More {
 		r.Status = "Incomplete recording · task ended without a terminal record"
@@ -84,7 +135,6 @@ func (r *Replay) Apply(read ReplayRead) bool {
 	if r.Stopped && read.Partial {
 		r.Status += " · incomplete trailing record"
 	}
-	return read.Batch.Reset || len(read.Batch.Records) > 0 || wasBusy != r.state.Busy
 }
 
 // View is a read-only projection of the task's own conversation. The inherited

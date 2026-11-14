@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,11 +36,16 @@ func TestSessionGuardNewUnpersistedSession(t *testing.T) {
 			if blocked, _ := m.gateSession(tab); blocked {
 				t.Fatal("new session input blocked")
 			}
-			// Once data exists, the new-session flag must not bypass inspection.
+			// Missing end markers are not evidence of a concurrent writer.
 			guardFile(t, tab, guardUser)
 			m.sessionGuardResult(guardInspect(t, m, tab, false, false))
+			if len(tab.dialogs) != 0 || tab.sessionGuard.warning != "" {
+				t.Fatal("valid unfinished session should not require confirmation")
+			}
+			guardFile(t, tab, guardUser+`{"type":`)
+			m.sessionGuardResult(guardInspect(t, m, tab, false, false))
 			if len(tab.dialogs) != 1 {
-				t.Fatal("persisted unfinished session bypassed guard")
+				t.Fatal("new-session flag bypassed malformed-history protection")
 			}
 		} else if len(tab.dialogs) != 1 || tab.sessionGuard.warning != uncertainWarning {
 			t.Fatal("missing existing session should still warn")
@@ -82,10 +88,45 @@ func TestSessionGuardRejectsBrokenCompletedBranch(t *testing.T) {
 	assertValue(t, tab, "keep this draft")
 }
 
+func TestUnfinishedSessionEditsAndSendsWithoutConfirmation(t *testing.T) {
+	for name, history := range map[string]string{
+		"user":               guardUser,
+		"assistant-tool-use": guardUser + "{\"type\":\"message\",\"id\":\"a\",\"parentId\":\"u\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"toolUse\"}}\n",
+		"tool-result":        guardUser + "{\"type\":\"message\",\"id\":\"r\",\"parentId\":\"u\",\"message\":{\"role\":\"toolResult\"}}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := testModel(t, "")
+			tab := m.current()
+			c, wire := fakeClient(t)
+			tab.client = c
+			guardFile(t, tab, history)
+			m.sessionGuardResult(guardInspect(t, m, tab, false, false))
+			if len(tab.dialogs) != 0 || tab.sessionGuard.warning != "" {
+				t.Fatal("unfinished history still triggers confirmation")
+			}
+			m.key(tea.KeyPressMsg{Code: 'x', Text: "x"})
+			if tab.editor.Value() != "x" {
+				t.Fatalf("editing blocked: %q", tab.editor.Value())
+			}
+			cmd := m.sessionGuardResult(m.submit(tab, false)().(sessionGuardMsg))
+			if cmd == nil {
+				t.Fatal("send blocked")
+			}
+			if reply := cmd().(replyMsg); reply.err != nil {
+				t.Fatal(reply.err)
+			}
+			records := wireRecords(t, wire, 1)
+			if len(records) != 1 || records[0]["type"] != "prompt" || records[0]["message"] != "x" || len(tab.dialogs) != 0 {
+				t.Fatalf("send changed or blocked: %#v, %d dialogs", records, len(tab.dialogs))
+			}
+		})
+	}
+}
+
 func TestSessionGuardBeforeInputAndCancel(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
-	guardFile(t, tab, guardUser)
+	guardFile(t, tab, guardUser+`{"type":`)
 	// Initial editor input is held until asynchronous inspection completes.
 	cmd := m.editDraft(tab, "", tea.PasteMsg{Content: "blocked"})
 	if cmd == nil || tab.editor.Value() != "" {
@@ -126,7 +167,7 @@ func TestSessionGuardPreservesDraftAndSend(t *testing.T) {
 	tab := m.current()
 	c, wire := fakeClient(t)
 	tab.client = c
-	guardFile(t, tab, guardUser)
+	guardFile(t, tab, guardUser+`{"type":`)
 	tab.setValue(draft)
 	tab.images = []map[string]any{{"type": "image", "data": "YQ==", "mimeType": "image/png"}}
 	m.sessionGuardResult(m.submit(tab, true)().(sessionGuardMsg))
@@ -168,7 +209,7 @@ func TestSessionGuardPreservesDraftAndSend(t *testing.T) {
 func TestSessionGuardResetAndAsyncMutations(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
-	guardFile(t, tab, guardUser)
+	guardFile(t, tab, guardUser+`{"type":`)
 	m.sessionGuardResult(guardInspect(t, m, tab, false, false))
 	guardContinue(t, m, tab)
 	guardFile(t, tab, guardUser+guardStop)
@@ -176,10 +217,10 @@ func TestSessionGuardResetAndAsyncMutations(t *testing.T) {
 	if tab.sessionGuard.approved {
 		t.Fatal("safe state retained approval")
 	}
-	guardFile(t, tab, guardUser)
+	guardFile(t, tab, guardUser+`{"type":`)
 	m.sessionGuardResult(guardInspect(t, m, tab, false, false))
 	if len(tab.dialogs) != 1 {
-		t.Fatal("new unfinished state not prompted")
+		t.Fatal("new malformed-history state not prompted")
 	}
 	tab.dialogs = nil
 	m.Update(externalMsg{id: tab.id, text: "external"})
@@ -205,6 +246,230 @@ func TestSessionGuardResetAndAsyncMutations(t *testing.T) {
 	tab.state.Busy = true
 	if blocked, _ = m.gateSession(tab); blocked {
 		t.Fatal("own run gated")
+	}
+}
+
+func TestSessionGuardCachesStableHistory(t *testing.T) {
+	m := testModel(t, "")
+	tab := m.current()
+	guardFile(t, tab, guardUser)
+	first := guardInspect(t, m, tab, false, false)
+	if first.err != nil || first.history == nil {
+		t.Fatalf("initial inspection: %v", first.err)
+	}
+	if tab.sessionGuard.history != nil {
+		t.Fatal("background inspection changed live cache")
+	}
+	m.sessionGuardResult(first)
+	cached := tab.sessionGuard.history
+	for range 3 {
+		next := guardInspect(t, m, tab, false, false)
+		if next.err != nil || next.history != cached {
+			t.Fatalf("unchanged history was rescanned: %v", next.err)
+		}
+		m.sessionGuardResult(next)
+	}
+}
+
+func TestSessionGuardCacheInvalidation(t *testing.T) {
+	for name, change := range map[string]func(*testing.T, string, os.FileInfo){
+		"append": func(t *testing.T, path string, _ os.FileInfo) {
+			if err := os.WriteFile(path, []byte(guardUser+guardStop+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"truncate": func(t *testing.T, path string, _ os.FileInfo) {
+			if err := os.WriteFile(path, []byte(guardUser), 0600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"mtime": func(t *testing.T, path string, before os.FileInfo) {
+			later := before.ModTime().Add(time.Second)
+			if err := os.Chtimes(path, later, later); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"permissions": func(t *testing.T, path string, _ os.FileInfo) {
+			if err := os.Chmod(path, 0640); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"replace-same-size-and-mtime": func(t *testing.T, path string, before os.FileInfo) {
+			replacement := filepath.Join(t.TempDir(), "replacement.jsonl")
+			if err := os.WriteFile(replacement, []byte(guardUser+guardStop), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(replacement, before.ModTime(), before.ModTime()); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := testModel(t, "")
+			tab := m.current()
+			guardFile(t, tab, guardUser+guardStop)
+			m.sessionGuardResult(guardInspect(t, m, tab, false, false))
+			before := tab.sessionGuard.history
+			if before == nil {
+				t.Fatal("no successful cache")
+			}
+			change(t, tab.state.File, before)
+			next := guardInspect(t, m, tab, false, false)
+			if next.err != nil || next.history == nil || next.history == before || sameSessionHistory(before, next.history) {
+				t.Fatalf("changed history reused inspection: %v", next.err)
+			}
+			m.sessionGuardResult(next)
+			if len(tab.dialogs) != 0 {
+				t.Fatal("valid changed history warned")
+			}
+		})
+	}
+}
+
+func TestSessionGuardCacheFailureAndRecovery(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		m := testModel(t, "")
+		tab := m.current()
+		tab.newSession = false
+		guardFile(t, tab, guardUser+guardStop)
+		m.sessionGuardResult(guardInspect(t, m, tab, false, false))
+		cached := tab.sessionGuard.history
+		if missing {
+			if err := os.Remove(tab.state.File); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			guardFile(t, tab, guardUser+`{"type":`)
+		}
+		failed := guardInspect(t, m, tab, false, false)
+		if failed.err == nil || failed.history != nil {
+			t.Fatal("failed inspection cached success")
+		}
+		m.sessionGuardResult(failed)
+		if tab.sessionGuard.history != nil || tab.sessionGuard.warning != uncertainWarning {
+			t.Fatal("failure retained successful cache")
+		}
+		guardFile(t, tab, guardUser+guardStop)
+		// Even restoring old metadata cannot revive a cache invalidated by failure.
+		if err := os.Chtimes(tab.state.File, cached.ModTime(), cached.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		recovered := guardInspect(t, m, tab, false, false)
+		if recovered.err != nil || recovered.history == nil || recovered.history == cached {
+			t.Fatalf("recovery did not rescan: %v", recovered.err)
+		}
+		m.sessionGuardResult(recovered)
+		if tab.sessionGuard.warning != "" {
+			t.Fatal("repaired history retained warning")
+		}
+	}
+}
+
+func TestSessionGuardCacheRequiresStableRead(t *testing.T) {
+	m := testModel(t, "")
+	tab := m.current()
+	guardFile(t, tab, guardUser)
+	before, err := os.Lstat(tab.state.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardFile(t, tab, guardUser+guardStop)
+	if info, err := stableSessionHistory(tab.state.File, before); err == nil || info != nil {
+		t.Fatal("file changed during inspection was approved")
+	}
+	before, err = os.Lstat(tab.state.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(tab.state.File); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := stableSessionHistory(tab.state.File, before); err == nil || info != nil {
+		t.Fatal("file removed during inspection was approved")
+	}
+}
+
+func TestSessionGuardCacheRejectsNonRegularHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte(guardUser), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := inspectSessionHistory(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "linked.jsonl")
+	if err := os.Symlink(path, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if info, err := inspectSessionHistory(link, cached); err == nil || info != nil {
+		t.Fatal("symlink reused successful cache")
+	}
+	if info, err := inspectSessionHistory(t.TempDir(), nil); err == nil || info != nil {
+		t.Fatal("directory accepted as history")
+	}
+}
+
+func TestSessionGuardCachedSubmitKeepsAsyncGuards(t *testing.T) {
+	for name, mutate := range map[string]func(*tab){
+		"draft":          func(tab *tab) { tab.setValue("changed draft") },
+		"draft-revision": func(tab *tab) { tab.draftRevision++ },
+		"images":         func(tab *tab) { tab.imageGeneration++ },
+		"path":           func(tab *tab) { tab.state.File += ".other" },
+		"sequence":       func(tab *tab) { tab.sessionGuard.sequence++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := testModel(t, "")
+			tab := m.current()
+			c, _ := fakeClient(t)
+			tab.client = c
+			guardFile(t, tab, guardUser)
+			m.sessionGuardResult(guardInspect(t, m, tab, false, false))
+			cached := tab.sessionGuard.history
+			tab.setValue("original draft")
+			cmd := m.inspectSession(tab, true, true, time.Now())
+			if cmd == nil {
+				t.Fatal("no submit inspection")
+			}
+			mutate(tab)
+			result := cmd().(sessionGuardMsg)
+			if result.err != nil || result.history != cached {
+				t.Fatalf("submit did not use stable cache: %v", result.err)
+			}
+			if m.sessionGuardResult(result) != nil {
+				t.Fatal("cached submit bypassed async guard")
+			}
+		})
+	}
+}
+
+func BenchmarkSessionGuardHistory(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "history.jsonl")
+	raw := `{"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"` + strings.Repeat("x", 1<<20) + `"}}` + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		b.Fatal(err)
+	}
+	cached, err := inspectSessionHistory(path, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, hit := range []bool{false, true} {
+		name := "scan"
+		var prior os.FileInfo
+		if hit {
+			name, prior = "unchanged", cached
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := inspectSessionHistory(path, prior); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

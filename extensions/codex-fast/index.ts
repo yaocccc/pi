@@ -32,12 +32,12 @@ const saveConfig = (config: FastConfig): void => {
 };
 
 export default function (pi: ExtensionAPI) {
+    // The shared file supplies startup defaults; live settings belong to this instance.
     let config = loadConfig();
 
     const service: CodexFastService = {
         levels,
         getConfig() {
-            config = loadConfig(config);
             return { ...config };
         },
         setLevel(level) {
@@ -64,9 +64,6 @@ export default function (pi: ExtensionAPI) {
             return;
         }
 
-        // Other capability sessions or external editors may replace the shared file.
-        // Reload for each eligible request; transient read failures retain the last level.
-        config = loadConfig(config);
         const serviceTier = config.level === 'ultrafast' && model.id === 'gpt-6-astra'
             ? 'ultrafast'
             : config.level !== 'normal' ? 'priority' : undefined;

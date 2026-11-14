@@ -13,19 +13,33 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/core/config"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/core/ui"
+	rpc "pi-goui/internal/runtime"
+	"pi-goui/internal/runtime/desktop"
 )
 
 func run() error {
+	if handled, err := rpc.RunSharedSessionHelper(os.Args[1:]); handled {
+		return err
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+	args := os.Args[1:]
+	internal := len(args) > 0 && args[0] == "--internal-shared-tui"
+	if internal {
+		args = args[1:]
+	}
 	fs := flag.NewFlagSet("pi-goui", flag.ContinueOnError)
 	var opts ui.Options
 	var check, cont bool
+	var sharing bool
+	var obsoleteListen, obsoleteToken string
+	fs.BoolVar(&sharing, "share", !internal && desktop.DesktopSharingSupported(), "allow a separately started WebUI to discover this desktop locally")
+	fs.StringVar(&obsoleteListen, "listen", "", "unsupported here; start webui --listen separately")
+	fs.StringVar(&obsoleteToken, "token", "", "unsupported here; configure the separate webui service")
 	fs.StringVar(&opts.Cwd, "cwd", cwd, "working directory for all pi sessions")
 	fs.StringVar(&opts.Bin, "pi", "", "pi executable (otherwise PI_BIN or PATH)")
 	fs.StringVar(&opts.SessionFile, "session", "", "native session JSONL file to open")
@@ -37,11 +51,23 @@ func run() error {
 		fmt.Fprintln(fs.Output(), "Usage: pi-goui [flags] [-- additional pi flags]\nIndependent pi frontend · one RPC process per open session")
 		fs.PrintDefaults()
 	}
-	if err = fs.Parse(os.Args[1:]); err != nil {
+	if err = fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return nil
 		}
 		return err
+	}
+	if internal && sharing {
+		return fmt.Errorf("shared TUI child cannot start another host")
+	}
+	var sharedFlag string
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "listen" || f.Name == "token" {
+			sharedFlag = f.Name
+		}
+	})
+	if sharedFlag != "" {
+		return fmt.Errorf("--%s belongs to the separate webui service; start webui independently", sharedFlag)
 	}
 	opts.PiArgs, err = piArgs(fs.Args())
 	if err != nil {
@@ -123,6 +149,15 @@ func run() error {
 		fmt.Printf("RPC OK · model=%s/%s · thinking=%s · streaming=%v · full-history=yes\n", s.Model.Provider, s.Model.ID, s.Thinking, raw["isStreaming"])
 		return nil
 	}
+	rpc.EnableSessionSharing()
+	if sharing {
+		return runShared(opts, cfg.AgentDir)
+	}
+	member, err := rpc.JoinSessionMember(cfg.AgentDir)
+	if err != nil {
+		return err
+	}
+	defer member.Close()
 	model := ui.New(opts, cfg)
 	defer model.Close()
 	defer fmt.Fprint(os.Stdout, ansi.SetPointerShape("default"))

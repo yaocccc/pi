@@ -25,7 +25,7 @@ func TestWorkingLifecycleAndMetrics(t *testing.T) {
 		t.Fatal("working before a run")
 	}
 	workingApply(&w, `{"type":"response","command":"prompt","success":true}`, now)
-	if w.present {
+	if w.Present {
 		t.Fatal("prompt acknowledgment started work")
 	}
 	workingApply(&w, `{"type":"agent_start"}`, now)
@@ -43,7 +43,7 @@ func TestWorkingLifecycleAndMetrics(t *testing.T) {
 		t.Fatal(line)
 	}
 	workingApply(&w, `{"type":"agent_end"}`, now.Add(2*time.Second))
-	if !w.active {
+	if !w.Active {
 		t.Fatal("agent_end falsely completed")
 	}
 	workingApply(&w, `{"type":"agent_settled"}`, now.Add(3*time.Second))
@@ -59,13 +59,13 @@ func TestWorkingLifecycleAndMetrics(t *testing.T) {
 		t.Fatal("late event changed completed metrics")
 	}
 	workingApply(&w, `{"type":"agent_start"}`, now.Add(time.Hour))
-	if w.total.output != 0 || w.turn != 0 || !w.active {
+	if w.Total.Output != 0 || w.Turn != 0 || !w.Active {
 		t.Fatal("new run leaked previous metrics")
 	}
 }
 func TestWorkingLatestContextWithWorkers(t *testing.T) {
 	now := time.Unix(1, 0)
-	w := workingState{newExtensions: func() extensionUsage { return extensionUsage{&hostui.Usage{}} }}
+	w := workingState{NewExtensions: func() workingUsageObserver { return extensionUsage{&hostui.Usage{}} }}
 	workingApply(&w, `{"type":"agent_start"}`, now)
 	workingApply(&w, workingFinal(1, 4), now)
 	workingApply(&w, `{"type":"tool_execution_update","partialResult":{"details":{"kind":"worker-ui","batchId":"a","tasks":[{"index":0,"usage":{"input":100,"cacheRead":900,"output":6}}]}}}`, now)
@@ -93,27 +93,27 @@ func TestWorkingSnapshotsDuplicatesAndTurns(t *testing.T) {
 	snapshot := `{"type":"message_update","message":{"role":"assistant","timestamp":1,"content":[{"type":"text","text":"abcdefgh"}],"usage":{"input":2,"cacheRead":20,"cacheWrite":5,"output":0}}}`
 	workingApply(&w, snapshot, now)
 	workingApply(&w, snapshot, now)
-	if w.estimate() != 2 || w.turn != 1 || w.live.input != 27 {
+	if (w.view().Output-w.Total.Output) != 2 || w.Turn != 1 || w.Live.Input != 27 {
 		t.Fatalf("snapshots accumulate: %+v", w)
 	}
 	workingApply(&w, workingFinal(1, 4), now)
 	workingApply(&w, workingFinal(1, 4), now)
-	if w.total.input != 35 || w.total.output != 4 || w.turn != 1 {
+	if w.Total.Input != 35 || w.Total.Output != 4 || w.Turn != 1 {
 		t.Fatal("duplicate final counted")
 	}
 	workingApply(&w, `{"type":"message_update","message":{"role":"assistant","timestamp":1,"content":[{"type":"text","text":"completed"}]}}`, now)
-	if w.current {
+	if w.Current {
 		t.Fatal("late final snapshot reopened message")
 	}
 	workingApply(&w, `{"type":"message_start","message":{"role":"assistant","timestamp":2,"content":[]}}`, now)
 	workingApply(&w, `{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"12345678"}}`, now)
 	workingApply(&w, workingFinal(1, 4), now)
-	if !w.current || w.estimate() != 2 || w.turn != 2 {
+	if !w.Current || (w.view().Output-w.Total.Output) != 2 || w.Turn != 2 {
 		t.Fatal("late duplicate cleared next turn")
 	}
 	workingApply(&w, workingFinal(2, 6), now)
-	if w.total.output != 10 || w.total.input != 35 {
-		t.Fatalf("final totals %+v", w.total)
+	if w.Total.Output != 10 || w.Total.Input != 35 {
+		t.Fatalf("final totals %+v", w.Total)
 	}
 	var other workingState
 	if other.line(now, config.Theme{}) != "" {
@@ -125,18 +125,18 @@ func TestWorkingNativeFinalAndUnicodeToolEstimate(t *testing.T) {
 	var w workingState
 	workingApply(&w, `{"type":"agent_start"}`, now)
 	workingApply(&w, `{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"😀😀"}}`, now)
-	if w.estimate() != 1 {
+	if (w.view().Output - w.Total.Output) != 1 {
 		t.Fatal("estimate must count JS UTF16 characters")
 	}
 	workingApply(&w, `{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":1,"toolCall":{"name":"read","arguments":{"path":"a"}}}}`, now)
 	expected := float64((4 + 4 + len(`{"path":"a"}`) + 3) / 4)
-	if w.estimate() != expected {
-		t.Fatalf("tool estimate %v, want %v", w.estimate(), expected)
+	if (w.view().Output - w.Total.Output) != expected {
+		t.Fatalf("tool estimate %v, want %v", (w.view().Output - w.Total.Output), expected)
 	}
 	final := `{"role":"assistant","timestamp":1,"content":[{"type":"text","text":"done"}],"usage":{"input":1,"output":0}}`
 	workingApply(&w, `{"type":"message_update","assistantMessageEvent":{"type":"done","message":`+final+`}}`, now)
 	workingApply(&w, `{"type":"message_end","message":`+final+`}`, now)
-	if w.total.output != 0 || w.total.input != 1 || w.current {
+	if w.Total.Output != 0 || w.Total.Input != 1 || w.Current {
 		t.Fatal("authoritative zero or duplicate done/end mishandled")
 	}
 }
@@ -154,10 +154,10 @@ func TestWorkingAnimationAndBoundedDedup(t *testing.T) {
 	if ansi.StringWidth(bright) != ansi.StringWidth(dim) || strings.Contains(bright+dim, "[48;") {
 		t.Fatal("highlight changed geometry or background")
 	}
-	for i := 0; i < workingDedupLimit+5; i++ {
+	for i := 0; i < 4096+5; i++ {
 		workingApply(&w, workingFinal(i, 1), now)
 	}
-	if len(w.finished) != workingDedupLimit || len(w.order) != workingDedupLimit || w.total.output != workingDedupLimit+5 {
+	if len(w.Finished) != 4096 || len(w.Order) != 4096 || w.Total.Output != 4096+5 {
 		t.Fatal("dedup memory or totals not bounded correctly")
 	}
 }
@@ -168,21 +168,21 @@ func TestWorkingExplicitTurnsAndCorrection(t *testing.T) {
 	workingApply(&w, `{"type":"turn_start","turnIndex":0}`, now)
 	workingApply(&w, `{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"abcd"}}`, now)
 	workingApply(&w, `{"type":"turn_start","turnIndex":0}`, now)
-	if w.turn != 1 || w.estimate() != 1 {
+	if w.Turn != 1 || (w.view().Output-w.Total.Output) != 1 {
 		t.Fatal("duplicate turn reset live data")
 	}
 	workingApply(&w, workingFinal(1, 4), now)
 	workingApply(&w, workingFinal(1, 6), now)
-	if w.total.output != 6 {
+	if w.Total.Output != 6 {
 		t.Fatal("usage correction added instead of replaced")
 	}
 	workingApply(&w, `{"type":"turn_start","turnIndex":1}`, now)
 	workingApply(&w, `{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"abcd"}}`, now)
-	if w.turn != 2 || w.estimate() != 1 {
+	if w.Turn != 2 || (w.view().Output-w.Total.Output) != 1 {
 		t.Fatal("explicit next turn")
 	}
 	workingApply(&w, `{"type":"agent_start"}`, now.Add(time.Second))
-	if w.total.output != 6 {
+	if w.Total.Output != 6 {
 		t.Fatal("duplicate start reset active run")
 	}
 }

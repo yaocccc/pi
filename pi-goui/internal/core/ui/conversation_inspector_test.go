@@ -188,7 +188,7 @@ func TestConversationStreamInvalidationAndUnknownEvents(t *testing.T) {
 	receiveWorkerCommand(t, m, m.openExtensionInspector(p, "w", "index:batch:0"))
 	w := m.inspector.content.(*hostui.Inspector).Worker
 	deliver := func(raw string) {
-		m.receiveInspectorMessage(hostui.WorkerTranscriptResult{Owner: w, Batch: worker.Batch{Records: []json.RawMessage{json.RawMessage(raw)}}})
+		deliverWorkerBatch(t, m, w, worker.Batch{Records: []json.RawMessage{json.RawMessage(raw)}})
 		m.inspectorRows()
 	}
 	deliver(`{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":1}}`)

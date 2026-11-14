@@ -13,8 +13,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/core/render"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
+	rpc "pi-goui/internal/runtime"
 )
 
 func TestResolveCwd(t *testing.T) {
@@ -78,7 +78,7 @@ func TestCwdSidebarClickAndEligibility(t *testing.T) {
 			}
 			layout := m.sidebarLayout()
 			rows := strings.Split(ansi.Strip(render.Sidebar(tab.state, nil, m.cfg.Theme, m.sidebarWidth(), m.height, m.sidebarContext())), "\n")
-			if layout.DirectoryRow != 3 || !strings.Contains(rows[layout.DirectoryRow], "/") {
+			if layout.DirectoryRow != layout.HistoryRow-1 || !strings.Contains(rows[layout.DirectoryRow], "/") {
 				t.Fatal("directory hit geometry no longer matches rendering")
 			}
 			m.mouse(tea.Mouse{X: m.mainWidth() + 3, Y: layout.DirectoryRow, Button: tea.MouseLeft})

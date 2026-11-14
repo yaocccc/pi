@@ -47,7 +47,7 @@ func (m *Model) openRecent(file string) tea.Cmd {
 	// A saved tab still loading its history is not known to be empty.
 	empty := (t.newSession || t.state.ID != "") && !t.refreshing &&
 		len(t.state.Items) == 0 && t.state.MessageCount == 0 && len(t.history) == 0 &&
-		t.editor.Value() == "" && len(t.images) == 0 && t.imagePending == 0 && m.clipboardTarget != t &&
+		t.editor.Value() == "" && len(t.images) == 0 && t.imagePending == 0 && t.resume.submit == nil && m.clipboardTarget != t &&
 		len(t.state.Steering) == 0 && len(t.state.FollowUp) == 0 &&
 		!t.state.Busy && !t.state.Compacting && !t.sending && !t.awaitingStart && !t.interruptRequested &&
 		t.mutation == nil && !m.reservedSession(t.state.File) && len(t.dialogs) == 0

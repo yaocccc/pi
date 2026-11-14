@@ -49,7 +49,7 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 			return nil
 		}
 	}
-	if match("app.interrupt") && (t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.interruptRequested) {
+	if match("app.interrupt") && (t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.interruptRequested || t.resume.submit != nil) {
 		return m.interrupt(t)
 	}
 	if match("tui.input.copy") || match("app.message.copy") {
@@ -167,7 +167,7 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 		return saveThinking(t, m.cfg.AgentDir)
 	case match("app.thinking.toggle"):
 		t.showThinking = !t.showThinking
-		t.dirty = true
+		t.invalidateDocument()
 		m.document(t)
 		return nil
 	case match("app.message.copy"):
@@ -257,6 +257,11 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 // interrupt is deliberately independent of completion/search state. An early
 // abort is retried on agent_start while the latch is held, closing preflight races.
 func (m *Model) interrupt(t *tab) tea.Cmd {
+	if t.resume.submit != nil {
+		m.restoreResumeSubmission(t)
+		t.notify("已取消待发送输入")
+		return nil
+	}
 	t.interruptRequested = true
 	m.completionHidden = true
 	m.searching = ""
@@ -374,11 +379,20 @@ func (m *Model) submit(t *tab, follow bool) tea.Cmd {
 }
 
 func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
+	if t.resume.submit != nil {
+		t.notify("上一条输入等待发送；当前草稿已保留")
+		return nil
+	}
 	if t.sending {
 		t.notify("Sending; wait before appending more content")
 		return nil
 	}
-	if !checked && t.state.File != "" && !t.ownRunActive() {
+	if t.resume.pending && t.sessionGuard.path == t.state.File && t.sessionGuard.warning != "" && !t.sessionGuard.approved {
+		return m.sessionGateDialog(t)
+	}
+	// Capture a resume-time Enter immediately. Its read-only history guard
+	// runs before eventual dispatch, not before clearing this original draft.
+	if !checked && !t.resume.pending && t.state.File != "" && !t.ownRunActive() {
 		if t.sessionGuard.path == t.state.File && t.sessionGuard.warning != "" && !t.sessionGuard.approved {
 			return m.sessionGateDialog(t)
 		}
@@ -401,10 +415,21 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 		t.notify("Reading clipboard image; wait before sending")
 		return nil
 	}
-	if t.client == nil || t.dead {
-		t.status = "No running pi process · /new to start"
+	if t.resume.pending {
+		return m.deferResumeSubmission(t, follow)
+	}
+	if t.client == nil || t.dead || t.resume.failed {
+		if !t.resume.failed {
+			t.status = "No running pi process · /new to start"
+		}
 		return nil
 	}
+	return m.sendPrompt(t, original, t.images, follow, true)
+}
+
+// Deferred local intent uses its captured draft, never another active editor.
+func (m *Model) sendPrompt(t *tab, original string, images []map[string]any, follow, clearEditor bool) tea.Cmd {
+	text, attached := referencedImages(strings.TrimSpace(original), images)
 	id, c := t.id, t.client
 	mergePending := t.state.Busy && !strings.HasPrefix(text, "/")
 	payload := map[string]any{"type": "prompt", "message": text}
@@ -418,12 +443,13 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 	if len(attached) > 0 {
 		payload["images"] = attached
 	}
-	images := t.images
-	t.clearImages()
-	t.setValue("")
+	if clearEditor {
+		t.clearImages()
+		t.setValue("")
+		m.resizeEditor(t)
+		t.historyIndex = -1
+	}
 	draftRevision := t.draftRevision
-	m.resizeEditor(t)
-	t.historyIndex = -1
 	t.sending = true
 	t.awaitingStart = true
 	t.follow = true
@@ -431,15 +457,13 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		if mergePending {
-			merged, err := mergeQueuedPrompt(ctx, c.Call, payload, original)
-			original = merged
-			if err != nil {
-				return replyMsg{id: id, op: "prompt", err: err, text: original, images: images, draftRevision: draftRevision}
-			}
+		restoreDraft, err := c.SubmitPrompt(ctx, payload, original, mergePending)
+		if restoreDraft != "" {
+			original = restoreDraft
 		}
-		data, err := c.Call(ctx, payload)
-		return replyMsg{id: id, op: "prompt", data: data, err: err, text: original, images: images, draftRevision: draftRevision}
+		// Unknown completion may omit the runtime recovery text. Keep the
+		// original local draft for manual recovery, never an automatic retry.
+		return replyMsg{id: id, op: "prompt", err: err, text: original, images: images, draftRevision: draftRevision, deferred: !clearEditor}
 	}
 }
 func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
@@ -509,7 +533,7 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 		} else {
 			m.cfg = cfg
 			for _, other := range m.tabs {
-				other.dirty = true
+				other.invalidateDocument()
 				m.resizeEditor(other)
 			}
 			t.notify("UI config reloaded · reopen a session to reload pi extensions")

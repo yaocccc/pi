@@ -128,6 +128,43 @@ func TestPreparedSnapshotPreservesMetadataOmittedByEndpoints(t *testing.T) {
 	}
 }
 
+func TestDetachedStateReplaysWithoutOwnerCapabilitiesOrContainers(t *testing.T) {
+	var original State
+	projection := &sessionview.State{}
+	original.SetExtensionProjection(projection)
+	if err := original.LoadEntries(json.RawMessage(preparedHistory)); err != nil {
+		t.Fatal(err)
+	}
+	original.Steering = []string{"original"}
+	next := original.Detached()
+	if next.projection != nil || next.Plan != nil {
+		t.Fatal("detached state retained an owner capability")
+	}
+	next.Steering[0] = "background"
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 30; i++ {
+			next.Apply(json.RawMessage(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"background"}}`))
+			next.Apply(json.RawMessage(`{"type":"tool_execution_start","toolCallId":"background","toolName":"read","args":{"path":"background"}}`))
+		}
+	}()
+	for i := 0; i < 30; i++ {
+		original.Apply(json.RawMessage(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"foreground"}}`))
+		original.Apply(json.RawMessage(`{"type":"tool_execution_start","toolCallId":"foreground","toolName":"read","args":{"path":"foreground"}}`))
+	}
+	wg.Wait()
+	if original.Steering[0] != "original" || original.tools["background"].ToolID != "" || next.tools["foreground"].ToolID != "" {
+		t.Fatal("detached replay shared mutable owner containers")
+	}
+	for _, item := range original.Items {
+		if strings.Contains(item.Text, "background") {
+			t.Fatal("background replay changed the owner message")
+		}
+	}
+}
+
 func BenchmarkPreparedSnapshotCommit(b *testing.B) {
 	raw := json.RawMessage(strings.Replace(preparedHistory, "answer", strings.Repeat("x", 1<<20), 1))
 	var state State

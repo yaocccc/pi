@@ -86,21 +86,21 @@ function trackSaves(t: TestContext, file: string) {
 }
 
 
-test('running extension reloads externally saved mode for requests and menu', async (t) => {
+test('running extension ignores externally saved mode for requests and menu', async (t) => {
     const fixture = await setup(t, { level: 'normal' });
     for (const level of levels) {
         const temp = `${fixture.file}.gui.tmp`;
         writeFileSync(temp, JSON.stringify({ level }), { mode: 0o600 });
         renameSync(temp, fixture.file);
-        assert.equal(fixture.tier(), level === 'ultrafast' ? 'ultrafast' : level === 'fast' ? 'priority' : undefined);
-        assert.equal(fixture.tier('other'), level === 'normal' ? undefined : 'priority');
+        assert.equal(fixture.tier(), undefined);
+        assert.equal(fixture.tier('other'), undefined);
         await fixture.open((_title, options) => {
-            assert.deepEqual(options, labels({ level }));
+            assert.deepEqual(options, labels({ level: 'normal' }));
             return undefined;
         });
     }
     writeFileSync(fixture.file, '{broken');
-    assert.equal(fixture.tier(), 'ultrafast', 'bad external write retains last known mode');
+    assert.equal(fixture.tier(), undefined, 'bad external write cannot change the live mode');
 });
 
 test('standalone adapter registers codex-fast and its RPC bridge', async (t) => {

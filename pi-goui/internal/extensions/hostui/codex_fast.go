@@ -9,10 +9,10 @@ import (
 	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/extension"
 	"pi-goui/internal/core/render"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/extensions/codexfast"
 	"pi-goui/internal/extensions/internal/protocol"
 	"pi-goui/internal/extensions/toolrender/cards"
+	rpc "pi-goui/internal/runtime"
 	"strings"
 	"time"
 )

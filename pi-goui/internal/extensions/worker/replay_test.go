@@ -3,7 +3,9 @@ package worker
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -13,6 +15,75 @@ func replayBatch(records ...string) Batch {
 		batch.Records = append(batch.Records, json.RawMessage(record))
 	}
 	return batch
+}
+
+func TestWorkerReplayInvalidHistoryPreservesReadableRecording(t *testing.T) {
+	badHeaders := map[string]string{
+		"missing-parent":  `{"type":"worker_transcript_header","entries":[{"type":"message","id":"a","parentId":"missing","message":{"role":"user","content":"bad"}}],"leafId":"a"}`,
+		"duplicate-id":    `{"type":"worker_transcript_header","entries":[{"type":"message","id":"a","message":{"role":"user","content":"one"}},{"type":"message","id":"a","message":{"role":"user","content":"two"}}],"leafId":"a"}`,
+		"invalid-message": `{"type":"worker_transcript_header","entries":[{"type":"message","id":"a","message":42}],"leafId":"a"}`,
+	}
+	for name, header := range badHeaders {
+		for _, reset := range []bool{false, true} {
+			t.Run(name+map[bool]string{false: "/initial", true: "/reset"}[reset], func(t *testing.T) {
+				var replay Replay
+				if reset {
+					replay.Apply(ReplayRead{Batch: replayBatch(`{"type":"message_end","message":{"role":"user","content":"keep readable","timestamp":1}}`)})
+				}
+				before := replay.View()
+				batch := replayBatch(header, `{"type":"worker_transcript_end","status":"completed","complete":true}`)
+				batch.Reset = reset
+				replay.Apply(ReplayRead{Batch: batch})
+				if replay.Err == nil || !replay.Stopped || !strings.Contains(replay.Status, "Incomplete") || !reflect.DeepEqual(replay.View().Items, before.Items) || replay.View().MessageCount != before.MessageCount {
+					t.Fatalf("bad history erased content or hid error: %+v", replay)
+				}
+				replay.Apply(ReplayRead{Batch: replayBatch(`{"type":"worker_transcript_end","status":"completed","complete":true}`)})
+				if !strings.Contains(replay.Status, "Incomplete") {
+					t.Fatal("late completed record hid history error")
+				}
+				repaired := replayBatch(`{"type":"worker_transcript_header","entries":[]}`)
+				repaired.Reset = true
+				replay.Apply(ReplayRead{Batch: repaired})
+				if replay.Err != nil || replay.Stopped || len(replay.View().Items) != 0 {
+					t.Fatal("validated reset did not recover")
+				}
+			})
+		}
+	}
+}
+
+func TestWorkerReplayDetachedConcurrentEventsAndProjection(t *testing.T) {
+	var original Replay
+	original.Apply(ReplayRead{Batch: replayBatch(`{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":1}}`, `{"type":"tool_execution_end","toolName":"update_plan","toolCallId":"plan","result":{"details":{"plan":[{"id":"a","goal":"Inspect","status":"in_progress"}]}}}`)})
+	next := original.Detached()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 30; i++ {
+			next.Apply(ReplayRead{Batch: replayBatch(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"background"}}`)})
+		}
+		next.Apply(ReplayRead{Batch: replayBatch(`{"type":"tool_execution_end","toolName":"update_plan","toolCallId":"plan","result":{"details":{"plan":[{"id":"a","goal":"Inspect","status":"completed"}]}}}`)})
+	}()
+	for i := 0; i < 30; i++ {
+		original.Apply(ReplayRead{Batch: replayBatch(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"foreground"}}`)})
+		_ = original.View()
+	}
+	wg.Wait()
+	if original.View().Plan[0].Status != "in_progress" || next.View().Plan[0].Status != "completed" {
+		t.Fatal("detached replay shared extension projection")
+	}
+	for _, item := range original.View().Items {
+		if strings.Contains(item.Text, "background") {
+			t.Fatal("detached event changed original")
+		}
+	}
+	// Empty polls must also retain the detached projection.
+	empty := next.Detached()
+	empty.Apply(ReplayRead{})
+	if len(empty.View().Plan) != 1 || empty.View().Plan[0].Status != "completed" {
+		t.Fatal("empty poll dropped extension metadata")
+	}
 }
 
 func TestWorkerReplayOwnsInheritedBoundaryAndReset(t *testing.T) {

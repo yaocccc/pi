@@ -321,7 +321,7 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 
 // Ctrl+D closes an idle tab directly; /close and in-flight work require consent.
 func (m *Model) requestCloseSession(t *tab, confirm bool) tea.Cmd {
-	if confirm || t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart {
+	if confirm || t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.resume.submit != nil {
 		d := m.newDialog("close", "Close this session?", "The saved history stays on disk. Its running task will be stopped.")
 		d.options = []option{{Label: "Cancel", Value: "no"}, {Label: "Close session", Value: "yes"}}
 		t.dialogs = append(t.dialogs, d)
@@ -421,6 +421,15 @@ func (m *Model) extension(t *tab, raw json.RawMessage) tea.Cmd {
 		t.setValue(e.Text)
 		m.resizeEditor(t)
 	case "select", "confirm", "input", "editor":
+		// Replaying a still-pending shared request must not replace a local
+		// partial answer or stack the same question twice.
+		if e.ID != "" {
+			for _, existing := range t.dialogs {
+				if existing.requestID == e.ID {
+					return nil
+				}
+			}
+		}
 		d := m.newDialog(e.Method, e.Title, e.Message)
 		d.requestID = e.ID
 		if e.Timeout > 0 {

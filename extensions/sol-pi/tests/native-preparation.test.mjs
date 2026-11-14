@@ -26,9 +26,8 @@ function compare(manager) {
 
 for (const variant of ["empty", "metadata", "split", "tool-pair", "system", "replacement", "omission",
   "previous", "retain-none", "compaction-leaf", "unknown-hook", "nested", "nested-omitted", "nested-replaced"]) {
-  test(`Pi 1.0.2 preparation differential: ${variant}`, () => {
-    assert.equal(VERSION, "1.0.4");
-    assert.equal(port.NATIVE_PREPARATION_VERSION, "1.0.2"); // Port baseline; also checked against the installed 1.0.4 implementation.
+  test(`Installed Pi ${VERSION} / 1.0.2 port preparation differential: ${variant}`, () => {
+    assert.equal(port.NATIVE_PREPARATION_VERSION, "1.0.2"); // Port provenance; behavior is compared with the installed SDK above.
     const sm = SessionManager.inMemory();
     if (variant === "empty") return compare(sm);
     sm.appendCustomEntry("metadata", {});

@@ -30,6 +30,7 @@ See the [pi-goui guide](pi-goui/README_EN.md) for builds, platform dependencies,
 | Install, select, or maintain extensions | [Extension overview and module index](extensions/README_EN.md) |
 | Use questionnaires, Worker, Codex Fast, or SoL-Pi | Each module README linked from the overview owns its configuration, protocol, and safety limits |
 | Build a third-party UI | [Capability boundaries and RPC bridge](extensions/pi-ui/README_EN.md), plus module protocols |
+| Regress the whole repository | [Complete extension tests](extensions/README_EN.md#update-uninstall-and-maintain), [Go/PTY/Web validation](pi-goui/README_EN.md#verification); start with isolated environments and fake backends |
 | Modify the Go frontend | [Development rules](pi-goui/AGENTS_EN.md), [extension interfaces](pi-goui/internal/extensions/README_EN.md) |
 | Understand Agent working rules | [Engineering rules](AGENTS.md), [Worker orchestration skill](extensions/worker/SKILL.md), [design-question skill](skills/grill-with-docs/SKILL.md) |
 

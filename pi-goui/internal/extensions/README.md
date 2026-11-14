@@ -21,10 +21,16 @@ type Extension interface {
 | `NewSession` | 同步、异步更新、侧栏、滚动、轮询、事件及 `ControlView` 控件 |
 | `OpenDialog` | `DialogHandler` 管理输入、确认、取消；经 `DialogHost` 回调宿主 |
 | `NewInspector` / `NewInspectorContent` | `Inspector` 管理详情、交互、子页与内容版本 |
-| `NewUsage` | 观察权威记录，返回不重复计数的输入/输出用量 |
+| `NewUsage` | 每轮新建独占观察器，消费权威记录并返回不重复计数的输入/输出用量；不得依赖活跃查看器、UI 回调或共享可变容器 |
 | `NewProjection` / `Tools` | 会话投影与可选卡片/完整详情 Provider |
 
 [core/ui/extensions.go](../core/ui/extensions.go) 是核心唯一实现导入点，只以 `extension.New(extensions.New())` 组装 Runtime。其他核心使用方只消费中立接口，不暴露整个 Model、具体类型别名或可变全局 registry。
+
+该组合入口在启动时通过 [ConfigureSharedWorkingUsage](../runtime/working_snapshot.go) 为稳定执行者注入 `NewUsage` 工厂，helper 与普通 TUI 使用相同装配；不要在 runtime 增加第三方协议分支。共享工作行只传递汇总计数、时钟与 revision，不传输正文或回放完整工具结果；晚加入和原实例消费同一权威投影，独立模式仍使用同一累计算法。
+
+WebUI 在网页终端中直接运行同一 TUI，复用上述扩展实现；无需浏览器专项适配或第二份扩展状态。
+
+跨进程 RPC 与会话所有权由 [runtime](../runtime/) 管理，不移入扩展装配层。独立 TUI 共享后端业务状态，但各自保留本地交互投影；问卷只有成功写入回答后才广播 resolved，失败不得提前清除。持久扩展状态按原生 `setStatus` / `setWidget` / `setTitle` 协议补给晚加入者，`set_editor_text` 不作持久广播回放。
 
 ## 依赖与实现归属
 
@@ -44,7 +50,7 @@ type Extension interface {
 
 ## RPC 与降级
 
-通用 [Client.CallExtension](../core/rpc/extensions.go) 先经 `get_commands` 确认 `name:"pi-ui-rpc", source:"extension"`，再发送 `/pi-ui-rpc {"id":…,"method":…,"params":…}`。响应是前缀 `pi-ui:rpc:v1:` 的 notify，载荷为 `{id,result}` 或 `{id,error:{code,message}}`，不是外层 prompt 确认。
+通用 [Client.CallExtension](../runtime/extensions.go) 先经 `get_commands` 确认 `name:"pi-ui-rpc", source:"extension"`，再发送 `/pi-ui-rpc {"id":…,"method":…,"params":…}`。响应是前缀 `pi-ui:rpc:v1:` 的 notify，载荷为 `{id,result}` 或 `{id,error:{code,message}}`，不是外层 prompt 确认。
 
 缺桥返回 `ErrExtensionUnavailable`，不能发送可能触发模型的未知斜杠提示词。按请求 ID 关联回复；错误、取消、超时和进程退出清理等待者并忽略迟到响应。本地取消只停止等待，不回滚后端已提交的操作。
 
@@ -53,7 +59,7 @@ type Extension interface {
 | 问卷 | 标准 `extension_ui_request/response` 按对话 ID 归属；取消为 `cancelled:true`，不伪造答案或默认同意。答案权威校验由后端完成。 |
 | Codex 档位 | 仅 `codex-fast.get/set`；采用后端返回的 `level/levels`，后端确认后再更新。缺桥/能力隐藏控件，不读配置、不从模型名推断档位。 |
 | Worker | 仅 `worker.transcript`，参数为 `descriptor:{version,id}` 和可选不透明 `cursor`；消费记录及 `reset/more/partial`。路径、文件身份、偏移、限制和游标有效期均由后端验证。 |
-| Worker 展示 | 使用稳定 `phaseCode`，不解析翻译文案；回放只重建展示，不执行任务。不将 Activity 当作完整历史，缺失 end 不代表成功；缺记录回退已有结果，部分记录保留并标记不完整。 |
+| Worker 展示 | 使用稳定 `phaseCode`，不解析翻译文案；回放只重建展示，不执行任务。不将 Activity 当作完整历史，缺失 end 不代表成功；缺记录回退已有结果，部分记录保留并标记不完整。完整历史和批量事件在后台独占 Replay/投影副本上准备，按原查看器、descriptor 与任务代际提交；坏 header/reset 保留旧正文，后续 completed 不能掩盖错误。 |
 
 没有公开的 `worker.start`、`worker.cancel` 或远程设置方法；`worker` 是 Agent 工具，`/worker_settings` 是对话命令。不要虚构 RPC 或读取本地私有日志兜底。
 

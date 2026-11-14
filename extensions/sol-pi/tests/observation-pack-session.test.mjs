@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, VERSION } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createProvider, getCurrentTools } from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createObservationPackExtension } from "../extensions/observation-pack/index.ts";
@@ -12,7 +12,6 @@ import { createObservation, countLines, THRESHOLD_BYTES } from "../extensions/ob
 import { runtimeRoot } from "../runtime-paths.ts";
 
 async function setup(t, { history, persistent = false } = {}) {
-  assert.equal(VERSION, "1.0.4");
   const cwd = await mkdtemp(join(tmpdir(), "op-sdk-test-"));
   const agentDir = join(cwd, "agent");
   await mkdir(agentDir);

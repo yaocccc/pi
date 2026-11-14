@@ -120,7 +120,14 @@ func (m *Model) revealSidebar() {
 	}
 }
 
+type sidebarHistoryCache struct {
+	sessions []session.Summary
+	offset   int
+	checked  time.Time
+}
+
 type sidebarHistoryState struct {
+	cache              map[string]sidebarHistoryCache
 	pointerKnown       bool
 	pointerX, pointerY int
 	offset             int
@@ -138,7 +145,31 @@ type sidebarHistoryMsg struct {
 	err        error
 }
 
+// Restore a directory immediately; disk refreshes never clear its visible list.
+func (m *Model) restoreSidebarHistory() {
+	cwd := m.tabDirectory(m.current())
+	h := &m.sidebarHistory
+	if h.cwd == cwd || m.opts.NoSession {
+		return
+	}
+	if h.cache == nil {
+		h.cache = make(map[string]sidebarHistoryCache)
+	}
+	if h.cwd != "" {
+		checked := h.checked
+		if h.pending {
+			checked = time.Time{}
+		}
+		h.cache[h.cwd] = sidebarHistoryCache{h.sessions, h.offset, checked}
+	}
+	cached := h.cache[cwd]
+	h.cwd, h.sessions, h.offset, h.checked = cwd, cached.sessions, cached.offset, cached.checked
+	h.pending = false
+	h.generation++ // Ignore a scan for the directory we just left.
+}
+
 func (m *Model) requestSidebarHistory(now time.Time) tea.Cmd {
+	m.restoreSidebarHistory()
 	cwd := m.tabDirectory(m.current())
 	h := &m.sidebarHistory
 	if m.opts.NoSession || h.pending || (cwd == h.cwd && now.Sub(h.checked) < 5*time.Second) {

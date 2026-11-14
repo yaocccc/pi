@@ -14,7 +14,7 @@ import (
 
 func TestWorkingWorkerUsage(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	w := workingState{newExtensions: func() extensionUsage { return extensionUsage{&hostui.Usage{}} }}
+	w := workingState{NewExtensions: func() workingUsageObserver { return extensionUsage{&hostui.Usage{}} }}
 	workingApply(&w, `{"type":"agent_start"}`, now)
 	workingApply(&w, workingFinal(1, 4), now)
 	details := func(input int) string {
@@ -38,7 +38,7 @@ func TestWorkingWorkerUsage(t *testing.T) {
 		t.Fatal("late worker update changed settled metrics")
 	}
 	workingApply(&w, `{"type":"agent_start"}`, now.Add(time.Hour))
-	if !reflect.DeepEqual(w.extensions, extensionUsage{&hostui.Usage{}}) || strings.Contains(w.line(now.Add(time.Hour), config.Theme{}), "↑") {
+	if !reflect.DeepEqual(w.Extensions, extensionUsage{&hostui.Usage{}}) || strings.Contains(w.line(now.Add(time.Hour), config.Theme{}), "↑") {
 		t.Fatal("worker usage leaked into next run")
 	}
 }

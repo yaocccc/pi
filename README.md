@@ -30,6 +30,7 @@ git clone <repository-url> /path/to/pi-config
 | 安装、选择或维护扩展 | [扩展总览与模块索引](extensions/README.md) |
 | 问卷、Worker、Codex Fast、SoL-Pi 等具体用法 | 扩展总览中的各模块 README；配置、协议和安全限制由对应模块说明 |
 | 开发第三方 UI | [能力边界与 RPC 桥](extensions/pi-ui/README.md)及各模块协议 |
+| 回归整个仓库 | [扩展完整测试](extensions/README.md#更新卸载与维护)、[Go/PTY/Web 验证](pi-goui/README.md#验证)；均先使用隔离环境与假后端 |
 | 修改 Go 前端 | [开发约束](pi-goui/AGENTS.md)、[扩展接口](pi-goui/internal/extensions/README.md) |
 | 了解 Agent 工作规则 | [工程约束](AGENTS.md)、[Worker 编排技能](extensions/worker/SKILL.md)、[设计问答技能](skills/grill-with-docs/SKILL.md) |
 

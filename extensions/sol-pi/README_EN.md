@@ -60,7 +60,7 @@ Only a **successful current-turn update_plan completing a previously registered 
 
 An eligible turn_end freezes a snapshot and starts background generation through `ctx.modelRegistry.streamSimple()`, request-time authentication and native compact prompts/retries. A later turn_end / agent_before_settle atomically commits the summary with the latest plan, preserving appended messages. Only remaining work gets a hidden reminder and continue:true. There is no main-session abort, awaited ctx.compact or sendMessage restart; idle results wait for another boundary rather than writing sessions or starting conversations.
 
-- Plan/prediction history survives compaction. A new external task after completion can reset task predictions but retains debt and last-compaction time. Input matching is bounded and run-local. Older SDKs lack source/input IDs: mixed, duplicated or transformed input conservatively skips reset; identical bare messages injected outside input cannot be reliably distinguished.
+- Plan/prediction history survives compaction. A new external task after completion can reset task predictions but retains debt and last-compaction time. Input matching is bounded and run-local. Older SDKs lack source/input IDs: mixed, duplicated or transformed input conservatively skips reset; identical bare messages injected outside input cannot be reliably distinguished. Queued images must also arrive unchanged: delivery-time resizing, conversion or omission that changes the content conservatively preserves the plan rather than resetting on matching text alone.
 - Boundary drafts **do not fire session_before_compact, session_compact or native failure hooks**. Disable compaction/OCC if extensions must veto/observe every compaction through those hooks. Manual /compact and overflow recovery remain native.
 - State and summary share a proposed batch, reconstructed from the branch after commit. Earlier pure custom drafts survive; prior context edits, custom-message or compaction drafts cause a skip. Later extensions can replace/drop the batch and own their modifications.
 - Corrections, cancellation, session/tree/switch/fork/shutdown, model changes and native compaction cancel/invalidate work. Commit guards recheck session, complete captured prefix, generation and main model. Ordinary appended messages/metadata survive; branch summaries, context edits and other compactions invalidate. Late results cannot overwrite newer jobs. Revoked SDK contexts are no longer accessed; detached failures write no diagnostics.
@@ -115,16 +115,28 @@ Details use nextOffset/eof; the text header uses next_offset/eof. Stop at eof=tr
 
 ## Compatibility and validation
 
-[native-preparation.ts](extensions/online-context-compact/native-preparation.ts) is a Pi 0.87.1 preparation-only port, adapted for 1.0.2 and historically differential-tested against **1.0.4**. Its `sol-pi-occ-native-0.87.1` checkpoint marker preserves historical file lists ([license](extensions/online-context-compact/LICENSE.pi)). Active-branch projection preserves tool pairing, split turns, previous summaries and cumulative files; nested file records indicate attempts, not successful writes. Production uses public imports, tests may compare private APIs. Revalidate SDK upgrades; repository-local dependencies are not a supported validation target.
+[native-preparation.ts](extensions/online-context-compact/native-preparation.ts) is a Pi 0.87.1 preparation-only port, adapted for 1.0.2 and historically differential-tested against **1.0.4**. Its `sol-pi-occ-native-0.87.1` checkpoint marker preserves historical file lists ([license](extensions/online-context-compact/LICENSE.pi)). Active-branch projection preserves tool pairing, split turns, previous summaries and cumulative files; nested file records indicate attempts, not successful writes. Production uses public imports, tests may compare private APIs. Revalidate SDK upgrades; repository-dependency test results do not replace acceptance against the actual global SDK used at runtime.
 
-The historical runner pins **Pi 1.0.4**, with a recorded 174/174 pass and strict typecheck, **not a current 1.5.x pass claim**. The full .mjs suite has reproduced baseline failures on the current host. Running npm test in extensions covers TypeScript tests only, not this suite.
+Default `npm test` discovers both extension `.test.ts` and SoL `.test.mjs` suites. Runners no longer block behavior checks behind an exact historical 1.0.4 version gate; all preparation differentials and session assertions remain enabled. The current full SoL suite and strict typechecking pass against repository SDK **1.5.0** and global SDK **1.5.2**. Queued follow-ups reset completed-plan predictions only when their source is confirmed and content/images arrive unchanged; SDK image transformations or omissions conservatively retain state. Tests cover unchanged valid PNG delivery and transformed images in interactive/RPC modes without relaxing source or content validation. This is offline SDK acceptance, not validation of every version or real model.
 
 ~~~sh
-# From the agent directory; requires existing global Pi 1.0.4
+# From the agent directory, using already installed repository dependencies
+npm --prefix extensions run typecheck
+npm --prefix extensions test
+
+# Optional: use an already installed global SDK in isolation; no installation
 node extensions/sol-pi/tests/run-global.mjs
 node extensions/sol-pi/tests/run-global.mjs --typecheck
 ~~~
 
-The [runner](tests/run-global.mjs) isolates HOME, copies into a temporary directory and links existing global dependencies. SOL_PI_GLOBAL_ROOT can override the npm global root; typechecking requires existing TypeScript. No installs, global settings changes or remote model calls. See [tests/](tests/) for coverage; this is not live billing or full interactive UI certification.
+Large tool-result line counting, receipt detection and short head/tail excerpts no longer repeatedly split the full text. Full hashes, original archives and archive-integrity checks retain their necessary linear costs. Equivalence regressions cover UTF-8, CRLF, very long lines and damaged archives. Optional comparative benchmark:
+
+```sh
+SOL_PI_OBSERVATION_BENCHMARK=1 node --expose-gc --experimental-transform-types --test --test-name-pattern='synthetic OP benchmark' extensions/sol-pi/tests/observation-pack.test.mjs
+```
+
+This measures synthetic text processing, not model/network end-to-end latency.
+
+The [runner](tests/run-global.mjs) isolates HOME/agent, copies into a temporary directory and links existing global dependencies without forwarding caller credentials, session markers or NODE_OPTIONS. SOL_PI_GLOBAL_ROOT can override the npm global root; typechecking requires existing TypeScript. Both entry points use offline fake providers: no installs, global settings changes or remote model calls. See [tests/](tests/) for coverage; this is not live billing or full interactive UI certification.
 
 To uninstall, remove the capability directory and its UI registration, then reload. Clean up archives separately; leave other extensions intact.

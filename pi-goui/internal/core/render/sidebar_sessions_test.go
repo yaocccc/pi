@@ -37,7 +37,7 @@ func TestSidebarSessionCardsWorkbenchPalette(t *testing.T) {
 }
 
 func TestSidebarSessionCapacityAndWidth(t *testing.T) {
-	for _, tc := range []struct{ height, want int }{{0, 0}, {12, 0}, {14, 0}, {15, 0}, {16, 0}, {17, 0}, {18, 1}, {19, 1}, {36, 10}} {
+	for _, tc := range []struct{ height, want int }{{0, 0}, {12, 0}, {14, 0}, {15, 1}, {16, 1}, {17, 2}, {18, 2}, {19, 3}, {36, 11}} {
 		if got := SidebarSessionCapacity(tc.height); got != tc.want {
 			t.Errorf("capacity(%d)=%d, want %d", tc.height, got, tc.want)
 		}

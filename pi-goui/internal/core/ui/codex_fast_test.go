@@ -15,8 +15,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/extensions/codexfast"
+	rpc "pi-goui/internal/runtime"
 )
 
 func TestCodexExtensionProcess(t *testing.T) {
@@ -111,8 +111,8 @@ func TestCodexFastAbsentAndIndependentUserDirectory(t *testing.T) {
 			}
 			client, wire := codexClient(t, mode)
 			m.current().client = client
-			if m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != "" || m.sidebarLayout().ModeRow != -1 {
-				t.Fatal("undiscovered extension shown")
+			if m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != "" || m.sidebarLayout().ModeRow < 0 || m.sidebarContext().Mode != "—" {
+				t.Fatal("missing default mode before discovery")
 			}
 			loadCodexState(t, m)
 			expected := ""
@@ -122,8 +122,15 @@ func TestCodexFastAbsentAndIndependentUserDirectory(t *testing.T) {
 			if m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != expected {
 				t.Fatalf("mode = %q", m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead))
 			}
-			if mode != "normal" && m.sidebarLayout().ModeRow != -1 {
-				t.Fatal("absent capability shown")
+			label := "—"
+			if mode == "normal" {
+				label = "normal x1"
+			}
+			if m.sidebarLayout().ModeRow < 0 || m.sidebarContext().Mode != label {
+				t.Fatal("missing default mode after discovery")
+			}
+			if mode != "normal" && m.current().extensions[0].(*hostui.Session).Codex.State.Available() {
+				t.Fatal("default label enabled absent capability")
 			}
 			raw, _ := os.ReadFile(path)
 			if string(raw) != untouched {

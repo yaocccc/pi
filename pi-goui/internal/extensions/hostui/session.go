@@ -73,6 +73,9 @@ func (s *Session) Sync(id int, state session.State) tea.Cmd {
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return PlanExpired{ID: id, Generation: generation} })
 }
 func (s *Session) Sidebar(ctx *render.SidebarContext, state session.State, dead bool) {
+	// Keep the row stable before the first reply (including an empty cache).
+	// This display fallback does not make the mode control available.
+	ctx.Mode = "—"
 	if mode := s.Codex.Mode(dead); mode != "" {
 		ctx.Mode = cards.CodexModeLabel(mode)
 	}

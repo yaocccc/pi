@@ -114,7 +114,7 @@ func (m *Model) transcriptPoint(t *tab, x, y int) textPoint {
 	row := t.offset + min(max(0, y-m.chatTop(m.current())), max(0, m.transcriptHeight(t)-1))
 	lineCount := len(t.selection.lines)
 	if lineCount == 0 || t.selection.document != t.doc.Text {
-		lineCount = strings.Count(t.doc.Text, "\n") + 1
+		lineCount = len(t.documentLines())
 	}
 	row = min(max(0, row), lineCount-1)
 	return textPoint{row, min(max(0, x), max(0, m.mainWidth()-1))}
@@ -125,7 +125,7 @@ func (m *Model) beginSelection(t *tab, v tea.Mouse) {
 	if m.height < 8 || v.Mod&tea.ModShift != 0 || v.X < 0 || v.X >= m.mainWidth() || v.Y < m.chatTop(m.current()) || v.Y >= m.transcriptHeight(t)+m.chatTop(m.current()) {
 		return
 	}
-	lines := strings.Split(t.doc.Text, "\n")
+	lines := t.documentLines()
 	if v.Y-m.chatTop(m.current())+t.offset >= len(lines) {
 		return // Blank viewport rows are not the last message's fold target.
 	}
@@ -215,7 +215,7 @@ func (m *Model) mouseRelease(v tea.Mouse) tea.Cmd {
 		}
 	}
 	if toggleDocumentBlock(t.doc, row, t.folds) {
-		t.dirty = true
+		t.invalidateDocument()
 		m.document(t)
 	}
 	return nil
@@ -227,7 +227,7 @@ func (r hitRect) contains(x, y int) bool { return y == r.y && x >= r.x && x < r.
 
 // Both drawing and hit-testing derive from this exact status-row layout.
 func (m *Model) latestButton(t *tab) (string, hitRect, bool) {
-	bottom := max(0, len(strings.Split(t.doc.Text, "\n"))-m.transcriptHeight(t))
+	bottom := max(0, len(t.documentLines())-m.transcriptHeight(t))
 	if m.height < 8 || len(t.dialogs) > 0 || t.follow || t.offset >= bottom {
 		return "", hitRect{}, false
 	}

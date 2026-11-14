@@ -17,7 +17,7 @@ func TestSidebarModeGeometry(t *testing.T) {
 		if layout.ModeRow != layout.QuotaRow+3 || !strings.Contains(rows[layout.ModeRow], "Mode") || !strings.Contains(rows[layout.ModeRow], mode) {
 			t.Fatal("Mode row not aligned")
 		}
-		if layout.QuotaRow != 10 || !strings.Contains(rows[layout.QuotaRow], "Weekly limit") {
+		if layout.QuotaRow != 6 || !strings.Contains(rows[layout.QuotaRow], "Weekly limit") {
 			t.Fatal("Mode must not shift quota geometry")
 		}
 		if !strings.Contains(rows[layout.HistoryRow], "RECENTS") || !strings.Contains(rows[layout.NewRow], "+ New") {
@@ -65,13 +65,13 @@ func TestSidebarInformationGeometryAndAlignment(t *testing.T) {
 		layout := SidebarGeometry(36, ctx)
 		raw := Sidebar(state, []SessionRow{{ID: "1", Name: "Selected", Status: "idle", Active: true}}, testTheme(), 36, 36, ctx)
 		rows := strings.Split(ansi.Strip(raw), "\n")
-		if !strings.Contains(rows[2], state.Name) || !strings.Contains(rows[3], state.Cwd) {
-			t.Fatal("missing name or directory")
+		if strings.Contains(ansi.Strip(raw), state.Name) || !strings.Contains(rows[layout.DirectoryRow], "󰉖 "+state.Cwd) || layout.DirectoryRow != layout.HistoryRow-1 {
+			t.Fatal("session heading remains or CWD is misplaced")
 		}
-		if strings.Contains(ansi.Strip(raw), "main") || layout.ContextRow != 4 {
+		if strings.Contains(ansi.Strip(raw), "main") || layout.ContextRow != layout.StatsRow+3 {
 			t.Fatal("git information must not affect the sidebar")
 		}
-		if !strings.Contains(rows[layout.ContextRow], "CTX ") || strings.ContainsAny(rows[layout.ContextRow], "[]") || !strings.Contains(rows[layout.ContextRow], "12.4%") || !strings.Contains(rows[layout.ContextRow], "124.2K/1M") {
+		if !strings.Contains(rows[layout.ContextRow], "ctx ") || strings.ContainsAny(rows[layout.ContextRow], "[]") || !strings.Contains(rows[layout.ContextRow], "12.4%") || !strings.Contains(rows[layout.ContextRow], "124.2K/1M") {
 			t.Fatal("missing two-line context display")
 		}
 		if !strings.Contains(rows[layout.StatsRow+1], "in 13.2M") || !strings.Contains(rows[layout.StatsRow+1], "out 123K") {
@@ -108,7 +108,7 @@ func TestSidebarInformationGeometryAndAlignment(t *testing.T) {
 func TestSidebarLongDirectoryAndModelAreTruncated(t *testing.T) {
 	state := session.State{Cwd: "/very/long/" + strings.Repeat("directory/", 20), Model: session.ModelInfo{ID: strings.Repeat("long-model-", 10)}, Thinking: "xhigh"}
 	rows := strings.Split(ansi.Strip(Sidebar(state, nil, testTheme(), 32, 25)), "\n")
-	if !strings.Contains(rows[3], "…") || strings.Contains(strings.Join(rows, "\n"), "long-model-") {
+	if !strings.Contains(rows[SidebarGeometry(25, SidebarContext{}).DirectoryRow], "…") || strings.Contains(strings.Join(rows, "\n"), "long-model-") {
 		t.Fatalf("directory/model handling: %q", rows[:5])
 	}
 	for _, width := range []int{1, 4, 8, 16, 28, 32, 48} {

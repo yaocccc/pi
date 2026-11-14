@@ -11,7 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"pi-goui/internal/core/rpc"
+	rpc "pi-goui/internal/runtime"
 )
 
 func savedSession(t *testing.T) string {
@@ -54,7 +54,8 @@ func TestResumeReplacesSlotAndIsolatesLateEvents(t *testing.T) {
 	if !ok || len(batch) < 2 {
 		t.Fatal("missing startup/cleanup commands")
 	}
-	opened := batch[0]().(openedMsg)
+	start := batch[0]().(tea.BatchMsg)
+	opened := start[0]().(openedMsg)
 	if opened.err != nil {
 		t.Fatal(opened.err)
 	}

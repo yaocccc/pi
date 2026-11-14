@@ -21,10 +21,16 @@ Declare only supported capabilities; nil means absent. Confirm the backend proto
 | `NewSession` | Sync, async updates, sidebar, scrolling, polling, events and `ControlView` controls |
 | `OpenDialog` | `DialogHandler` manages input, confirmation and cancellation through `DialogHost` callbacks |
 | `NewInspector` / `NewInspectorContent` | `Inspector` manages details, interaction, child views and content versions |
-| `NewUsage` | Observe authoritative records and return non-duplicated input/output usage |
+| `NewUsage` | Create an independently owned observer per run, consume authoritative records and return non-duplicated input/output usage; do not depend on an active inspector, UI callbacks or shared mutable containers |
 | `NewProjection` / `Tools` | Session projection and optional card/full-detail providers |
 
 [core/ui/extensions.go](../core/ui/extensions.go) is core's only implementation import point, composing a Runtime with `extension.New(extensions.New())`. Other core consumers use neutral interfaces, not the entire Model, concrete type aliases or mutable global registries.
+
+At startup, this composition entry injects the `NewUsage` factory into the stable executor through [ConfigureSharedWorkingUsage](../runtime/working_snapshot.go), with the same assembly in helpers and regular TUIs. Do not add third-party protocol branches to runtime. Shared working lines transfer only aggregate counters, clocks and revision—not transcript bodies or full tool-result replay. Late and existing instances consume the same authoritative projection; standalone mode uses the same accumulation algorithm.
+
+WebUI runs this same TUI inside a browser terminal and reuses these extension implementations; no browser-specific adapter or duplicate extension state is needed.
+
+Cross-process RPC and session ownership belong in [runtime](../runtime/), not extension composition. Independent TUIs share backend business state while retaining local interaction projections. Questionnaires broadcast resolution only after a successful answer write; failures must not clear them early. Persistent extension state is replayed to late joiners using native `setStatus` / `setWidget` / `setTitle` methods; `set_editor_text` is not a persistent broadcast replay.
 
 ## Dependencies and implementation ownership
 
@@ -44,7 +50,7 @@ Declare only supported capabilities; nil means absent. Confirm the backend proto
 
 ## RPC and fallback
 
-Generic [Client.CallExtension](../core/rpc/extensions.go) discovers `name:"pi-ui-rpc", source:"extension"` via `get_commands` before sending `/pi-ui-rpc {"id":…,"method":…,"params":…}`. Results arrive as notify messages prefixed `pi-ui:rpc:v1:`, containing `{id,result}` or `{id,error:{code,message}}`; the outer prompt acknowledgement is not the operation result.
+Generic [Client.CallExtension](../runtime/extensions.go) discovers `name:"pi-ui-rpc", source:"extension"` via `get_commands` before sending `/pi-ui-rpc {"id":…,"method":…,"params":…}`. Results arrive as notify messages prefixed `pi-ui:rpc:v1:`, containing `{id,result}` or `{id,error:{code,message}}`; the outer prompt acknowledgement is not the operation result.
 
 A missing bridge returns `ErrExtensionUnavailable`; never send an unknown slash prompt that could invoke a model. Correlate replies by request ID. Errors, cancellation, timeout and process exit clean up waiters and reject late responses. Local cancellation stops waiting; it does not roll back committed backend operations.
 
@@ -53,7 +59,7 @@ A missing bridge returns `ErrExtensionUnavailable`; never send an unknown slash 
 | Questionnaire | Standard `extension_ui_request/response`, owned by dialog ID. Cancellation is `cancelled:true`, never invented answers or default consent; the backend validates answers authoritatively. |
 | Codex levels | Only `codex-fast.get/set`; use backend `level/levels` and update after confirmation. Hide controls without the bridge/capability; do not read settings or infer levels from model names. |
 | Worker | Only `worker.transcript`, with `descriptor:{version,id}` and optional opaque `cursor`; consume records and `reset/more/partial`. The backend validates paths, file identity, offsets, limits and cursor lifetime. |
-| Worker presentation | Use stable `phaseCode`, not translated status text. Replay reconstructs presentation, never task execution. Activity is not a full transcript; missing end records are not success. Unavailable records fall back to existing results; preserve and label partial records. |
+| Worker presentation | Use stable `phaseCode`, not translated status text. Replay reconstructs presentation, never task execution. Activity is not a full transcript; missing end records are not success. Unavailable records fall back to existing results; preserve and label partial records. Prepare full history and event batches on exclusively owned background Replay/projection copies, committing only to the original viewer, descriptor and job generation. Malformed headers/resets retain the previous transcript; later completion cannot hide the error. |
 
 There are no public `worker.start`, `worker.cancel` or remote settings methods. `worker` is an Agent tool; `/worker_settings` is a dialog command. Do not invent RPC methods or fall back to reading private local logs.
 

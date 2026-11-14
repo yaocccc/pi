@@ -47,7 +47,7 @@ func (m *Model) applyTheme(theme config.Theme) {
 	}
 	m.cfg.Theme = theme
 	for _, tab := range m.tabs {
-		tab.dirty = true
+		tab.invalidateDocument()
 		m.resizeEditor(tab)
 	}
 }

@@ -190,6 +190,7 @@ func TestSelectionSessionResizeAndStreamIsolation(t *testing.T) {
 	}
 	m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: 5, Y: transcriptTop + 1})
 	m.Update(tickMsg(time.Now()))
+	finishStreamingDocument(m)
 	if first.doc.Text == old || first.dirty || first.selection.document != "" {
 		t.Fatal("live text was not released after selection ended")
 	}

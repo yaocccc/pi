@@ -9,7 +9,8 @@ import (
 	"pi-goui/internal/core/session"
 )
 
-// TranscriptCache belongs to one tab and is used on the UI goroutine. It retains
+// TranscriptCache belongs to one tab and has a single owner: the UI goroutine
+// or its in-flight layout job, never both concurrently. It retains
 // only the latest document's sections, not every version of streaming output.
 // Completed bubbles reuse their layout; a changing assistant bubble additionally
 // reuses Markdown for its unchanged messages before recomputing its frame.

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"pi-goui/internal/core/rpc"
+	rpc "pi-goui/internal/runtime"
 )
 
 func TestEscapeAbortsActiveSessionBeforeCompletionsAndSearch(t *testing.T) {

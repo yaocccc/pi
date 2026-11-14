@@ -6,7 +6,7 @@
 
 ## 安装整包
 
-需要已有 Pi 与自己的模型/认证配置。当前安装和 TypeScript 测试基线为 **Node 22.19+ / Pi SDK 1.5.2**；这不表示所有历史套件都兼容该版本。
+需要已有 Pi 与自己的模型/认证配置。需要 **Node 22.19+**。完整扩展回归使用仓库 SDK **1.5.0**；SoL-Pi 另以已安装的全局 SDK **1.5.2** 通过差分、会话及严格类型检查。其他 SDK 版本须重新验证。
 
 ```sh
 SRC=/path/to/repository/extensions
@@ -75,4 +75,4 @@ npm --prefix extensions run typecheck
 npm --prefix extensions test
 ```
 
-测试包含文档 JSON/真实 schema、复制布局、helper 同步、能力边界与 RPC。SoL-Pi 的历史 .mjs 套件**不包含**在 npm test 中，见[版本限制](sol-pi/README.md#兼容性与验证)。这些检查不能替代真实终端、跨平台或模型端到端验证。
+默认入口收集全部 `.test.ts` 与 `.test.mjs`，包括 SoL-Pi 历史套件，覆盖文档 JSON/真实 schema、复制布局、helper 同步、能力边界、RPC 和原生会话差分；仅归档 UI 的既有交互测试跳过。runner 使用临时 HOME/agent、过滤调用者凭据及会话环境，不调用真实模型。全局 SDK 的独立离线入口和版本边界见 [SoL-Pi 验证](sol-pi/README.md#兼容性与验证)。Go/PTY/Web 的完整入口见 [前端验证](../pi-goui/README.md#验证)。这些检查不代替实体终端、其他平台或真实模型验收。

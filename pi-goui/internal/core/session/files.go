@@ -26,6 +26,121 @@ func ReadFile(path string) (json.RawMessage, error) {
 	return readEntries(f, path)
 }
 
+// ReadPreview reads a saved header and entries from one stable descriptor.
+// This is a read-only display snapshot, never an authority for sending.
+func ReadPreview(path string) (Header, json.RawMessage, error) {
+	header, f, _, opened, err := openPreview(path)
+	if err != nil {
+		return header, nil, err
+	}
+	defer f.Close()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return header, nil, err
+	}
+	entries, err := readEntries(f, path)
+	if err != nil {
+		return header, nil, err
+	}
+	if err := checkPreviewFile(path, opened); err != nil {
+		return header, nil, err
+	}
+	return header, entries, nil
+}
+
+// openPreview returns a reader immediately after the validated header. Both
+// preview APIs use the same descriptor/identity checks; neither follows a
+// symlink at the requested path nor accepts a replacement during the read.
+func openPreview(path string) (Header, *os.File, *bufio.Reader, os.FileInfo, error) {
+	var header Header
+	before, err := os.Lstat(path)
+	if err != nil {
+		return header, nil, nil, nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return header, nil, nil, nil, fmt.Errorf("history is not a regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return header, nil, nil, nil, err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			f.Close()
+		}
+	}()
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		return header, nil, nil, nil, fmt.Errorf("history changed before reading")
+	}
+	r := bufio.NewReaderSize(f, 64*1024)
+	raw, err := readRecord(r)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return header, nil, nil, nil, err
+	}
+	if err := json.Unmarshal(raw, &header); err != nil || header.Type != "session" || header.ID == "" {
+		return Header{}, nil, nil, nil, fmt.Errorf("history has no valid session header")
+	}
+	normalizeOrigin(&header)
+	ok = true
+	return header, f, r, opened, nil
+}
+
+func checkPreviewFile(path string, opened os.FileInfo) error {
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, after) || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) {
+		return fmt.Errorf("history changed while reading")
+	}
+	return nil
+}
+
+// readPreviewEntries decodes each native entry once, retaining raw message and
+// metadata fields for the same branch/projection logic as get_entries.
+func readPreviewEntries(path string) (Header, []entry, string, error) {
+	header, f, r, opened, err := openPreview(path)
+	if err != nil {
+		return header, nil, "", err
+	}
+	defer f.Close()
+	var entries []entry
+	leaf := ""
+	for line := 2; ; line++ {
+		raw, err := readRecord(r)
+		if len(bytes.TrimSpace(raw)) > 0 {
+			var e entry
+			parseErr := json.Unmarshal(raw, &e)
+			if parseErr != nil && e.Type == "session" {
+				// Extra headers are omitted by ReadFile too. Their non-entry
+				// fields need not conform to the entry schema.
+				var header struct{ Type, ID string }
+				parseErr = json.Unmarshal(raw, &header)
+			}
+			if parseErr != nil {
+				if errors.Is(err, io.EOF) && strings.Contains(parseErr.Error(), "unexpected end") {
+					break
+				}
+				return header, nil, "", fmt.Errorf("%s:%d: %w", path, line, parseErr)
+			}
+			if e.Type != "session" {
+				entries = append(entries, e)
+				if e.ID != "" {
+					leaf = e.ID
+				}
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return header, nil, "", err
+		}
+	}
+	if err := checkPreviewFile(path, opened); err != nil {
+		return header, nil, "", err
+	}
+	return header, entries, leaf, nil
+}
+
 func readEntries(source io.Reader, path string) (json.RawMessage, error) {
 	r := bufio.NewReaderSize(source, 64*1024)
 	var entries []json.RawMessage

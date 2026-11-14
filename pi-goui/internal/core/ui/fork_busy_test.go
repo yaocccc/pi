@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
+	rpc "pi-goui/internal/runtime"
 )
 
 func TestForkCompletedHistoryWhileRunning(t *testing.T) {
@@ -26,7 +26,7 @@ func TestForkCompletedHistoryWhileRunning(t *testing.T) {
 			case "awaiting-start":
 				source.awaitingStart = true
 			case "working":
-				source.working.active = true
+				source.working.Active = true
 			}
 			if cmd := m.requestFork(source, "new"); cmd != nil || source.forkPending {
 				t.Fatal("active latest round was accepted")

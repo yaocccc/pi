@@ -60,7 +60,7 @@ OCC 要求持久化 `getSessionFile()` 和有效 compaction 配置。无会话�
 
 符合条件的 turn_end 冻结快照，后台使用 `ctx.modelRegistry.streamSimple()`、请求时认证及原生 compact 提示/重试；后续 turn_end / agent_before_settle 原子提交摘要与最新计划，保留期间追加消息。仅剩余工作时添加隐藏提醒及 continue:true，不中止主会话、不等待 ctx.compact、不用 sendMessage 重启；空闲结果只等后续边界，不自行写会话或开对话。
 
-- 保留计划/预测历史；完成后新外部任务可重置任务预测，但保留债务与上次压缩时间。输入匹配有界且仅本次运行；旧 SDK 无来源/输入 ID，混合、重复或变形输入保守跳过重置，绕过 input 注入的相同裸消息无法可靠区分。
+- 保留计划/预测历史；完成后新外部任务可重置任务预测，但保留债务与上次压缩时间。输入匹配有界且仅本次运行；旧 SDK 无来源/输入 ID，混合、重复或变形输入保守跳过重置，绕过 input 注入的相同裸消息无法可靠区分。队列图片也必须原样交付：SDK 交付时缩放、转换或省略图片导致内容变化，会保守保留计划，而不是仅凭相同正文重置。
 - 边界 draft **不触发 session_before_compact、session_compact 或原生失败钩子**；依赖钩子否决/观察所有压缩时须关闭 compaction/OCC。手动 /compact 和溢出恢复仍为原生流程。
 - 状态与摘要同批提案，提交后从分支重建；之前纯 custom draft 可保留，已有上下文编辑、custom-message 或 compaction draft 则跳过。后续扩展仍可替换/丢弃提案并负责其修改。
 - 更正、取消、session/tree/switch/fork/shutdown、模型变化或原生压缩使后台工作取消/失效；提交前核对会话、完整捕获前缀、generation、主模型。普通追加消息/元数据保留，分支摘要、上下文编辑及其他压缩使任务失效；晚到结果不能覆盖新任务。失效 SDK context 不再访问，脱离后台失败不写诊断。
@@ -115,16 +115,28 @@ details 使用 nextOffset/eof；文本头为 next_offset/eof，eof=true 时停�
 
 ## 兼容性与验证
 
-[native-preparation.ts](extensions/online-context-compact/native-preparation.ts) 是 Pi 0.87.1 的 preparation-only 移植，已适配 1.0.2，并曾对 **1.0.4** 跑差分验证；保留 `sol-pi-occ-native-0.87.1` checkpoint 标记以恢复历史文件列表（[许可](extensions/online-context-compact/LICENSE.pi)）。使用活动分支投影，保留工具配对、split turns、旧摘要/累计文件；嵌套文件记录代表尝试，不保证写入成功。生产只用公开导入，测试可用私有比较 API；升级 SDK 须重新验证，不能把本地依赖当受支持验证目标。
+[native-preparation.ts](extensions/online-context-compact/native-preparation.ts) 是 Pi 0.87.1 的 preparation-only 移植，已适配 1.0.2，并曾对 **1.0.4** 跑差分验证；保留 `sol-pi-occ-native-0.87.1` checkpoint 标记以恢复历史文件列表（[许可](extensions/online-context-compact/LICENSE.pi)）。使用活动分支投影，保留工具配对、split turns、旧摘要/累计文件；嵌套文件记录代表尝试，不保证写入成功。生产只用公开导入，测试可用私有比较 API；升级 SDK 须重新验证，仓库依赖的测试结果不能代替实际运行的全局 SDK 验收。
 
-历史 runner 固定 **Pi 1.0.4**，曾记录 174/174 及严格类型检查通过，**不是当前 1.5.x 通过声明**；当前宿主完整 .mjs 套件已复现基线失败。`extensions/npm test` 只涵盖 TypeScript 测试，不包含此套件。
+默认 `npm test` 同时收集扩展 `.test.ts` 与 SoL `.test.mjs`；runner 不再以历史 1.0.4 精确版本断言阻止行为测试，原有准备算法差分与会话断言全部保留。当前完整 SoL 套件和严格类型检查已在仓库 SDK **1.5.0** 与全局 SDK **1.5.2** 上通过。排队跟进消息仅在来源可确认、内容与图片原样交付时重置已完成计划的预测；SDK 转换或省略图片时保守保留状态。测试覆盖有效 PNG 原样交付及 interactive/RPC 图片变形，未放宽来源或内容校验。这是离线 SDK 验收，不代表所有版本或真实模型验证。
 
 ~~~sh
-# 从 agent 目录运行；要求现有全局 Pi 1.0.4
+# 从 agent 目录运行，使用已安装的仓库依赖
+npm --prefix extensions run typecheck
+npm --prefix extensions test
+
+# 可选：隔离使用已安装的全局 SDK，不安装依赖
 node extensions/sol-pi/tests/run-global.mjs
 node extensions/sol-pi/tests/run-global.mjs --typecheck
 ~~~
 
-[runner](tests/run-global.mjs) 隔离 HOME、复制到临时目录并链接现有全局依赖；可用 SOL_PI_GLOBAL_ROOT 指定 npm 全局根，类型检查要求已有 TypeScript。不安装依赖、不改全局设置，不调用远程模型；覆盖细节见 [tests/](tests/)，不代表真实计费或完整交互 UI 认证。
+大工具结果的行计数、回执识别与首尾短摘录不再反复拆分整份文本；完整哈希、原文归档和归档完整性检查仍保留必要的线性成本。等价回归覆盖 UTF-8、CRLF、超长行与损坏归档；可选性能对照运行：
+
+```sh
+SOL_PI_OBSERVATION_BENCHMARK=1 node --expose-gc --experimental-transform-types --test --test-name-pattern='synthetic OP benchmark' extensions/sol-pi/tests/observation-pack.test.mjs
+```
+
+该基准只测合成文本处理，不代表模型或网络端到端耗时。
+
+[runner](tests/run-global.mjs) 隔离 HOME/agent、复制到临时目录并链接现有全局依赖，不传入调用者的密钥、会话标记或 NODE_OPTIONS；可用 SOL_PI_GLOBAL_ROOT 指定 npm 全局根，类型检查要求已有 TypeScript。两种入口都使用离线假 provider，不安装依赖、不改全局设置，不调用远程模型；覆盖细节见 [tests/](tests/)，不代表真实计费或完整交互 UI 认证。
 
 卸载时移除能力目录及对应 UI 注册并重载；归档需另行清理，勿误删其他扩展。

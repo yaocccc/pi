@@ -33,7 +33,7 @@ func (m *Model) forkTarget(x, y int) (string, hitRect, bool) {
 		}
 	}
 	row := t.offset + y - m.chatTop(m.current())
-	lines := strings.Split(t.doc.Text, "\n")
+	lines := t.documentLines()
 	for _, b := range t.doc.Blocks {
 		if b.Role != "user" || row < b.Start || row >= b.End || b.Start < t.offset || b.Start >= t.offset+m.transcriptHeight(t) || b.Start >= len(lines) {
 			continue

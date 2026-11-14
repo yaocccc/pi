@@ -13,8 +13,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
+	rpc "pi-goui/internal/runtime"
 )
 
 func actionFile(t *testing.T, id string) string {
@@ -32,6 +32,10 @@ func actionKey(m *Model, code rune, mod tea.KeyMod) tea.Cmd {
 }
 func selectedSaved(t *testing.T, m *Model, path, id string) *dialog {
 	t.Helper()
+	// Offline mutations now join a temporary session client before obtaining
+	// its lease. Never let these tests resolve an installed Pi executable.
+	cfg, _, _ := actionRPCConfig(t, path, id, false, false)
+	m.opts.Bin = cfg.Bin
 	tab := m.current()
 	m.sessionDialog(tab, []session.Summary{{ID: id, Path: path, Name: "Saved"}})
 	d := tab.dialogs[0]
@@ -144,6 +148,7 @@ func TestSessionActionRPCProcess(t *testing.T) {
 	p, id, wire, marker := os.Getenv("GOUI_ACTION_FILE"), os.Getenv("GOUI_ACTION_ID"), os.Getenv("GOUI_ACTION_WIRE"), os.Getenv("GOUI_ACTION_MARKER")
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
+	name := ""
 	for scanner.Scan() {
 		var request map[string]any
 		if json.Unmarshal(scanner.Bytes(), &request) != nil {
@@ -159,12 +164,17 @@ func TestSessionActionRPCProcess(t *testing.T) {
 		var err error
 		switch kind {
 		case "get_state":
-			data = map[string]any{"sessionId": id, "sessionFile": p}
+			data = map[string]any{"sessionId": id, "sessionFile": p, "sessionName": name}
+		case "get_entries":
+			data = map[string]any{"entries": []any{}, "leafId": nil}
 		case "set_session_name":
 			var f *session.MutationFile
 			f, err = session.InspectMutationFile(p, id)
 			if err == nil {
 				err = f.Rename(request["name"].(string))
+				if err == nil {
+					name = request["name"].(string)
+				}
 			}
 		}
 		response := map[string]any{"type": "response", "id": request["id"], "command": kind, "success": err == nil, "data": data}
@@ -191,7 +201,7 @@ func TestSessionActionRPCProcess(t *testing.T) {
 	}
 	os.Exit(0)
 }
-func actionClient(t *testing.T, p, id string, replace bool) (*rpc.Client, string, string) {
+func actionRPCConfig(t *testing.T, p, id string, replace, flush bool) (rpc.Config, string, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX fake RPC wrapper")
@@ -202,6 +212,9 @@ func actionClient(t *testing.T, p, id string, replace bool) (*rpc.Client, string
 		t.Fatal(err)
 	}
 	wire, marker := filepath.Join(root, "wire"), filepath.Join(root, "closed")
+	if !flush {
+		marker = ""
+	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	replacement := ""
 	if replace {
@@ -212,7 +225,12 @@ func actionClient(t *testing.T, p, id string, replace bool) (*rpc.Client, string
 	if err = os.WriteFile(bin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	c, err := rpc.Start(rpc.Config{Bin: bin, Cwd: root, AgentDir: root, SessionFile: p})
+	return rpc.Config{Bin: bin, Cwd: root, AgentDir: root, SessionFile: p}, wire, marker
+}
+func actionClient(t *testing.T, p, id string, replace bool) (*rpc.Client, string, string) {
+	t.Helper()
+	cfg, wire, marker := actionRPCConfig(t, p, id, replace, true)
+	c, err := rpc.Start(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

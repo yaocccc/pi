@@ -44,7 +44,9 @@ The capability owns validation, legacy `fast`/`ultrafast` boolean migration, ato
 
 Discover the `codex-fast` service with `getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY)`:
 
-- `getConfig()` reloads persisted state and returns a detached snapshot.
+The configuration file is read only when the extension starts. Setting a level updates the current process immediately and saves the default for future starts, without changing other running processes' displays or requests. The last successful save determines the next startup default.
+
+- `getConfig()` returns a detached snapshot of process-local state without rereading the file.
 - `levels` is an immutable list of supported levels.
 - `setLevel(unknown)` validates and atomically saves, returning detached state; invalid levels throw `invalid-level`, and persistence failures do not update committed memory.
 - Successful writes publish `codex-fast:changed` with `{level}`. External file changes load on the next read/request but do not emit this event.
@@ -124,7 +126,7 @@ A successful save also publishes this fact when the structured adapter is active
 }
 ~~~
 
-Use it to refresh or invalidate the displayed state, not as a substitute for correlating a request reply. This protocol is not a push feed for every external file edit or other backend process: refetch on activation and use bounded polling if live synchronization is required. Per-tab/back-end state must not leak between sessions.
+Use it to refresh or invalidate the displayed state, not as a substitute for correlating a request reply. Refetch the current backend's process-local state on activation; external file edits and other backend processes are not synchronized. Per-tab/backend display state must remain independent.
 
 ### Optional dialog instead of a custom control
 An alternative is the standard dialog path: after discovery, send `prompt` with `/codex-fast`. In structured mode it requests `extension_ui_request` with `method:"input"`, title `pi-goui:codex-fast:v1`, and `placeholder` containing the JSON string `{"level":"normal"}` (current level only). Wire v1 offers `normal`, `fast`, and `ultrafast`; the `codex-fast.get` API additionally returns the supported `levels` array. Reply with `extension_ui_response` whose `id` matches the dialog and whose `value` is the plain string `"fast"` (not JSON-encoded again). Send `cancelled:true` to dismiss without saving. Without structured mode, standard select/notify requests are used.
@@ -139,7 +141,7 @@ import { CODEX_FAST_CAPABILITY, CODEX_FAST_CHANGED, type CodexFastService } from
 const service = getCapability<CodexFastService>(pi, CODEX_FAST_CAPABILITY); // "codex-fast"
 if (service) {
   const choices = service.levels;
-  const current = service.getConfig(); // {level}; reloads persistence
+  const current = service.getConfig(); // {level}; process-local state
   const committed = service.setLevel("fast"); // validates and may throw
 }
 const unsubscribe = pi.events.on(CODEX_FAST_CHANGED, config => {

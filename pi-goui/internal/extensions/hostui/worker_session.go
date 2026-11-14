@@ -7,10 +7,10 @@ import (
 	"errors"
 	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/render"
-	"pi-goui/internal/core/rpc"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions/toolrender/detail"
 	"pi-goui/internal/extensions/worker"
+	rpc "pi-goui/internal/runtime"
 	"reflect"
 	"slices"
 	"strings"
@@ -39,12 +39,24 @@ type WorkerSession struct {
 	ActivityRows           map[int]bool
 	DescriptorDetails      string
 	TaskStatus             string
+	readJob                *workerTranscriptJob
+}
+
+type workerTranscriptJob struct {
+	descriptor worker.Transcript
+	revision   uint64
+	client     worker.RPCClient
 }
 type WorkerTranscriptResult struct {
-	Owner  *WorkerSession
-	Cursor worker.Cursor
-	Batch  worker.Batch
-	Err    error
+	Owner   *WorkerSession
+	Cursor  worker.Cursor
+	Batch   worker.Batch
+	Err     error
+	job     *workerTranscriptJob
+	replay  worker.Replay
+	visible []session.Item
+	changed bool
+	busy    bool
 }
 
 func SelectedWorkerDescriptor(item session.Item) (worker.Transcript, string, bool) {
@@ -105,30 +117,57 @@ func (w *WorkerSession) Poll(item session.Item, now time.Time) (tea.Cmd, string)
 	}
 	w.Pending = true
 	cursor, client := w.Cursor, w.Client
+	job := &workerTranscriptJob{descriptor: d, revision: w.Revision, client: client}
+	w.readJob = job
+	prepared := w.Replay.Detached()
+	previous, previousBusy := w.Visible, w.VisibleBusy
+	settled := w.Settled
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		next, batch, err := cursor.Read(ctx, client, d)
-		return WorkerTranscriptResult{w, next, batch, err}
+		prepared.Apply(worker.ReplayRead{Batch: batch, Descriptor: d, Err: err, Partial: next.Partial(), TaskEnded: !settled.IsZero() && time.Since(settled) > 3*time.Second})
+		view := prepared.View()
+		changed := previousBusy != view.Busy || !reflect.DeepEqual(previous, view.Items)
+		var visible []session.Item
+		if changed {
+			visible = ownedWorkerItems(view.Items)
+		}
+		if err == nil {
+			err = prepared.Err
+		}
+		return WorkerTranscriptResult{Owner: w, Cursor: next, Batch: batch, Err: err, job: job, replay: prepared, visible: visible, changed: changed, busy: view.Busy}
 	}, ""
 }
 
 // Receive is called only after the host matches the owning inspector pointer.
 func (w *WorkerSession) Receive(msg WorkerTranscriptResult, item *session.Item) (drain bool, reason string) {
-	w.Pending = false
+	if msg.Owner != w || msg.job == nil || msg.job != w.readJob {
+		return false, ""
+	}
+	w.Pending, w.readJob = false, nil
+	if w.Revision != msg.job.revision || w.Descriptor != msg.job.descriptor || reflect.ValueOf(w.Client) != reflect.ValueOf(msg.job.client) {
+		w.Next = time.Time{}
+		return false, ""
+	}
 	if item != nil && w.DescriptorDetails != string(item.Details) {
-		if d, _, valid := SelectedWorkerDescriptor(*item); !valid || d.ID != w.Descriptor.ID {
+		d, _, valid := SelectedWorkerDescriptor(*item)
+		if !valid || d.ID != w.Descriptor.ID {
 			return false, "记录关联已变化，请重新查看"
 		}
-	}
-	if msg.Err != nil && msg.Batch.Reset && len(w.Visible) > 0 {
-		return false, WorkerRecordingErrorReason(msg.Err)
-	}
-	if w.Replay.Apply(worker.ReplayRead{Batch: msg.Batch, Descriptor: w.Descriptor, Err: msg.Err, Partial: msg.Cursor.Partial(), TaskEnded: !w.Settled.IsZero() && time.Since(w.Settled) > 3*time.Second}) {
-		w.RefreshVisibleMessages(w.Replay.View())
+		if d != msg.job.descriptor {
+			w.Next = time.Time{}
+			return false, ""
+		}
 	}
 	if msg.Err != nil {
 		return false, WorkerRecordingErrorReason(msg.Err)
+	}
+	// No history parsing, replay or payload cloning happens during commit.
+	w.Replay = msg.replay
+	if msg.changed {
+		w.Visible, w.VisibleBusy = msg.visible, msg.busy
+		w.Revision++
 	}
 	w.Cursor = msg.Cursor
 	w.Draining = msg.Batch.More
@@ -143,11 +182,14 @@ func (w *WorkerSession) Unavailable(reason string) bool {
 	if w == nil || len(w.Visible) == 0 {
 		return false
 	}
-	if w.Replay.Apply(worker.ReplayRead{Err: errors.New(reason)}) {
-		w.RefreshVisibleMessages(w.Replay.View())
+	// A read failure changes activity/status only. Retain the already owned
+	// display payloads instead of cloning the complete recording on the UI loop.
+	if w.Replay.Apply(worker.ReplayRead{Err: errors.New(reason)}) && w.VisibleBusy {
+		w.VisibleBusy = false
+		w.Revision++
 	}
 	w.Replay.Status = "记录不完整 · " + reason + " · 保留已读取内容"
-	w.Pending, w.Draining = false, false
+	w.Pending, w.Draining, w.readJob = false, false, nil
 	return true
 }
 func WorkerMissingRecordingReason(item session.Item) string {
@@ -184,15 +226,19 @@ func (w *WorkerSession) RefreshVisibleMessages(view session.State) {
 	}
 	// Own mutable payloads: an in-place detail/argument update must invalidate
 	// the cached document, while unchanged polling does no payload copying.
-	visible = slices.Clone(visible)
-	for i := range visible {
-		visible[i].Arguments = slices.Clone(visible[i].Arguments)
-		visible[i].Details = slices.Clone(visible[i].Details)
-		visible[i].Images = slices.Clone(visible[i].Images)
-	}
-	w.Visible = visible
+	w.Visible = ownedWorkerItems(visible)
 	w.VisibleBusy = view.Busy
 	w.Revision++
+}
+
+func ownedWorkerItems(items []session.Item) []session.Item {
+	items = slices.Clone(items)
+	for i := range items {
+		items[i].Arguments = slices.Clone(items[i].Arguments)
+		items[i].Details = slices.Clone(items[i].Details)
+		items[i].Images = slices.Clone(items[i].Images)
+	}
+	return items
 }
 
 func (w *WorkerSession) Rows(theme config.Theme, width int, options func(session.State, int, bool, bool, map[string]bool) render.Options, inspectLabel string) []string {

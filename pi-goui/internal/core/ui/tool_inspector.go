@@ -81,7 +81,7 @@ func (m *Model) closeInspector() {
 			t.selection = transcriptSelection{}
 		}
 		m.resizeEditor(t)
-		t.dirty = true
+		t.invalidateDocument()
 		m.document(t)
 	}
 }
@@ -361,7 +361,7 @@ func (m *Model) toolInspectTarget(x, y int) (string, hitRect, bool) {
 			return "", hitRect{}, false
 		}
 	}
-	lines := strings.Split(t.doc.Text, "\n")
+	lines := t.documentLines()
 	row := t.offset + y - m.chatTop(m.current())
 	items := map[string]bool{}
 	collections := map[string]bool{}
