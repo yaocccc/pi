@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -51,6 +52,9 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 	}
 	if match("app.interrupt") && (t.ownRunActive() || t.interruptRequested || t.resume.submit != nil) {
 		return m.interrupt(t)
+	}
+	if match("app.exit") && t.readOnly() {
+		return m.requestCloseSession(t, false)
 	}
 	if match("tui.input.copy") || match("app.message.copy") {
 		if m.inspectorOpen() {
@@ -118,9 +122,9 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 		if time.Since(m.lastEscape) < 500*time.Millisecond {
 			m.lastEscape = time.Time{}
 			if action, _ := m.cfg.Settings["doubleEscapeAction"].(string); action == "fork" {
-				return call(t, "get_fork_messages", nil)
+				return m.requestCall(t, "get_fork_messages", nil)
 			}
-			return call(t, "get_entries", nil)
+			return m.requestCall(t, "get_entries", nil)
 		}
 		m.lastEscape = time.Now()
 		return nil
@@ -137,7 +141,7 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 		m.lastClear = time.Now()
 		t.status = "Press " + m.hint("app.clear") + " again to exit all sessions"
 		return nil
-	case match("app.exit") && t.editor.Value() == "":
+	case match("app.exit") && (t.editor.Value() == "" || t.readOnly()):
 		return m.requestCloseSession(t, false)
 	case match("app.suspend"):
 		return tea.Suspend
@@ -150,20 +154,23 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 	case match("app.session.resume"):
 		return m.listSessions(t, false)
 	case match("app.session.tree"):
-		return call(t, "get_entries", nil)
+		return m.requestCall(t, "get_entries", nil)
 	case match("app.session.origin"):
 		return m.requestOrigin(t)
 	case match("app.session.fork"):
-		return call(t, "get_fork_messages", nil)
+		return m.requestCall(t, "get_fork_messages", nil)
 	case match("app.model.select"):
-		return call(t, "get_available_models", nil)
+		return m.requestCall(t, "get_available_models", nil)
 	case match("app.model.cycleForward"):
-		return call(t, "cycle_model", nil)
+		return m.requestCall(t, "cycle_model", nil)
 	case match("app.model.cycleBackward"):
 		return m.cycleBackward(t)
 	case match("app.thinking.cycle"):
-		return call(t, "cycle_thinking_level", nil)
+		return m.requestCall(t, "cycle_thinking_level", nil)
 	case match("app.thinking.save"):
+		if t.readOnly() {
+			return nil
+		}
 		return saveThinking(t, m.cfg.AgentDir)
 	case match("app.thinking.toggle"):
 		t.showThinking = !t.showThinking
@@ -175,7 +182,7 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 	case match("app.editor.external"):
 		return externalEditor(t)
 	case match("app.message.dequeue"):
-		return call(t, "clear_queue", nil)
+		return m.requestCall(t, "clear_queue", nil)
 	case match("app.clipboard.pasteImage"):
 		return m.startImagePaste(t, readClipboardImage(t.id), false)
 	case match("app.message.followUp"):
@@ -257,6 +264,9 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 // interrupt is deliberately independent of completion/search state. An early
 // abort is retried on agent_start while the latch is held, closing preflight races.
 func (m *Model) interrupt(t *tab) tea.Cmd {
+	if t.readOnly() || t.cycle.phase == cycleClosing {
+		return nil
+	}
 	if t.resume.submit != nil {
 		m.restoreResumeSubmission(t)
 		t.notify("已取消待发送输入")
@@ -267,7 +277,7 @@ func (m *Model) interrupt(t *tab) tea.Cmd {
 	m.searching = ""
 	t.selection = transcriptSelection{}
 	t.status = "Stopping…"
-	return call(t, "abort", nil)
+	return m.requestCall(t, "abort", nil)
 }
 func (m *Model) history(t *tab, delta int) {
 	if len(t.history) == 0 {
@@ -379,20 +389,21 @@ func (m *Model) submit(t *tab, follow bool) tea.Cmd {
 }
 
 func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
-	if t.resume.submit != nil {
-		t.notify("上一条输入等待发送；当前草稿已保留")
+	if t.readOnly() || t.cycle.phase == cycleClosing || t.mutation != nil {
+		return nil
+	}
+	if t.resume.submit != nil || t.cycle.intent != nil || t.cycle.phase == cycleStarting {
+		t.notify("An operation is waiting for this session; draft retained")
 		return nil
 	}
 	if t.sending {
 		t.notify("Sending; wait before appending more content")
 		return nil
 	}
-	if t.resume.pending && t.sessionGuard.path == t.state.File && t.sessionGuard.warning != "" && !t.sessionGuard.approved {
-		return m.sessionGateDialog(t)
+	if t.forkPending {
+		return nil
 	}
-	// Capture a resume-time Enter immediately. Its read-only history guard
-	// runs before eventual dispatch, not before clearing this original draft.
-	if !checked && !t.resume.pending && t.state.File != "" && !t.ownRunActive() {
+	if !checked && t.client != nil && !t.resume.pending && t.state.File != "" && !t.ownRunActive() {
 		if t.sessionGuard.path == t.state.File && t.sessionGuard.warning != "" && !t.sessionGuard.approved {
 			return m.sessionGateDialog(t)
 		}
@@ -405,6 +416,9 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 	}
 	if strings.HasPrefix(text, "/") {
 		if cmd, ok := m.slash(t, text); ok {
+			if t.cycle.intent != nil {
+				t.cycle.intent.draft = &resumeSubmission{original: original}
+			}
 			t.setValue("")
 			m.resizeEditor(t)
 			m.completionHidden = false
@@ -415,14 +429,12 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 		t.notify("Reading clipboard image; wait before sending")
 		return nil
 	}
+	if t.client == nil || t.dead {
+		m.deferResumeSubmission(t, follow)
+		return m.beginCycle(t, nil)
+	}
 	if t.resume.pending {
 		return m.deferResumeSubmission(t, follow)
-	}
-	if t.client == nil || t.dead || t.resume.failed {
-		if !t.resume.failed {
-			t.status = "No running pi process · /new to start"
-		}
-		return nil
 	}
 	return m.sendPrompt(t, original, t.images, follow, true)
 }
@@ -430,7 +442,7 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 // Deferred local intent uses its captured draft, never another active editor.
 func (m *Model) sendPrompt(t *tab, original string, images []map[string]any, follow, clearEditor bool) tea.Cmd {
 	text, attached := referencedImages(strings.TrimSpace(original), images)
-	id, c := t.id, t.client
+	id, c, generation := t.id, t.client, t.cycle.generation
 	mergePending := t.state.Busy && !strings.HasPrefix(text, "/")
 	payload := map[string]any{"type": "prompt", "message": text}
 	if t.state.Busy {
@@ -450,6 +462,7 @@ func (m *Model) sendPrompt(t *tab, original string, images []map[string]any, fol
 		t.historyIndex = -1
 	}
 	draftRevision := t.draftRevision
+	t.cycle.inflight++
 	t.sending = true
 	t.awaitingStart = true
 	t.follow = true
@@ -457,13 +470,13 @@ func (m *Model) sendPrompt(t *tab, original string, images []map[string]any, fol
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		restoreDraft, err := c.SubmitPrompt(ctx, payload, original, mergePending)
+		restoreDraft, raw, err := c.SubmitPrompt(ctx, payload, original, mergePending)
 		if restoreDraft != "" {
 			original = restoreDraft
 		}
 		// Unknown completion may omit the runtime recovery text. Keep the
 		// original local draft for manual recovery, never an automatic retry.
-		return replyMsg{id: id, op: "prompt", err: err, text: original, images: images, draftRevision: draftRevision, deferred: !clearEditor}
+		return replyMsg{id: id, client: c, generation: generation, op: "prompt", data: raw, err: err, text: original, images: images, draftRevision: draftRevision, deferred: !clearEditor}
 	}
 }
 func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
@@ -475,28 +488,28 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 	case "sessions", "resume":
 		return m.listSessions(t, false), true
 	case "model":
-		return call(t, "get_available_models", nil), true
+		return m.requestCall(t, "get_available_models", nil), true
 	case "thinking":
 		if arg == "" {
-			return call(t, "cycle_thinking_level", nil), true
+			return m.requestCall(t, "cycle_thinking_level", nil), true
 		}
-		return call(t, "set_thinking_level", map[string]any{"level": arg}), true
+		return m.requestCall(t, "set_thinking_level", map[string]any{"level": arg}), true
 	case "name":
 		if arg != "" {
-			return call(t, "set_session_name", map[string]any{"name": arg}), true
+			return m.requestCall(t, "set_session_name", map[string]any{"name": arg}), true
 		}
 		d := m.newDialog("name", "Session name", "")
 		d.editor.SetValue(t.state.Name)
 		t.dialogs = append(t.dialogs, d)
 		return nil, true
 	case "tree":
-		return call(t, "get_entries", nil), true
+		return m.requestCall(t, "get_entries", nil), true
 	case "origin":
 		return m.requestOrigin(t), true
 	case "fork":
-		return call(t, "get_fork_messages", nil), true
+		return m.requestCall(t, "get_fork_messages", nil), true
 	case "compact":
-		return call(t, "compact", map[string]any{"customInstructions": arg}), true
+		return m.requestCall(t, "compact", map[string]any{"customInstructions": arg}), true
 	case "copy":
 		return m.copyLast(t), true
 	case "export":
@@ -504,7 +517,7 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 		if arg != "" {
 			p["outputPath"] = arg
 		}
-		return call(t, "export_html", p), true
+		return m.requestCall(t, "export_html", p), true
 	case "attach":
 		if arg == "" {
 			t.status = "Usage: /attach path/to/image.png"
@@ -558,21 +571,28 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 	return nil, false
 }
 func (m *Model) cycleBackward(t *tab) tea.Cmd {
+	if t.readOnly() || t.cycle.phase == cycleClosing {
+		return nil
+	}
+	if t.client == nil || t.dead || t.resume.pending {
+		return m.beginCycle(t, &writeIntent{run: func() tea.Cmd { return m.cycleBackward(t) }})
+	}
 	if t.client == nil || t.dead {
 		return nil
 	}
-	c, id, current := t.client, t.id, t.state.Model
+	c, id, current, generation := t.client, t.id, t.state.Model, t.cycle.generation
+	t.cycle.inflight++
 	patterns, _ := m.cfg.Settings["enabledModels"].([]any)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		raw, err := c.Call(ctx, map[string]any{"type": "get_available_models"})
 		if err != nil {
-			return replyMsg{id: id, op: "set_model", err: err}
+			return replyMsg{id: id, client: c, generation: generation, op: "set_model", err: err}
 		}
 		var data struct{ Models []session.ModelInfo }
 		if err = json.Unmarshal(raw, &data); err != nil {
-			return replyMsg{id: id, op: "set_model", err: err}
+			return replyMsg{id: id, client: c, generation: generation, op: "set_model", err: err}
 		}
 		models := data.Models
 		if len(patterns) > 0 {
@@ -596,7 +616,7 @@ func (m *Model) cycleBackward(t *tab) tea.Cmd {
 			models = filtered
 		}
 		if len(models) == 0 {
-			return noticeMsg{id, "No models in the configured cycle"}
+			return replyMsg{id: id, client: c, generation: generation, op: "set_model", err: fmt.Errorf("no models in the configured cycle")}
 		}
 		index := 0
 		for i, model := range models {
@@ -607,6 +627,6 @@ func (m *Model) cycleBackward(t *tab) tea.Cmd {
 		}
 		next := models[(index+len(models)-1)%len(models)]
 		raw, err = c.Call(ctx, map[string]any{"type": "set_model", "provider": next.Provider, "modelId": next.ID})
-		return replyMsg{id: id, op: "set_model", data: raw, err: err}
+		return replyMsg{id: id, client: c, generation: generation, op: "set_model", data: raw, err: err}
 	}
 }

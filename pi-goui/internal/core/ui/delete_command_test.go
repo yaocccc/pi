@@ -93,10 +93,12 @@ func TestDeleteCommandRejectsArgumentsAndUnsafeTargets(t *testing.T) {
 	if cmd, handled := m.slash(target, "/delete another-session"); cmd != nil || !handled || len(target.dialogs) != 0 || !strings.Contains(target.toast.text, "Usage") {
 		t.Fatal("delete accepted a target argument")
 	}
+	target.cycle.phase = cycleStarting
 	m.slash(target, "/delete")
 	if len(target.dialogs) != 0 || !strings.Contains(target.toast.text, "starting") {
 		t.Fatal("startup rejection was hidden in an invisible selector")
 	}
+	target.cycle.phase = cycleIdle
 	path, _, _ := attachActionClient(t, target, "same-file", false)
 	other := m.addTab(path)
 	other.state.ID, other.state.File = target.state.ID, path

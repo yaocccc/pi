@@ -1,19 +1,14 @@
 package runtime
 
-import "fmt"
-
 const (
-	sharedBacklogBytes = 16 * 1024 * 1024
-	eventBatchLimit    = 64
-	eventBatchBytes    = 256 * 1024
+	eventQueueBytes = 16 * 1024 * 1024
+	eventQueueLimit = 1024
+	eventBatchLimit = 64
+	eventBatchBytes = 256 * 1024
 	// Covers queue slots, retained slice/string headers and growth overhead even
 	// for empty events; tiny frames cannot bypass the memory bound by count.
 	backlogEventOverhead = 256
 	nativeFrameLimit     = 64 * 1024 * 1024
-	// A history snapshot combines two independently legal native responses
-	// (state and entries), plus its bounded envelope. The queue byte budget
-	// remains unchanged: an oversize frame must be its sole queued item.
-	sharedFrameLimit = 2*nativeFrameLimit + workingFrameAllowance
 )
 
 type backlogItem[T any] struct {
@@ -21,22 +16,10 @@ type backlogItem[T any] struct {
 	bytes int
 }
 
-// eventBacklog is an owner-synchronized FIFO. bytes includes payloads and a
-// reservation for every allocated slot, even when a burst has partially drained.
-// One legal large frame may occupy an otherwise empty backlog; until it drains,
-// no other event is accepted. Transport buffers/in-flight writes are separate.
-// append is deliberately unchecked for the existing direct-backend queue policy.
+// eventBacklog is the local client's owner-synchronized FIFO.
 type eventBacklog[T any] struct {
 	items              []backlogItem[T]
 	head, count, bytes int
-}
-
-func (q *eventBacklog[T]) accepts(payloadBytes int) bool {
-	if payloadBytes < 0 || payloadBytes >= sharedFrameLimit {
-		return false
-	}
-	cost := payloadBytes + q.growth()*backlogEventOverhead
-	return q.count == 0 || cost <= sharedBacklogBytes-q.bytes
 }
 
 func (q *eventBacklog[T]) growth() int {
@@ -92,8 +75,4 @@ func (q *eventBacklog[T]) remove() {
 	} else {
 		q.head = (q.head + 1) % len(q.items)
 	}
-}
-
-func (q *eventBacklog[T]) overflow(source string, payloadBytes int) error {
-	return fmt.Errorf("shared event backlog exceeded (%s: pending=%d bytes=%d budget=%d incoming=%d frame_limit=%d); reconnect and rebuild session state", source, q.count, q.bytes, sharedBacklogBytes, payloadBytes, sharedFrameLimit-1)
 }

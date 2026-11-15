@@ -8,31 +8,6 @@ import (
 	"pi-goui/internal/core/session"
 )
 
-func TestInitialSharedSnapshotDoesNotDuplicateLoad(t *testing.T) {
-	for _, late := range []bool{false, true} {
-		t.Run(map[bool]string{false: "during-load", true: "after-load"}[late], func(t *testing.T) {
-			m := testModel(t, "")
-			tab := m.current()
-			tab.client, _ = fakeClient(t)
-			load := m.refresh(tab)
-			if late {
-				m.Update(load())
-			}
-			revision, again, refreshing := tab.revision, tab.refreshAgain, tab.refreshing
-			handled, cmd := m.sharedSessionEvent(tab, json.RawMessage(`{"type":"goui_session_snapshot","initial":true}`))
-			if !handled || cmd != nil || tab.revision != revision || tab.refreshAgain != again || tab.refreshing != refreshing {
-				t.Fatal("initial handshake duplicated or invalidated authoritative load")
-			}
-			if !late {
-				m.Update(load())
-			}
-			if tab.refreshAgain {
-				t.Fatal("queued a redundant history read")
-			}
-		})
-	}
-}
-
 func TestHistoryLoadDoesNotQueryOptionalMetadata(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()

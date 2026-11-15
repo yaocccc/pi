@@ -33,7 +33,7 @@ func (m *Model) footerHoverKind(t *tab) string {
 	if m.inspectorFullscreen() {
 		return ""
 	}
-	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || !m.sidebarHistory.pointerKnown {
+	if t == nil || t.readOnly() || t.cycle.phase == cycleClosing || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || !m.sidebarHistory.pointerKnown {
 		return ""
 	}
 	x, y := m.sidebarHistory.pointerX, m.sidebarHistory.pointerY
@@ -57,7 +57,7 @@ func (m *Model) footerTargetKind(t *tab) string {
 	if m.inspectorFullscreen() {
 		return ""
 	}
-	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || !m.sidebarHistory.pointerKnown {
+	if t == nil || t.readOnly() || t.cycle.phase == cycleClosing || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || !m.sidebarHistory.pointerKnown {
 		return ""
 	}
 	f := m.inputFooter(t)
@@ -110,6 +110,20 @@ func (m *Model) hoverFooter() tea.Cmd {
 }
 
 func (m *Model) clickFooterPopup(t *tab, x, y int) (tea.Cmd, bool) {
+	if t == nil || t.readOnly() || t.cycle.phase == cycleClosing {
+		return nil, false
+	}
+	// Hovering is a read-only local gesture. An explicit click on an idle
+	// model/thinking control may acquire the session to open its native menu.
+	if t.client == nil {
+		footer := m.inputFooter(t)
+		if footer.model.contains(x, y) {
+			return m.requestCall(t, "get_available_models", nil), true
+		}
+		if footer.thinking.contains(x, y) {
+			return m.requestCall(t, "get_available_thinking_levels", nil), true
+		}
+	}
 	kind := m.footerHoverKind(t)
 	if kind == "" {
 		return nil, false
@@ -131,7 +145,12 @@ func (m *Model) clickFooterPopup(t *tab, x, y int) (tea.Cmd, bool) {
 	if model, ok := o.Data.(session.ModelInfo); ok {
 		op, data = "set_model", map[string]any{"provider": model.Provider, "modelId": model.ID}
 	}
-	cmd := footerCall(t, kind, op, data, true, o)
+	var cmd tea.Cmd
+	if t.client == nil || t.resume.pending {
+		cmd = m.beginCycle(t, &writeIntent{run: func() tea.Cmd { return footerCall(t, kind, op, data, true, o) }})
+	} else {
+		cmd = footerCall(t, kind, op, data, true, o)
+	}
 	h.setting = cmd != nil
 	if cmd != nil {
 		h.active = ""
@@ -154,8 +173,11 @@ func (m *Model) scrollFooterPopup(t *tab, delta int) bool {
 
 func (m *Model) footerReply(v footerReplyMsg) tea.Cmd {
 	t := m.byID(v.reply.id)
-	if t == nil {
+	if t == nil || (v.reply.client != nil && (t.client != v.reply.client || t.cycle.generation != v.reply.generation)) {
 		return nil
+	}
+	if v.reply.client != nil {
+		t.cycle.inflight = max(0, t.cycle.inflight-1)
 	}
 	h := &t.footerHover
 	h.loading, h.setting = false, false

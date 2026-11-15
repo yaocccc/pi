@@ -5,6 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { notifyFrontendEvent } from "../../frontend.ts";
+import { registerSessionActivity } from "../../capabilities.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
@@ -96,6 +97,8 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 	return (pi) => {
 		if (Number(process.env.PI_WORKER_DEPTH ?? 0) > 0) return;
 		let generation = 0;
+		let activeJobs = 0;
+		registerSessionActivity(pi, "Online compaction", () => activeJobs > 0 ? "a background summary is still running" : undefined);
 		let controller: AbortController | undefined;
 		let takeReady: ((ctx: ExtensionContext, entries: SessionBoundaryDraft[]) => BoundaryResult | undefined) | undefined;
 		let submittedSummary: { summary: string; leafId: string | null; startedAt: number; generationMs: number } | undefined;
@@ -330,6 +333,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 			};
 			const startedAt = performance.now();
 			// Deliberately detached: only a later native boundary may consume its result.
+			activeJobs++;
 			void (async () => {
 				try {
 					if (!valid()) return;
@@ -414,6 +418,7 @@ export function createOnlineContextCompactExtension(options: OnlineContextCompac
 					if (valid()) notifyFrontendEvent(pi, ctx, { name: "context.failed", data: { durationMs: performance.now() - startedAt, reason: summaryFailureReason(error) } });
 				} finally {
 					if (controller === local && !takeReady) controller = undefined;
+					activeJobs--;
 				}
 			})().catch(() => {
 				// Last-resort sink for this detached optimization (e.g. a revoked UI

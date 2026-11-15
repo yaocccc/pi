@@ -114,16 +114,53 @@ func (m *Model) receiveDocument(v documentResult) {
 	}
 	// Publish compatible snapshots even when more deltas arrived while rendering.
 	// Rejecting every older content revision would starve a continuous stream.
-	t.doc, t.docLinesText, t.docLines = v.doc, v.doc.Text, v.lines
-	m.finishDocument(t)
+	m.publishDocument(t, v.doc, v.lines)
 	t.dirty = t.revision != v.job.revision
 	t.streamDirty = t.dirty
 }
 
-func (m *Model) finishDocument(t *tab) {
+func (m *Model) publishDocument(t *tab, doc render.Document, lines []string) {
+	// Refreshes may insert rows above the viewport. Anchor the existing view
+	// to its stable message/tool ID instead of keeping only a raw row offset.
+	anchor, within := "", 0
+	if !t.follow {
+		for _, block := range t.doc.Blocks {
+			if block.ID != "" && block.Start <= t.offset && t.offset < block.End {
+				anchor, within = block.ID, t.offset-block.Start
+			}
+		}
+	}
+	t.doc = doc
+	t.docLinesText, t.docLines = doc.Text, lines
+	if anchor != "" {
+		for _, block := range doc.Blocks {
+			if block.ID == anchor {
+				t.offset = block.Start + min(within, max(0, block.End-block.Start-1))
+				break
+			}
+		}
+	}
 	// A side-by-side recording retains the parent's immutable selection snapshot.
 	if t.selection.document != t.doc.Text && !((m.inspector.view().Conversation || m.inspector.parent != nil) && m.inspector.tabID == t.id) {
-		t.selection = transcriptSelection{}
+		selection := &t.selection
+		a, b := selection.ordered()
+		oldLines := selection.lines
+		if oldLines == nil {
+			oldLines = strings.Split(selection.document, "\n")
+		}
+		newLines := t.documentLines()
+		unchanged := selection.moved && a.line >= 0 && b.line < len(oldLines) && b.line < len(newLines)
+		for row := a.line; unchanged && row <= b.line; row++ {
+			unchanged = oldLines[row] == newLines[row]
+			if row < len(selection.content) && row < len(doc.Content) {
+				unchanged = unchanged && selection.content[row] == doc.Content[row]
+			}
+		}
+		if unchanged {
+			selection.document, selection.lines, selection.content = doc.Text, newLines, doc.Content
+		} else {
+			*selection = transcriptSelection{}
+		}
 	}
 	m.clampScroll(t)
 }

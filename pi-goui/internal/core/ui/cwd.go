@@ -18,7 +18,7 @@ func (m *Model) tabDirectory(t *tab) string {
 }
 
 func (m *Model) cwdEditable(t *tab) bool {
-	return t != nil && t.newSession && len(t.state.Items) == 0 && t.state.MessageCount == 0 &&
+	return t != nil && !t.readOnly() && t.cycle.phase != cycleStarting && t.cycle.phase != cycleClosing && t.cycle.intent == nil && t.resume.submit == nil && !t.resume.pending && t.newSession && len(t.state.Items) == 0 && t.state.MessageCount == 0 &&
 		len(t.history) == 0 && len(t.state.Steering) == 0 && len(t.state.FollowUp) == 0 &&
 		!t.state.Busy && !t.state.Compacting && !t.sending && !t.awaitingStart && !t.interruptRequested &&
 		t.imagePending == 0 && m.clipboardTarget != t &&

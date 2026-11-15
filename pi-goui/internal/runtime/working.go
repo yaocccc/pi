@@ -36,12 +36,8 @@ type WorkingUsageObserver interface {
 
 // WorkingState is an event-derived running-usage accumulator with a bounded
 // main-message ledger. Its owner serializes Apply/Reset/View; it has no timers,
-// IO or presentation dependencies. Shared executors own the authoritative
-// instance; standalone clients use the same algorithm locally.
+// IO or presentation dependencies. Each local writer owns one instance.
 type WorkingState struct {
-	shared                                *WorkingSnapshot
-	sharedRevision                        uint64
-	dismissedStart                        time.Time
 	Active, Present, Current, WaitingTurn bool
 	Started, Ended                        time.Time
 	Turn                                  int
@@ -233,9 +229,6 @@ func (w *WorkingState) finish(m workingMessage) {
 }
 
 func (w *WorkingState) Apply(raw json.RawMessage, now time.Time) {
-	if w.shared != nil {
-		return
-	}
 	var event struct {
 		Type                  string
 		TurnIndex             *int

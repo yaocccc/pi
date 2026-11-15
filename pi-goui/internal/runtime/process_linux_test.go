@@ -32,7 +32,7 @@ func TestDescendantHelper(t *testing.T) {
 func TestCloseReclaimsDescendants(t *testing.T) {
 	t.Setenv("GOUI_DESCENDANT_TEST", "1")
 	exe, _ := os.Executable()
-	c, err := Start(Config{Bin: exe, Args: []string{"-test.run=^TestDescendantHelper$", "--"}})
+	c, err := Start(Config{NoSession: true, Bin: exe, Args: []string{"-test.run=^TestDescendantHelper$", "--"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -141,7 +141,7 @@ class Harness:
         self.raw = bytearray()
         self.resize(132, 36)
         self.env = os.environ.copy()
-        self.env.update(HOME=str(root / 'home'), PI_CODING_AGENT_DIR=str(root / 'agent'),
+        self.env.update(PI_OFFLINE='1', HOME=str(root / 'home'), PI_CODING_AGENT_DIR=str(root / 'agent'),
                         PI_BIN=str(ROOT / 'tests/fake_rpc.py'), GOUI_TEST_DIR=str(root),
                         TERM='xterm-256color', COLORTERM='truecolor')
         for name in ('home', 'agent', 'cwd'): (root / name).mkdir()
@@ -156,7 +156,7 @@ class Harness:
         (helpers/'xdg-open').write_text('#!/usr/bin/env python3\nimport os,pathlib,sys,json,base64\np=pathlib.Path(sys.argv[1])\nwith (pathlib.Path(os.environ["GOUI_TEST_DIR"])/"opened-images.jsonl").open("a") as f: f.write(json.dumps({"path":str(p),"data":base64.b64encode(p.read_bytes()).decode()})+"\\n")\n')
         for helper in helpers.iterdir(): helper.chmod(0o755)
         self.env.update(PATH=str(helpers)+os.pathsep+self.env.get('PATH',''),WAYLAND_DISPLAY='fixture')
-        self.p = subprocess.Popen([str(binary), '--cwd', str(root / 'cwd')], env=self.env,
+        self.p = subprocess.Popen([str(binary), '--share=false', '--no-session', '--cwd', str(root / 'cwd')], env=self.env,
                                   stdin=self.slave, stdout=self.slave, stderr=self.slave, start_new_session=True)
 
     def resize(self, width, height):

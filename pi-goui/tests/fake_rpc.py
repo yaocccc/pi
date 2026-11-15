@@ -71,7 +71,7 @@ def initial_history():
     entry('assistant', [{'type': 'text', 'text': '```text\n' + '\n'.join(f'SCROLL_LINE_{i}' for i in range(40)) + '\n```\n\nPOSTCOMPACTION_MARKER'}], stopReason='stop')
 
 
-if SESSION_FILE.exists():
+if SESSION_FILE.exists() and SESSION_FILE.stat().st_size > 0:
     records = [json.loads(line) for line in SESSION_FILE.read_text().splitlines() if line.strip()]
     header, *ENTRIES = records
     SESSION_ID = header['id']
@@ -117,7 +117,7 @@ try:
         if typ == 'extension_ui_response':
             continue
         if typ == 'get_state':
-            data = {'model': MODEL, 'thinkingLevel': THINKING, 'sessionId': SESSION_ID, 'sessionName': f'Fixture-{PID}', 'isStreaming': BUSY, 'isCompacting': False, 'sessionFile': str(SESSION_FILE)}
+            data = {'model': MODEL, 'thinkingLevel': THINKING, 'sessionId': SESSION_ID, 'sessionName': f'Fixture-{PID}', 'isStreaming': BUSY, 'isCompacting': False, 'pendingMessageCount': 0, 'sessionFile': str(SESSION_FILE)}
         elif typ == 'get_entries':
             with STATE_LOCK:
                 data = {'entries': list(ENTRIES), 'leafId': ENTRIES[-1]['id'] if ENTRIES else None}

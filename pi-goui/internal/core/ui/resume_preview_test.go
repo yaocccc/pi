@@ -32,8 +32,9 @@ func previewHistory(t *testing.T) string {
 func previewModel(t *testing.T) (*Model, *tab) {
 	t.Helper()
 	m := testModel(t, "")
-	m.replaceSession(m.current(), previewHistory(t))
-	return m, m.current()
+	owner := m.addTab(previewHistory(t))
+	m.tabs, m.active = []*tab{owner}, 0
+	return m, owner
 }
 
 func TestResumePreviewBeforeConnectionAndPreservesDraft(t *testing.T) {
@@ -96,19 +97,20 @@ func TestResumePreviewFailureRetainsHistoryAndUnsentInputs(t *testing.T) {
 	m.submitChecked(tab, false, true)
 	tab.setValue("later [image1]")
 	tab.images = []map[string]any{{"data": "later"}}
-	m.Update(openedMsg{id: tab.id, err: errors.New("test connection refused")})
+	m.Update(openedMsg{id: tab.id, generation: tab.cycle.generation, err: errors.New("test connection refused")})
 	// A fast transport failure must not prevent a slower disk preview arriving.
-	m.Update(preview)
+	m.Update(preview) // The previous-cycle preview is discarded.
+	m.Update(m.previewSession(tab)())
 	assertValue(t, tab, "first [image1]\n\nlater [image2]")
 	if len(tab.images) != 2 || tab.resume.submit != nil || len(tab.state.Items) != 1 {
 		t.Fatal("connection failure lost history, attachments or input")
 	}
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "连接") || strings.Contains(strings.ToLower(view), "stopped") || !strings.Contains(m.status(tab), "test connection refused") {
+	if !strings.Contains(view, "Cannot start pi") || strings.Contains(strings.ToLower(view), "stopped") || !strings.Contains(m.status(tab), "test connection refused") {
 		t.Fatalf("failure was not accurate: %s", view)
 	}
-	if cmd := m.submitChecked(tab, false, true); cmd != nil {
-		t.Fatal("failed connection retried a submission")
+	if tab.cycle.phase != cycleIdle || tab.resume.submit != nil {
+		t.Fatal("failed connection automatically retried a submission")
 	}
 }
 
@@ -165,8 +167,8 @@ func TestResumePreviewReadFailureIsNotSuccessfulHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Update(m.previewSession(tab)())
-	if tab.resume.preview || !strings.Contains(tab.status, "无法读取") || !tab.resume.pending {
-		t.Fatal("invalid history presented as successful or blocked RPC recovery")
+	if tab.resume.preview || !strings.Contains(tab.status, "无法读取") || tab.client != nil {
+		t.Fatal("invalid history presented as successful or started Pi")
 	}
 }
 
@@ -253,9 +255,10 @@ func TestResumeDeferredInputWaitsForAuthorityAndSendsExactlyOnce(t *testing.T) {
 				t.Setenv("GOUI_RESUME_BUSY", "1")
 			}
 			m.opts.Bin = cfg.Bin
-			start := m.start(tab)().(tea.BatchMsg)
-			m.Update(start[1]()) // The read-only preview is independent of start.
-			opened := start[0]().(openedMsg)
+			m.Update(m.previewSession(tab)())
+			tab.setValue("captured [image1]")
+			tab.images = []map[string]any{{"type": "image", "data": "YQ==", "mimeType": "image/png"}}
+			opened := m.submitChecked(tab, false, false)().(openedMsg)
 			if opened.err != nil {
 				t.Fatal(opened.err)
 			}
@@ -270,9 +273,6 @@ func TestResumeDeferredInputWaitsForAuthorityAndSendsExactlyOnce(t *testing.T) {
 			if !tab.resume.preview || len(tab.state.Items) != 1 {
 				t.Fatal("history absent while get_state waits")
 			}
-			tab.setValue("captured [image1]")
-			tab.images = []map[string]any{{"type": "image", "data": "YQ==", "mimeType": "image/png"}}
-			m.submitChecked(tab, false, false)
 			tab.setValue("later draft")
 			other := m.addTab("")
 			other.setValue("other tab")
@@ -290,6 +290,10 @@ func TestResumeDeferredInputWaitsForAuthorityAndSendsExactlyOnce(t *testing.T) {
 			}
 			_, send := m.Update(snapshot)
 			result := commandResult(send)
+			if primed, ok := result.(cyclePrimedMsg); ok {
+				_, send = m.Update(primed)
+				result = commandResult(send)
+			}
 			if ready, ok := result.(resumeSubmitReadyMsg); ok {
 				_, send = m.Update(ready)
 				result = commandResult(send)
@@ -304,7 +308,7 @@ func TestResumeDeferredInputWaitsForAuthorityAndSendsExactlyOnce(t *testing.T) {
 			assertValue(t, other, "other tab")
 			// Body load now needs only state + entries; optional metadata is
 			// independently scheduled and does not delay this captured prompt.
-			n := 3
+			n := 4 // state, entries, release-capability discovery, prompt
 			if busy {
 				n++
 			}

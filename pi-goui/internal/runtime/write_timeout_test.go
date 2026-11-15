@@ -64,7 +64,7 @@ func writeTestClient(t *testing.T) (*Client, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := Start(Config{Bin: bin, Args: []string{"-test.run=^TestRPCWriteChild$", "--"}, AgentDir: root})
+	c, err := Start(Config{NoSession: true, Bin: bin, Args: []string{"-test.run=^TestRPCWriteChild$", "--"}, AgentDir: root})
 	if err != nil {
 		t.Fatal(err)
 	}

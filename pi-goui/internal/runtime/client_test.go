@@ -65,7 +65,7 @@ func testClient(t *testing.T, mode string) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := Start(Config{Bin: bin, Args: []string{"-test.run=^TestRPCChild$", "--"}, AgentDir: t.TempDir()})
+	c, err := Start(Config{NoSession: true, Bin: bin, Args: []string{"-test.run=^TestRPCChild$", "--"}, AgentDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestFinalResponseBeforeExit(t *testing.T) {
 
 func TestInvalidExplicitExecutable(t *testing.T) {
 	t.Setenv("PI_BIN", fmt.Sprintf("%s/missing", t.TempDir()))
-	if _, err := Start(Config{}); err == nil {
+	if _, err := Start(Config{NoSession: true}); err == nil {
 		t.Fatal("invalid explicit PI_BIN silently ignored")
 	}
 }

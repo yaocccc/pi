@@ -14,8 +14,8 @@ func TestStoppedPreservesEventError(t *testing.T) {
 		err  error
 		want string
 	}{
-		{name: "error", err: errors.New("read pi stdout: connection reset"), want: "pi stopped · read pi stdout: connection reset · /new to start another session"},
-		{name: "no error", want: "pi stopped · /new to start another session"},
+		{name: "error", err: errors.New("read pi stdout: connection reset"), want: "pi stopped · history and draft retained · read pi stdout: connection reset"},
+		{name: "no error", want: "pi stopped · history and draft retained"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testModel(t, "{}")
@@ -35,7 +35,7 @@ func TestStoppedPreservesEventError(t *testing.T) {
 			if tab.status != tc.want {
 				t.Fatalf("status = %q, want %q", tab.status, tc.want)
 			}
-			if !tab.dead || tab.state.Busy || tab.sending || cmd != nil {
+			if !tab.dead || tab.state.Busy || tab.sending || cmd == nil {
 				t.Fatal("closed event did not preserve stop/cleanup semantics")
 			}
 		})
@@ -51,7 +51,9 @@ func TestStoppedErrorBelongsToOriginalClient(t *testing.T) {
 
 	current := &rpc.Client{}
 	// Do not run the returned commands: these clients are identity-only stubs.
-	m.Update(openedMsg{id: tab.id, client: current})
+	tab.cycle.phase = cycleStarting
+	tab.cycle.generation++
+	m.Update(openedMsg{id: tab.id, generation: tab.cycle.generation, client: current})
 	status := tab.status
 	for _, msg := range []eventMsg{
 		{id: tab.id, client: old, event: rpc.Event{Err: errors.New("late old error")}},
@@ -63,7 +65,7 @@ func TestStoppedErrorBelongsToOriginalClient(t *testing.T) {
 		}
 	}
 	m.Update(eventMsg{id: tab.id, client: current, closed: true})
-	if tab.status != "pi stopped · /new to start another session" || !tab.dead {
+	if tab.status != "pi stopped · history and draft retained" || !tab.dead {
 		t.Fatalf("new connection inherited old error: %q", tab.status)
 	}
 }
@@ -79,7 +81,7 @@ func TestStoppedWhileResumingPreservesFailureSemantics(t *testing.T) {
 			if reason != "" {
 				m.Update(eventMsg{id: tab.id, client: tab.client, event: rpc.Event{Err: errors.New(reason)}})
 			} else {
-				reason = "连接在初始化完成前关闭"
+				reason = "connection closed during initialization"
 			}
 			m.Update(eventMsg{id: tab.id, client: tab.client, closed: true})
 			want := "连接会话失败：" + reason + "；历史和未发送内容已保留"
@@ -139,8 +141,10 @@ func TestOpenedFailureDoesNotRetainPreviousEventError(t *testing.T) {
 	tab := m.current()
 	tab.client = &rpc.Client{}
 	m.Update(eventMsg{id: tab.id, client: tab.client, event: rpc.Event{Err: errors.New("old transport failure")}})
-	m.Update(openedMsg{id: tab.id, err: errors.New("executable not found")})
-	if !tab.dead || tab.lastEventErr != nil || !strings.Contains(tab.status, "executable not found") || strings.Contains(tab.status, "old transport failure") {
+	tab.cycle.phase = cycleStarting
+	tab.cycle.generation++
+	m.Update(openedMsg{id: tab.id, generation: tab.cycle.generation, err: errors.New("executable not found")})
+	if tab.dead || tab.lastEventErr != nil || !strings.Contains(tab.status, "executable not found") || strings.Contains(tab.status, "old transport failure") {
 		t.Fatalf("startup failure changed or inherited previous error: %q", tab.status)
 	}
 }

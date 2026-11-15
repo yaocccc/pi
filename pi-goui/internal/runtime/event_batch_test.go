@@ -52,7 +52,7 @@ func TestEventBatchesBoundedFIFO(t *testing.T) {
 	c := eventLoopFixture(t, true)
 	var want []Event
 	for i := 0; i < 3*eventBatchLimit+1; i++ {
-		e := Event{Data: json.RawMessage(fmt.Sprintf(`{"type":"future_event","n":%d}`, i)), owner: "original owner"}
+		e := Event{Data: json.RawMessage(fmt.Sprintf(`{"type":"future_event","n":%d}`, i))}
 		if i == 97 {
 			e.Err = errors.New("retained warning")
 		}
@@ -93,7 +93,7 @@ func TestEventBatchesByteLimitAndOversizedSingleton(t *testing.T) {
 	c := eventLoopFixture(t, true)
 	warmup := Event{Data: json.RawMessage(`{"type":"warmup"}`)}
 	want := []Event{
-		{Data: json.RawMessage(strings.Repeat("a", eventBatchBytes/2-4)), owner: "abcd"},
+		{Data: json.RawMessage(strings.Repeat("a", eventBatchBytes/2))},
 		{Err: errors.New(strings.Repeat("e", eventBatchBytes/2))},
 		{Data: json.RawMessage("b")},
 		{Data: json.RawMessage(strings.Repeat("c", eventBatchBytes+1))},

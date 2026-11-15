@@ -36,6 +36,9 @@ export class WorkerRuntime {
 	private scheduling = false;
 	constructor(private conflicts: (left: RuntimeTask, right: RuntimeTask) => boolean, private onChange: () => void = () => {}) {}
 
+	/** Running includes the task's final cleanup, after cancellation was requested. */
+	get busy(): boolean { return this.active.size > 0 || this.queue.length > 0; }
+
 	changed() {
 		for (const batch of this.batches.values()) batch.ui.revision = (batch.ui.revision ?? 0) + 1;
 		// Presentation errors must never strand task promises or path locks.

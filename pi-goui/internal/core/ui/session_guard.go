@@ -37,7 +37,7 @@ func (t *tab) ownRunActive() bool {
 // Schedule inspection from ticks/load or input attempts; never do IO in View
 // or the editor key path. Submit supersedes a periodic result.
 func (m *Model) inspectSession(t *tab, submit, follow bool, now time.Time) tea.Cmd {
-	if t.state.File == "" || t.ownRunActive() {
+	if t.state.File == "" || t.ownRunActive() || t.readOnly() {
 		return nil
 	}
 	g := &t.sessionGuard
@@ -153,20 +153,13 @@ func (m *Model) confirmSessionSend(t *tab, d *dialog, value string) tea.Cmd {
 // gateSession is used before any user-driven draft mutation. Initial inspection
 // is asynchronous; the triggering input is intentionally not replayed.
 func (m *Model) gateSession(t *tab) (bool, tea.Cmd) {
-	if t.state.File == "" || t.ownRunActive() {
-		return false, nil
+	// A draft is local. Ownership probes and history parsing never replace it
+	// or open a modal; acquisition and authoritative load guard submission.
+	if t.readOnly() {
+		return true, nil
 	}
 	g := &t.sessionGuard
-	// A resume is already inspecting history in background. Let early typing
-	// remain local instead of eating the first keystroke. Submission still
-	// performs the normal asynchronous guard, and known warnings still gate.
-	if t.resume.pending && (g.path != t.state.File || g.warning == "") {
-		return false, nil
-	}
-	if g.path != t.state.File || g.checked.IsZero() {
-		return true, m.inspectSession(t, false, false, time.Now())
-	}
-	if g.warning != "" && !g.approved {
+	if g.path == t.state.File && g.warning != "" && !g.approved {
 		return true, m.sessionGateDialog(t)
 	}
 	return false, nil

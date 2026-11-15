@@ -30,13 +30,6 @@ import (
 var version = "dev"
 
 func main() {
-	if handled, err := rpc.RunSharedSessionHelper(os.Args[1:]); handled {
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "webui session:", err)
-			os.Exit(1)
-		}
-		return
-	}
 	// The PTY re-exec uses this same binary; Bubble Tea owns its signal handlers
 	// and deferred Close reclaims all RPC sessions on SIGTERM or /quit.
 	if len(os.Args) > 1 && os.Args[1] == "--internal-tui" {
@@ -234,12 +227,6 @@ func runTerminal(args []string) error {
 			cfg.Settings["enabledModels"] = patterns
 		}
 	}
-	rpc.EnableSessionSharing()
-	member, err := rpc.JoinSessionMember(cfg.AgentDir)
-	if err != nil {
-		return err
-	}
-	defer member.Close()
 	m := ui.New(ui.Options{Bin: o.RPC.Bin, Cwd: o.RPC.Cwd, SessionFile: o.RPC.SessionFile, NoSession: o.RPC.NoSession, PiArgs: o.RPC.Args}, cfg)
 	defer m.Close()
 	defer fmt.Fprint(os.Stdout, ansi.SetPointerShape("default"))

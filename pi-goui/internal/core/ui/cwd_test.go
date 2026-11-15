@@ -179,6 +179,14 @@ func TestCwdReplacementStartsInDirectoryAndIsolatesSession(t *testing.T) {
 		}
 	}
 	run(cmd)
+	if replacement.client != nil {
+		t.Fatal("focusing a new directory started Pi")
+	}
+	if _, err := os.Stat(capture); !os.IsNotExist(err) {
+		t.Fatal("idle cwd tab executed backend")
+	}
+	// The first explicit operation starts a fresh backend in the chosen cwd.
+	run(m.beginCycle(replacement, nil))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := replacement.client.Call(ctx, map[string]any{"type": "get_state"}); err != nil {

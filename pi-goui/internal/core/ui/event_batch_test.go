@@ -25,16 +25,23 @@ func TestUIEventBatchProcess(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
-		var request map[string]any
+		var request struct {
+			Type          string
+			ID            any
+			Offset, Count int
+		}
 		if json.Unmarshal(scanner.Bytes(), &request) != nil {
 			os.Exit(2)
 		}
-		switch request["type"] {
+		switch request.Type {
 		case "burst":
-			for i := 0; i < 4096; i++ {
+			if request.Offset < 0 || request.Count <= 0 || request.Count > 512 {
+				os.Exit(2)
+			}
+			for i := request.Offset; i < request.Offset+request.Count; i++ {
 				fmt.Fprintf(os.Stdout, "{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"contentIndex\":0,\"delta\":\"%04d \"}}\n", i)
 			}
-			_ = encoder.Encode(map[string]any{"type": "response", "id": request["id"], "success": true, "data": map[string]any{}})
+			_ = encoder.Encode(map[string]any{"type": "response", "id": request.ID, "success": true, "data": map[string]any{}})
 		case "finish":
 			fmt.Fprintln(os.Stderr, "event batch fixture stopped")
 			os.Exit(7)
@@ -62,20 +69,12 @@ func TestNextEventBatchesRealClientBurst(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	// The response is a barrier: all preceding deltas have entered the real
-	// runtime queue (apart from its bounded incoming staging channel).
-	if _, err := client.Call(ctx, map[string]any{"type": "burst"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Send(ctx, map[string]any{"type": "finish"}); err != nil {
-		t.Fatal(err)
-	}
 	m, projection := batchFixture(t)
 	tab := m.current()
 	tab.client = client
 	multi, closed := false, false
 	batches, largest := 0, 0
-	for i := 0; i < 4100; i++ {
+	consume := func() eventBatchMsg {
 		batch, ok := nextEvent(tab)().(eventBatchMsg)
 		if !ok {
 			t.Fatal("nextEvent did not return a batch")
@@ -86,10 +85,38 @@ func TestNextEventBatchesRealClientBurst(t *testing.T) {
 			batches++
 		}
 		m.Update(batch)
-		if batch.closed {
-			closed = true
-			break
+		return batch
+	}
+	// Every response follows its block's events on native stdout. Waiting for
+	// that response before consuming establishes a real backlog without relying
+	// on scheduling speed. Each block fits below runtime's 1024-event bound.
+	const blockSize = 512
+	for offset := 0; offset < 4096; offset += blockSize {
+		if _, err := client.Call(ctx, map[string]any{"type": "burst", "offset": offset, "count": blockSize}); err != nil {
+			t.Fatal(err)
 		}
+		for received := 0; received < blockSize; {
+			batch := consume()
+			if batch.closed || len(batch.events) == 0 {
+				t.Fatalf("block %d ended early after %d events: %+v", offset/blockSize, received, batch)
+			}
+			received += len(batch.events)
+			if received > blockSize {
+				t.Fatalf("block %d received %d events, want %d", offset/blockSize, received, blockSize)
+			}
+		}
+	}
+	if err := client.Send(ctx, map[string]any{"type": "finish"}); err != nil {
+		t.Fatal(err)
+	}
+	for !closed {
+		terminal := consume()
+		for _, event := range terminal.events {
+			if len(event.Data) != 0 {
+				t.Fatal("unexpected data after draining all eight blocks")
+			}
+		}
+		closed = terminal.closed
 	}
 	if !closed || !tab.dead {
 		t.Fatal("terminal closure not delivered")
@@ -190,7 +217,7 @@ func TestEventBatchFlushesControlBoundaries(t *testing.T) {
 		update,
 		batchEvent(`{"type":"compaction_start"}`),
 		update,
-		batchEvent(`{"type":"goui_session_snapshot","initial":true}`),
+		batchEvent(`{"type":"future_metadata","initial":true}`),
 		update,
 		batchEvent(`{"type":"extension_ui_request","method":"setStatus","statusKey":"batch","statusText":"kept"}`),
 		update,

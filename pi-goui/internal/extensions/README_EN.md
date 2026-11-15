@@ -26,11 +26,13 @@ Declare only supported capabilities; nil means absent. Confirm the backend proto
 
 [core/ui/extensions.go](../core/ui/extensions.go) is core's only implementation import point, composing a Runtime with `extension.New(extensions.New())`. Other core consumers use neutral interfaces, not the entire Model, concrete type aliases or mutable global registries.
 
-At startup, this composition entry injects the `NewUsage` factory into the stable executor through [ConfigureSharedWorkingUsage](../runtime/working_snapshot.go), with the same assembly in helpers and regular TUIs. Do not add third-party protocol branches to runtime. Shared working lines transfer only aggregate counters, clocks and revision—not transcript bodies or full tool-result replay. Late and existing instances consume the same authoritative projection; standalone mode uses the same accumulation algorithm.
+This composition entry injects independently owned per-run `NewUsage` observers into the local executing TUI’s working accumulator; runtime does not interpret third-party payloads. Independent read-only TUIs refresh persisted history and ownership without replaying streaming tool results or reconstructing live statistics. Desktop/Web mirrors of one TUI simply share its terminal output.
 
 WebUI runs this same TUI inside a browser terminal and reuses these extension implementations; no browser-specific adapter or duplicate extension state is needed.
 
-Cross-process RPC and session ownership belong in [runtime](../runtime/), not extension composition. Independent TUIs share backend business state while retaining local interaction projections. Questionnaires broadcast resolution only after a successful answer write; failures must not clear them early. Persistent extension state is replayed to late joiners using native `setStatus` / `setWidget` / `setTitle` methods; `set_editor_text` is not a persistent broadcast replay.
+Direct RPC and session file locks belong in [runtime](../runtime/), not extension composition. Questionnaires and controls act only through the lock-owning TUI; independent read-only viewers cannot forward answers or change backend state. Before closing Pi at idle, the host uses a neutral activity query to confirm workers, compaction and deferred writes have ended. Unknown activity retains ownership with an explicit reason.
+
+Call [CheckRelease](../core/extension/release.go) once after the initial authoritative state is ready and before executing the write intent, to initialize Pi’s idle barrier; subsequent queries observe completion. `Known=false` permits native-state fallback only when no bridge is installed. An existing bridge with no activity method, an invalid response or a failed query must not appear idle. `Sessions.Pending` and `InspectorPending` also cover admitted frontend extension requests awaiting replies. Update the Go frontend and companion bridges together. Independent background work in third-party extensions must participate in activity observation; native `isIdle` cannot be assumed to include it.
 
 ## Dependencies and implementation ownership
 

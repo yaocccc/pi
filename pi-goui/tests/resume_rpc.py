@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline native-RPC fixture for test-resume.py; gates only saved get_state.
 
-All state, process identities and wire records belong to GOUI_SHARED_TEST_ROOT.
+All state, process identities and wire records belong to GOUI_SESSION_TEST_ROOT.
 No network, credentials, real Pi, tools or model calls are used.
 """
 import json
@@ -10,7 +10,7 @@ import pathlib
 import sys
 import time
 
-ROOT = pathlib.Path(os.environ['GOUI_SHARED_TEST_ROOT'])
+ROOT = pathlib.Path(os.environ['GOUI_SESSION_TEST_ROOT'])
 PID = os.getpid()
 SAVED = '--session' in sys.argv
 SESSION = (pathlib.Path(sys.argv[sys.argv.index('--session') + 1]) if SAVED else
@@ -18,7 +18,7 @@ SESSION = (pathlib.Path(sys.argv[sys.argv.index('--session') + 1]) if SAVED else
 HEADER = {'type': 'session', 'version': 3, 'id': 'resume-saved' if SAVED else 'blank-%s' % PID,
           'timestamp': '2026-01-01T00:00:00Z', 'cwd': str(ROOT / 'cwd')}
 ENTRIES = []
-if SESSION.exists():
+if SESSION.exists() and SESSION.stat().st_size > 0:
     records = [json.loads(s) for s in SESSION.read_text().splitlines() if s.strip()]
     HEADER = records[0]
     ENTRIES = records[1:]
@@ -44,7 +44,7 @@ def append_message(msg):
     entry = {'type': 'message', 'id': 'msg-%d' % len(ENTRIES),
              'parentId': ENTRIES[-1]['id'] if ENTRIES else None, 'message': msg}
     ENTRIES.append(entry)
-    if not SESSION.exists():
+    if not SESSION.exists() or SESSION.stat().st_size == 0:
         SESSION.parent.mkdir(parents=True, exist_ok=True)
         SESSION.write_text(json.dumps(HEADER) + '\n')
     with SESSION.open('a') as out:
@@ -73,6 +73,7 @@ try:
             data = {'sessionId': HEADER['id'], 'sessionFile': str(SESSION),
                     'sessionName': 'Resume acceptance' if SAVED else 'Blank acceptance',
                     'model': MODEL, 'thinkingLevel': 'medium', 'isStreaming': False,
+                    'isCompacting': False, 'pendingMessageCount': 0,
                     'steeringMessages': [], 'followUpMessages': [],
                     'messageCount': sum(e['type'] == 'message' for e in ENTRIES)}
         elif typ == 'get_entries':

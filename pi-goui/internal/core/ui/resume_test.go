@@ -55,7 +55,11 @@ func TestResumeReplacesSlotAndIsolatesLateEvents(t *testing.T) {
 		t.Fatal("missing startup/cleanup commands")
 	}
 	start := batch[0]().(tea.BatchMsg)
-	opened := start[0]().(openedMsg)
+	m.Update(start[0]()) // Read-only presence; opening has not started Pi.
+	if m.current().client != nil {
+		t.Fatal("resume started a backend without an operation")
+	}
+	opened := m.beginCycle(m.current(), nil)().(openedMsg)
 	if opened.err != nil {
 		t.Fatal(opened.err)
 	}

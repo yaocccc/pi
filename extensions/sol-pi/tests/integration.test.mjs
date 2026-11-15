@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, SettingsManager, createEventBus } from "@earendil-works/pi-coding-agent";
 import entry from "../index.ts";
 import { THRESHOLD_BYTES } from "../extensions/observation-pack/index.ts";
 
@@ -24,6 +24,7 @@ function fakePi() {
   const tools = new Map();
   const handlers = new Map();
   return {
+    events: createEventBus(),
     tools,
     handlers,
     registerTool(tool) {

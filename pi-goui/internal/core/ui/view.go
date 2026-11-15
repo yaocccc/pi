@@ -210,15 +210,15 @@ func (m *Model) View() tea.View {
 			if other.resume.failed {
 				status = "连接失败"
 			} else if other.resumingHistory() {
-				status = ""
+				status = "idle"
 			} else if other.dead {
 				status = "stopped"
 			} else if len(other.dialogs) > 0 {
 				status = "input"
-			} else if other.client == nil {
-				status = "starting"
-			} else if other.state.Busy || other.state.Compacting || other.sending || other.awaitingStart {
+			} else if other.cycle.phase == cycleStarting || other.resume.submit != nil || other.state.Busy || other.state.Compacting || other.sending || other.awaitingStart {
 				status = "working"
+			} else if other.client == nil {
+				status = "idle"
 			} else if n := len(other.state.Items); n > 0 && other.state.Items[n-1].Role == "assistant" && other.state.Items[n-1].Error {
 				status = "error"
 			} else if other.unread > 0 {

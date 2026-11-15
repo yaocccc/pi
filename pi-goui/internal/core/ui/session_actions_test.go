@@ -32,8 +32,8 @@ func actionKey(m *Model, code rune, mod tea.KeyMod) tea.Cmd {
 }
 func selectedSaved(t *testing.T, m *Model, path, id string) *dialog {
 	t.Helper()
-	// Offline mutations now join a temporary session client before obtaining
-	// its lease. Never let these tests resolve an installed Pi executable.
+	// Keep an invalid real-Pi fallback out of tests; offline mutations must
+	// obtain their file lease without ever executing this fixture.
 	cfg, _, _ := actionRPCConfig(t, path, id, false, false)
 	m.opts.Bin = cfg.Bin
 	tab := m.current()
@@ -345,8 +345,8 @@ func TestSessionDeleteLastTabAndFailureRetainHistoryDraft(t *testing.T) {
 				t.Fatal("last deletion left no current session")
 			}
 			if replace {
-				if result.err == nil || m.current() != target || target.editor.Value() != "retained on failure" || !target.dead || target.id == oldID {
-					t.Fatal("failed deletion lost draft or retained stale ID")
+				if result.err == nil || m.current() != target || target.editor.Value() != "retained on failure" || target.dead || target.id != oldID || target.client != nil || target.cycle.generation == 0 {
+					t.Fatal("failed deletion lost the usable tab or retained a stale client cycle")
 				}
 				data, _ := os.ReadFile(p)
 				if string(data) != "replacement must survive" {
@@ -411,12 +411,14 @@ func TestSessionActionHardlinkReservationAndOpenAlias(t *testing.T) {
 func TestSessionActionRefusesStartupAndChangedSelection(t *testing.T) {
 	m := testModel(t, "")
 	target := m.current()
+	target.cycle.phase = cycleStarting
 	m.sessionDialog(target, nil)
 	actionKey(m, 'd', tea.ModCtrl)
 	if len(target.dialogs) != 1 || !strings.Contains(target.dialogs[0].message, "starting") {
 		t.Fatal("allowed delete during pending startup")
 	}
 	target.dialogs = nil
+	target.cycle.phase = cycleIdle
 	p := actionFile(t, "before")
 	selector := selectedSaved(t, m, p, "before")
 	actionKey(m, 'd', tea.ModCtrl)

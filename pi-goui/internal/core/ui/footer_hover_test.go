@@ -90,3 +90,18 @@ func TestFooterHoverClickSelection(t *testing.T) {
 		t.Fatal("closed popup reopened without hovering a label")
 	}
 }
+
+func TestIdleFooterHoverIsLocalAndExplicitClickStartsOperation(t *testing.T) {
+	m := testModel(t, "")
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	owner := m.current()
+	rect := m.inputFooter(owner).model
+	m.Update(tea.MouseMotionMsg{X: rect.x, Y: rect.y})
+	if owner.cycle.phase != cycleIdle || owner.cycle.intent != nil || owner.client != nil {
+		t.Fatal("footer hover started Pi")
+	}
+	cmd, handled := m.clickFooterPopup(owner, rect.x, rect.y)
+	if !handled || cmd == nil || owner.cycle.phase != cycleStarting || owner.cycle.intent == nil || owner.client != nil {
+		t.Fatal("explicit idle model selection did not capture its operation")
+	}
+}

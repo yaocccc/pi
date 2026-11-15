@@ -15,6 +15,9 @@ type Session struct {
 	Codex CodexState
 	Plan  PlanView
 }
+
+func (s *Session) Pending() bool { return s.Codex.Pending }
+
 type PlanView struct {
 	Scroll   int
 	Revision uint64

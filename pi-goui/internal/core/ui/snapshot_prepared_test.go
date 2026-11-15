@@ -90,8 +90,8 @@ func TestRefreshPreparesBeforeReturningToUI(t *testing.T) {
 	}
 }
 
-// Shared peers can observe working activity without the preceding agent_start.
-func TestStaleSnapshotDoesNotSpinDuringSharedWorkingRun(t *testing.T) {
+// Local working activity can outlive a streaming state transition.
+func TestStaleSnapshotDoesNotSpinDuringLocalWorkingRun(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
 	tab.client, _ = fakeClient(t)
@@ -104,7 +104,7 @@ func TestStaleSnapshotDoesNotSpinDuringSharedWorkingRun(t *testing.T) {
 	tab.revision++ // A streaming delta arrived during snapshot preparation.
 	_, cmd := m.Update(msg)
 	if cmd != nil || tab.refreshing || !tab.refreshAgain {
-		t.Fatal("stale snapshot started another refresh during an active shared run")
+		t.Fatal("stale snapshot started another refresh during an active local run")
 	}
 	if !tab.resume.pending {
 		t.Fatal("rejected snapshot was treated as authoritative")

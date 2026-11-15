@@ -55,13 +55,7 @@ type tab struct {
 	images                                                                         []map[string]any
 	imagePending                                                                   int
 	imageGeneration                                                                uint64
-	// Shared snapshots pause consumption at an ordered history fence. Only the
-	// remainder of the current bounded batch is retained here; the transport
-	// keeps enforcing its existing backlog budget while preparation runs.
-	snapshotRequest uint64
-	snapshotOwner   *snapshotMsg
-	snapshotPaused  bool
-	snapshotTail    []rpc.Event
+	cycle                                                                          sessionCycle
 
 	// revision protects asynchronous snapshots; draftRevision protects failed submissions.
 	revision, draftRevision uint64
@@ -184,6 +178,16 @@ func (p *clientPool) close() error {
 	wg.Wait()
 	return nil
 }
+
+func (p *clientPool) closeClient(c *rpc.Client) error {
+	err := c.Close()
+	if err == nil {
+		p.mu.Lock()
+		delete(p.clients, c)
+		p.mu.Unlock()
+	}
+	return err
+}
 func New(opts Options, cfg config.Config) *Model {
 	m := &Model{opts: opts, cfg: cfg, width: 100, height: 30, pool: &clientPool{clients: map[*rpc.Client]bool{}}}
 	m.imagePreviews = &imagepreview.Store{}
@@ -224,10 +228,9 @@ func (m *Model) addTab(file string) *tab {
 	t.newSession = file == ""
 	t.state.Cwd = m.opts.Cwd
 	t.state.File = file
-	t.status = "Starting pi…"
+	t.status = "Idle"
 	if file != "" {
-		t.resume.pending = true
-		t.status = ""
+		t.status = "Idle"
 	}
 	t.showThinking = true
 	if hide, ok := m.cfg.Settings["hideThinkingBlock"].(bool); ok {
@@ -265,6 +268,7 @@ func (m *Model) activate(i int) tea.Cmd {
 	m.search = ""
 	m.resizeEditor(t)
 	m.revealSidebar()
+	t.cycle.probed = time.Time{}
 	return m.focus(t)
 }
 func (m *Model) open(file string) tea.Cmd {
@@ -283,7 +287,7 @@ func (m *Model) open(file string) tea.Cmd {
 		}
 	}
 	t := m.addTab(file)
-	return tea.Batch(m.start(t), t.editor.Area.Focus())
+	return tea.Batch(m.start(t), m.focus(t))
 }
 
 // A symlink/relative spelling must not open a second writer on the same JSONL.
@@ -302,9 +306,10 @@ func sessionPath(path string) string {
 }
 
 type openedMsg struct {
-	id     int
-	client *rpc.Client
-	err    error
+	generation uint64
+	id         int
+	client     *rpc.Client
+	err        error
 }
 type eventMsg struct {
 	id     int
@@ -313,6 +318,9 @@ type eventMsg struct {
 	closed bool
 }
 type replyMsg struct {
+	client        *rpc.Client
+	generation    uint64
+	file          string
 	id            int
 	op            string
 	data          json.RawMessage
@@ -323,8 +331,6 @@ type replyMsg struct {
 	deferred      bool // Local intent captured before the first authoritative snapshot.
 }
 type snapshotMsg struct {
-	request                         uint64 // Nonzero for a shared, ordered history fence.
-	metadataRevision                uint64 // Event metadata checkpoint before get_state.
 	id                              int
 	revision                        uint64
 	state, entries, stats, commands json.RawMessage
@@ -352,30 +358,26 @@ func tick() tea.Cmd {
 	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 func (m *Model) start(t *tab) tea.Cmd {
-	id, file := t.id, t.state.File
-	opts, agentDir, pool := m.opts, m.cfg.AgentDir, m.pool
-	opts.Cwd = m.tabDirectory(t)
-	connect := func() tea.Msg {
-		c, e := pool.start(rpc.Config{Bin: opts.Bin, Cwd: opts.Cwd, AgentDir: agentDir, SessionFile: file, NoSession: opts.NoSession, Args: opts.PiArgs})
-		return openedMsg{id, c, e}
+	if m.opts.NoSession {
+		return m.beginCycle(t, nil)
 	}
-	return tea.Batch(connect, m.previewSession(t), m.inspectSession(t, false, false, time.Now()))
+	return tea.Batch(m.pollSession(t, time.Now(), true), m.previewSession(t))
 }
 func nextEvent(t *tab) tea.Cmd {
 	return nextEventCommand(t.id, t.client)
 }
 func (m *Model) Init() tea.Cmd {
 	t := m.current()
-	return tea.Batch(m.start(t), t.editor.Area.Focus(), tick(), m.requestGit(time.Now()), m.requestSidebarHistory(time.Now()), m.releaseNotesCommand(), m.updates.reader.command(m.updateConfig()))
+	return tea.Batch(m.start(t), m.focus(t), tick(), m.requestGit(time.Now()), m.requestSidebarHistory(time.Now()), m.releaseNotesCommand(), m.updates.reader.command(m.updateConfig()))
 }
 func call(t *tab, op string, data map[string]any) tea.Cmd {
-	if t == nil || t.client == nil || t.dead {
+	if t == nil || t.client == nil || t.dead || t.readOnly() || t.cycle.phase == cycleClosing {
 		return nil
 	}
 	if t.mutation != nil && t.mutation.kind == "delete" {
 		return nil
 	}
-	id, c := t.id, t.client
+	id, c, generation := t.id, t.client, t.cycle.generation
 	if data == nil {
 		data = map[string]any{}
 	}
@@ -383,15 +385,16 @@ func call(t *tab, op string, data map[string]any) tea.Cmd {
 	if !strings.HasPrefix(op, "get_") {
 		t.revision++
 	}
+	t.cycle.inflight++
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		raw, err := c.Call(ctx, data)
-		return replyMsg{id: id, op: op, data: raw, err: err}
+		return replyMsg{id: id, client: c, generation: generation, op: op, data: raw, err: err}
 	}
 }
 func (m *Model) refresh(t *tab) tea.Cmd {
-	if t.client == nil || t.dead {
+	if t.client == nil || t.dead || t.cycle.phase == cycleClosing {
 		return nil
 	}
 	if t.refreshing {
@@ -402,22 +405,6 @@ func (m *Model) refresh(t *tab) tea.Cmd {
 	t.refreshAgain = false
 	id, c, file, revision := t.id, t.client, t.state.File, t.revision
 	sourceID := t.state.ID
-	if c.Shared() {
-		t.snapshotRequest++
-		s := snapshotMsg{id: id, revision: revision, client: c, file: file, sourceID: sourceID, request: t.snapshotRequest, metadataRevision: t.state.MetadataRevision()}
-		t.snapshotOwner = &s
-		return func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			_, err := c.Call(ctx, map[string]any{"type": "goui_get_snapshot", "request": s.request})
-			if err == nil {
-				return nil // Preparation starts when the ordered event reaches the UI.
-			}
-			result := s // The owner token shared with the UI remains immutable.
-			result.err, result.preparationDone = err, true
-			return result
-		}
-	}
 	preparation := t.state.SnapshotPreparation()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -526,30 +513,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resumePreviewMsg:
 		cmds = append(cmds, m.receiveResumePreview(v))
 		renderNow = false
+	case sessionPresenceMsg:
+		cmds = append(cmds, m.sessionPresence(v))
+		renderNow = false
+	case releaseCheckMsg:
+		cmds = append(cmds, m.releaseChecked(v))
+	case cycleClosedMsg:
+		cmds = append(cmds, m.cycleClosed(v))
+	case cyclePrimedMsg:
+		cmds = append(cmds, m.cyclePrimed(v))
 	case openedMsg:
-		t := m.byID(v.id)
-		if t == nil {
-			if v.client != nil {
-				return m, func() tea.Msg { _ = v.client.Close(); return nil }
-			}
-			return m, nil
-		}
-		t.client = v.client
-		t.snapshotOwner, t.snapshotTail, t.snapshotPaused = nil, nil, false
-		t.lastEventErr = nil
-		if v.err != nil {
-			t.dead = true
-			if t.resume.pending {
-				m.failResume(t, v.err)
-			} else {
-				t.status = v.err.Error()
-			}
-		} else {
-			if !t.resume.pending {
-				t.status = "Ready"
-			}
-			cmds = append(cmds, nextEvent(t), m.refresh(t))
-		}
+		cmds = append(cmds, m.cycleOpened(v))
 	case eventBatchMsg:
 		// Streaming events only invalidate the document. Tick batches Markdown work.
 		renderNow = false
@@ -559,14 +533,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var eventCmds []tea.Cmd
 		eventCmds, renderNow = m.applyEventBatch(t, v.events)
-		if !v.closed && t.client != nil && !t.snapshotPaused {
+		if !v.closed && t.client != nil {
 			cmds = append(cmds, nextEventCommand(t.id, t.client))
 		}
 		cmds = append(cmds, eventCmds...)
 		if v.closed {
-			m.closeEventStream(t, v.err)
+			cmds = append(cmds, m.closeEventStream(t, v.err))
 			if len(v.events) == 0 {
-				return m, nil
+				return m, tea.Batch(cmds...)
 			}
 		}
 	case forkSnapshotMsg:
@@ -579,33 +553,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applySnapshotMetadata(v)
 	case snapshotMsg:
 		t := m.byID(v.id)
-		if v.request != 0 {
-			if t == nil || t.snapshotOwner == nil || t.snapshotOwner.request != v.request || t.client != v.client {
-				return m, nil
-			}
-			t.snapshotOwner = nil
-			t.refreshing = false
-			if t.snapshotPaused {
-				t.snapshotPaused = false
-				tail := eventBatchMsg{id: t.id, client: t.client, events: t.snapshotTail}
-				t.snapshotTail = nil
-				cmds = append(cmds, func() tea.Msg { return tail })
-			}
-		}
 		if t == nil || (v.client != nil && (t.client != v.client || t.state.File != v.file || t.state.ID != v.sourceID)) {
 			return m, tea.Batch(cmds...)
 		}
 		t.refreshing = false
 		if v.err != nil {
 			t.status = "Refresh: " + v.err.Error()
-			if v.request != 0 {
-				// A failed request has no snapshot to validate or retry on every
-				// delta. Surface initialization failure instead of a busy loop.
-				if t.resume.pending {
-					m.failResume(t, v.err)
-				}
-				return m, tea.Batch(cmds...)
+			if t.resume.pending {
+				m.failResume(t, v.err)
+				cmds = append(cmds, m.closeCycle(t))
 			}
+
 		}
 		if !t.dead && v.revision == t.revision && len(v.commands) > 0 {
 			var c struct{ Commands []command }
@@ -629,6 +587,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					err = prepareErr
 				}
 				m.failResume(t, err)
+				cmds = append(cmds, m.closeCycle(t))
 			}
 			// A later optional endpoint failure must not throw away valid history.
 			// Invalid history cannot publish ancestry/navigation, but must still
@@ -636,12 +595,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if prepared != nil {
 				t.state.ApplySnapshot(prepared)
 				if t.resume.pending && len(v.state) > 0 && len(v.entries) > 0 {
-					t.resume.pending = false
 					t.resume.authoritative = true
 					if v.err == nil && prepareErr == nil {
 						t.status = "Ready"
 					}
-					cmds = append(cmds, m.flushResumeSubmission(t))
+					cmds = append(cmds, m.primeCycle(t))
 				}
 				if v.origin != nil {
 					t.origin = *v.origin
@@ -663,20 +621,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !t.dead && v.revision != t.revision {
 			t.refreshAgain = true
 		}
-		cmds = append(cmds, m.inspectSession(t, false, false, time.Now()))
 		// During a run, keep consuming live events rather than spin on snapshots
 		// that immediately become stale. agent_settled requests the final refresh.
 		// An ordered initialization can retry a local revision change: live
 		// deltas cannot starve preparation beyond its next FIFO fence.
-		if t.refreshAgain && (!t.ownRunActive() || (v.request != 0 && t.resume.pending)) {
+		if t.refreshAgain && !t.ownRunActive() {
 			cmds = append(cmds, m.refresh(t))
 		}
 	case sessionGuardMsg:
 		cmds = append(cmds, m.sessionGuardResult(v))
 	case replyMsg:
 		t := m.byID(v.id)
-		if t == nil {
+		if t == nil || (v.client != nil && (t.client != v.client || t.cycle.generation != v.generation)) || (v.client == nil && (t.cycle.generation != v.generation || (v.file != "" && t.state.File != v.file))) {
 			return m, nil
+		}
+		if v.client != nil {
+			t.cycle.inflight = max(0, t.cycle.inflight-1)
 		}
 		cmds = append(cmds, m.reply(t, v))
 	case sidebarHistoryMsg:
@@ -852,7 +812,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		now := time.Time(v)
 		for _, t := range m.tabs {
 			if t == m.current() {
-				cmds = append(cmds, m.inspectSession(t, false, false, now))
+				cmds = append(cmds, m.pollSession(t, now, false))
 			}
 			for i := len(t.dialogs) - 1; i >= 0; i-- {
 				d := t.dialogs[i]
@@ -876,7 +836,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	for _, t := range m.tabs {
-		cmds = append(cmds, t.syncExtensions())
+		cmds = append(cmds, t.syncExtensions(), m.checkRelease(t, time.Now()))
 	}
 	if m.panelResize.dragging && !m.panelResizeValid() {
 		m.finishPanelResize()
@@ -903,16 +863,17 @@ func (m *Model) document(t *tab) {
 		return
 	}
 	t.layoutGeneration++ // Invalidate any older asynchronous layout.
+	var doc render.Document
 	if m.showStartupInfo(t) {
 		if t.doc.Text == "" {
 			t.follow = false
 		}
-		t.doc = m.startupDocument(t)
+		doc = m.startupDocument(t)
 	} else {
-		t.doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, m.documentOptions(t))
+		doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, m.documentOptions(t))
 	}
 	t.dirty, t.streamDirty = false, false
-	m.finishDocument(t)
+	m.publishDocument(t, doc, nil)
 }
 func (m *Model) clampScroll(t *tab) {
 	bottom := max(0, len(t.documentLines())-m.transcriptHeight(t))
@@ -950,6 +911,9 @@ func (m *Model) editTarget(t *tab, action string, msg tea.Msg) tea.Cmd {
 	return m.editDraft(t, action, msg)
 }
 func (m *Model) editDraft(t *tab, action string, msg tea.Msg) tea.Cmd {
+	if t.readOnly() {
+		return nil
+	}
 	if blocked, cmd := m.gateSession(t); blocked {
 		return cmd
 	}
@@ -978,6 +942,9 @@ func (m *Model) focus(t *tab) tea.Cmd {
 	}
 	if len(t.dialogs) > 0 {
 		return t.dialogs[0].editor.Area.Focus()
+	}
+	if t.readOnly() {
+		return nil
 	}
 	return t.editor.Area.Focus()
 }
@@ -1120,11 +1087,14 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 	return m.refresh(t)
 }
 func (m *Model) status(t *tab) string {
+	if t.readOnly() {
+		return t.ownershipStatus()
+	}
+	if t.cycle.phase == cycleClosing {
+		return "Finishing session…"
+	}
 	if t.resume.failed {
 		return "● " + t.status
-	}
-	if t.resume.submit != nil {
-		return "◌ 待发送"
 	}
 	if t.dead {
 		return "● stopped · " + t.status
@@ -1135,12 +1105,12 @@ func (m *Model) status(t *tab) string {
 	if t.state.Compacting {
 		return "◌ compacting · history retained"
 	}
+	if t.cycle.phase == cycleStarting || t.resume.submit != nil || t.sending || t.awaitingStart {
+		return "working"
+	}
 	if t.state.Busy {
 		dots := []string{"◐", "◓", "◑", "◒"}
 		return dots[(m.frame/2)%4] + " working"
-	}
-	if t.sending || t.awaitingStart {
-		return "◌ sending"
 	}
 	return t.status
 }

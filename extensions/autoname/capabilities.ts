@@ -23,3 +23,27 @@ export function getCapability<T>(pi: Host, name: string): T | undefined {
 	pi.events?.emit(CHANNEL, { name, provide(candidate: T) { value ??= candidate; } } satisfies Discovery);
 	return value;
 }
+
+const ACTIVITY_CHANNEL = "pi:session:activity:v1";
+export interface SessionActivity { name: string; reason?: string }
+interface ActivityQuery { report(activity: SessionActivity): void }
+
+/** Observe detached work without cancelling it or starting a new agent turn.
+ * Providers keep reporting activity through asynchronous cancellation/cleanup. */
+export function registerSessionActivity(pi: Host, name: string, reason: () => string | undefined): () => void {
+	return pi.events.on(ACTIVITY_CHANNEL, (data) => {
+		const query = data as ActivityQuery;
+		let value: unknown;
+		try { value = reason(); }
+		catch { value = "activity could not be confirmed"; }
+		query.report({ name, ...(value === undefined ? {} : {
+			reason: typeof value === "string" && value.trim() ? value.slice(0, 512) : "activity could not be confirmed",
+		}) });
+	});
+}
+
+export function sessionActivities(pi: Host): SessionActivity[] {
+	const activities: SessionActivity[] = [];
+	pi.events.emit(ACTIVITY_CHANNEL, { report: (activity: SessionActivity) => activities.push(activity) } satisfies ActivityQuery);
+	return activities;
+}

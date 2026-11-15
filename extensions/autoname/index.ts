@@ -2,6 +2,7 @@ import { isPrimarySession } from "./session-policy.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadAutonameConfig } from "./config.ts";
 import { notifyFrontendEvent } from "./frontend.ts";
+import { registerSessionActivity } from "./capabilities.ts";
 import {
     AUTONAME_ENTRY_TYPE,
     extractNamingMessages,
@@ -85,6 +86,8 @@ export default function autoname(pi: ExtensionAPI): void {
     let generation = 0;
     let activeSessionId: string | undefined;
     let running: AbortController | undefined;
+    let activeRequests = 0;
+    registerSessionActivity(pi, "Autoname", () => activeRequests > 0 ? "session naming is still running" : undefined);
 
     const invalidate = (): void => {
         generation++;
@@ -106,6 +109,7 @@ export default function autoname(pi: ExtensionAPI): void {
         const sessionId = ctx.sessionManager.getSessionId();
         activeSessionId = sessionId;
 
+        activeRequests++;
         try {
             const config = await loadAutonameConfig();
             if (!isCurrent(run, sessionId, controller) || !config.enabled) return;
@@ -142,6 +146,7 @@ export default function autoname(pi: ExtensionAPI): void {
             if (!controller.signal.aborted) logFailure("naming request failed", error);
         } finally {
             if (running === controller) running = undefined;
+            activeRequests--;
         }
     };
 

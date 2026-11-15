@@ -39,16 +39,30 @@ func (m *Model) workingLine(t *tab) string {
 	if t.working.Active {
 		line = render.AnimateWorkingLine(line, m.cfg.Theme, m.frame)
 	}
-	if line == "" || t.dead || t.state.Compacting || t.sending || len(t.dialogs) > 0 {
+	if t.readOnly() {
+		status := render.Clean(t.ownershipStatus())
+		if t.cycle.presence.Busy && !t.cycle.presence.Uncertain && t.cycle.probeErr == nil {
+			line = render.AnimateWorkingLine(status, m.cfg.Theme, m.frame)
+		} else {
+			line = m.paint(status, m.cfg.Theme.Muted)
+		}
+	} else if m.status(t) == "working" {
+		// Preparation is presentation-only: native events still own run metrics.
+		if !t.working.Active {
+			line = render.AnimateWorkingLine("working", m.cfg.Theme, m.frame)
+		}
+	} else if line == "" || t.dead || t.state.Compacting || t.sending || len(t.dialogs) > 0 {
 		status := m.status(t)
 		if status == "Ready" || status == "ready" || strings.EqualFold(status, "queued") {
 			status = ""
+		} else if strings.EqualFold(status, "idle") {
+			status = "idle"
 		}
 		line = ""
 		if status != "" {
 			line = m.paint(render.Clean(status), m.cfg.Theme.Muted)
 		}
-	} else if t.status != "" && t.status != "Ready" && !strings.EqualFold(t.status, "queued") {
+	} else if t.status != "" && t.status != "Ready" && !strings.EqualFold(t.status, "queued") && !strings.EqualFold(t.status, "idle") {
 		line += " · " + m.paint(render.Clean(t.status), m.cfg.Theme.Muted)
 	}
 	keys := make([]string, 0, len(t.statuses))

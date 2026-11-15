@@ -127,14 +127,13 @@ func TestSessionGuardBeforeInputAndCancel(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
 	guardFile(t, tab, guardUser+`{"type":`)
-	// Initial editor input is held until asynchronous inspection completes.
-	cmd := m.editDraft(tab, "", tea.PasteMsg{Content: "blocked"})
-	if cmd == nil || tab.editor.Value() != "" {
-		t.Fatal("input accepted before inspection")
-	}
-	m.sessionGuardResult(cmd().(sessionGuardMsg))
+	// Draft editing is local and remains available before disk inspection.
+	m.editDraft(tab, "", tea.PasteMsg{Content: "draft"})
+	assertValue(t, tab, "draft")
+	tab.setValue("")
+	m.sessionGuardResult(guardInspect(t, m, tab, false, false))
 	if len(tab.dialogs) != 1 {
-		t.Fatal("empty draft did not get modal")
+		t.Fatal("known malformed history did not retain its send guard")
 	}
 	m.dialogKey(tab, tea.KeyPressMsg{Code: tea.KeyEscape}, "esc")
 	m.sessionGuardResult(guardInspect(t, m, tab, false, false))
@@ -235,11 +234,11 @@ func TestSessionGuardResetAndAsyncMutations(t *testing.T) {
 	tab.dialogs = nil
 	tab.state.File = filepath.Join(t.TempDir(), "other.jsonl")
 	guardFile(t, tab, guardUser+guardStop)
-	blocked, cmd := m.gateSession(tab)
-	if !blocked || cmd == nil {
-		t.Fatal("session switch did not reset gate")
+	blocked, _ := m.gateSession(tab)
+	if blocked {
+		t.Fatal("unknown history blocked a local draft before inspection")
 	}
-	m.sessionGuardResult(cmd().(sessionGuardMsg))
+	m.sessionGuardResult(guardInspect(t, m, tab, false, false))
 	if blocked, _ = m.gateSession(tab); blocked {
 		t.Fatal("completed session still gated")
 	}

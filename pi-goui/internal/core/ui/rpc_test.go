@@ -44,7 +44,7 @@ func TestUIRPCProcess(t *testing.T) {
 		data := any(map[string]any{})
 		switch kind {
 		case "get_state":
-			data = map[string]any{"sessionId": "fake", "thinkingLevel": "medium", "model": map[string]any{"id": "one", "provider": "fake"}}
+			data = map[string]any{"isStreaming": false, "isCompacting": false, "pendingMessageCount": 0, "sessionId": "fake", "thinkingLevel": "medium", "model": map[string]any{"id": "one", "provider": "fake"}}
 		case "get_entries":
 			data = map[string]any{"entries": []any{}, "leafId": nil}
 		case "get_commands":
@@ -53,6 +53,9 @@ func TestUIRPCProcess(t *testing.T) {
 			data = map[string]any{"models": []any{map[string]any{"id": "one", "provider": "fake"}, map[string]any{"id": "two", "provider": "fake"}}}
 		case "prompt":
 			data = map[string]any{"disposition": "accepted"}
+			if req["message"] == "extension handles this" {
+				data = map[string]any{"disposition": "handled"}
+			}
 		}
 		response := map[string]any{"type": "response", "id": req["id"], "command": kind, "success": true, "data": data}
 		if kind == "prompt" && strings.TrimSpace(fmt.Sprint(req["message"])) == "fail" {

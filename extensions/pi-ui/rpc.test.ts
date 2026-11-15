@@ -2,19 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createEventBus } from '@earendil-works/pi-coding-agent';
 import { registerExtensionRpc, registerRpcMethod, EXTENSION_RPC_PREFIX } from './rpc.ts';
+import { registerSessionActivity } from '../shared/capabilities.ts';
 
-function harness() {
+function harness(lifecycle = true) {
     let command: any;
     const events = createEventBus();
-    const pi = { events, registerCommand(name: string, value: unknown) { assert.equal(name, 'pi-ui-rpc'); command = value; } } as any;
+    const handlers = new Map<string, () => void>();
+    const pi = { events, on: lifecycle ? (name: string, handler: () => void) => handlers.set(name, handler) : undefined, registerCommand(name: string, value: unknown) { assert.equal(name, 'pi-ui-rpc'); command = value; } } as any;
     registerExtensionRpc(pi);
     const replies: any[] = [];
-    const ctx = { hasUI: true, mode: 'rpc', ui: { notify(message: string, level: string) {
+    const ctx = { hasUI: true, mode: 'rpc', isIdle: () => true, hasPendingMessages: () => false, waitForIdle: async () => {}, ui: { notify(message: string, level: string) {
         assert.equal(level, 'info');
         assert.ok(message.startsWith(EXTENSION_RPC_PREFIX));
         replies.push(JSON.parse(message.slice(EXTENSION_RPC_PREFIX.length)));
     } } } as any;
-    return { pi, ctx, replies, invoke: (value: unknown) => command.handler(JSON.stringify(value), ctx), command };
+    return { pi, ctx, replies, invoke: (value: unknown) => command.handler(JSON.stringify(value), ctx), command, handlers };
 }
 
 test('optional bridge routes explicit methods independent of registration order and unregisters', async () => {
@@ -66,4 +68,60 @@ test('bridge does not run capability methods outside RPC', async () => {
     h.ctx.mode = 'tui';
     await h.invoke({ id: 'one', method: 'example.write' });
     assert.deepEqual(h.replies, []);
+});
+
+test('activity priming keeps the session occupied through deferred idle completion without accumulating waiters', async () => {
+    const h = harness();
+    let idle = true, pending = false, waits = 0, done!: () => void;
+    let completion = new Promise<void>((resolve) => { done = resolve; });
+    h.ctx.isIdle = () => idle;
+    h.ctx.hasPendingMessages = () => pending;
+    h.ctx.waitForIdle = () => { waits++; return completion; };
+    const probe = async () => {
+        await h.invoke({ id: 'activity', method: 'session.activity' });
+        const reply = h.replies.pop();
+        assert.equal(reply.error, undefined);
+        return reply.result;
+    };
+    assert.deepEqual(await probe(), { version: 1, idle: true, reasons: [] });
+    assert.equal(waits, 0, 'priming never creates an idle waiter');
+    idle = false;
+    h.handlers.get('agent_start')!();
+    idle = true; // SDK has emitted agent_settled, but deferred work has not returned.
+    for (let i = 0; i < 5; i++) assert.equal((await probe()).idle, false);
+    assert.equal(waits, 1, 'only the observed run holds an idle waiter');
+    done();
+    await completion;
+    assert.equal((await probe()).idle, true);
+    pending = true;
+    assert.match((await probe()).reasons.join(' '), /queued/);
+    pending = false;
+    let active = true;
+    registerSessionActivity(h.pi, 'Worker', () => active ? 'cleaning up' : undefined);
+    assert.deepEqual((await probe()).reasons, ['Worker: cleaning up']);
+    active = false;
+    assert.equal((await probe()).idle, true);
+
+    completion = new Promise<void>((resolve) => { done = resolve; });
+    idle = false;
+    h.handlers.get('agent_start')!();
+    h.handlers.get('session_start')!();
+    idle = true;
+    assert.equal((await probe()).idle, true, 'a new session owns a fresh idle generation');
+    done();
+    await completion;
+    assert.equal((await probe()).idle, true, 'late old completion cannot change the new session');
+});
+
+test('activity query fails closed on unobserved runs and missing SDK idle support', async () => {
+    const h = harness();
+    h.handlers.get('agent_start')!();
+    await h.invoke({ id: 'late', method: 'session.activity' });
+    assert.match(h.replies.pop().result.reasons.join(' '), /not observed/);
+    h.ctx.waitForIdle = undefined;
+    await h.invoke({ id: 'old-sdk', method: 'session.activity' });
+    assert.equal(h.replies.pop().error.code, 'activity-unavailable');
+    const noLifecycle = harness(false);
+    await noLifecycle.invoke({ id: 'missing-lifecycle', method: 'session.activity' });
+    assert.equal(noLifecycle.replies.pop().error.code, 'activity-unavailable');
 });

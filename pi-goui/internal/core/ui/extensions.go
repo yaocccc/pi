@@ -7,19 +7,10 @@ import (
 	"pi-goui/internal/core/render"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions"
-	rpc "pi-goui/internal/runtime"
 	"time"
 )
 
 type extensionRuntime = extension.Runtime
-
-// Both desktop and Web hidden frontends link this composition point before
-// entering runtime's helper branch. Install only a factory: no UI or IO starts.
-func init() {
-	rpc.ConfigureSharedWorkingUsage(func() rpc.WorkingUsageObserver {
-		return extension.New(extensions.New()).NewUsage()
-	})
-}
 
 func (m *Model) initExtensions(t *tab) {
 	if m.extensions == nil {
@@ -62,7 +53,7 @@ func (m *Model) extensionControlView() extension.Control {
 	if t == nil {
 		return extension.Sessions(nil).Control(extension.ControlContext{})
 	}
-	return t.extensions.Control(extension.ControlContext{Blocked: t.dead || m.inspectorOpen() || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "", PointerKnown: m.sidebarHistory.pointerKnown, Hover: m.extensionControls.Hover, SidebarWidth: m.sidebarWidth(), MainWidth: m.mainWidth(), Width: m.width, Height: m.height, ModeRow: m.sidebarLayout().ModeRow, PointerX: m.sidebarHistory.pointerX, PointerY: m.sidebarHistory.pointerY, Theme: m.cfg.Theme})
+	return t.extensions.Control(extension.ControlContext{Blocked: t.dead || t.readOnly() || t.cycle.phase == cycleClosing || m.inspectorOpen() || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "", PointerKnown: m.sidebarHistory.pointerKnown, Hover: m.extensionControls.Hover, SidebarWidth: m.sidebarWidth(), MainWidth: m.mainWidth(), Width: m.width, Height: m.height, ModeRow: m.sidebarLayout().ModeRow, PointerX: m.sidebarHistory.pointerX, PointerY: m.sidebarHistory.pointerY, Theme: m.cfg.Theme})
 }
 func (m *Model) extensionPopupGeometry() (hitRect, footerPopupRect, bool) {
 	t, b, ok := m.extensionControlView().Geometry()
@@ -79,13 +70,13 @@ func (m *Model) extensionClickCommand(x, y int) (tea.Cmd, bool) {
 		return nil, handled
 	}
 	t := m.current()
-	if t == nil {
+	if t == nil || t.readOnly() || t.cycle.phase == cycleClosing {
 		return nil, true
 	}
-	var client extension.Client
-	if t.client != nil {
-		client = t.client
+	if t.client == nil || t.dead || t.resume.pending {
+		return m.beginCycle(t, &writeIntent{run: func() tea.Cmd { return control.Request(t.id, t.client, t.dead, choice, time.Now()) }}), true
 	}
+	var client extension.Client = t.client
 	return control.Request(t.id, client, t.dead, choice, time.Now()), true
 }
 func (m *Model) overlayExtensions(view string) string {

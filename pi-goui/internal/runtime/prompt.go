@@ -15,29 +15,10 @@ type ResponseError struct{ Command, Message string }
 func (e *ResponseError) Error() string { return fmt.Sprintf("pi %s: %s", e.Command, e.Message) }
 
 // SubmitPrompt merges and consumes the authoritative queue before sending a
-// normal Pi prompt. Shared clients execute both operations as one executor
-// transaction. Unknown outcomes return no draft to accidentally resend.
-func (c *Client) SubmitPrompt(ctx context.Context, payload map[string]any, draft string, mergeQueued bool) (string, error) {
-	return c.submitPrompt(ctx, payload, draft, mergeQueued, nil)
-}
-func (c *Client) submitPrompt(ctx context.Context, payload map[string]any, draft string, mergeQueued bool, sent func()) (string, error) {
-	if c.Shared() {
-		raw, err := c.Call(ctx, map[string]any{"type": "goui_submit_prompt", "payload": payload, "draft": draft, "mergeQueued": mergeQueued})
-		if err != nil {
-			return "", fmt.Errorf("prompt outcome unknown; not retried: %w", err)
-		}
-		var reply struct {
-			RestoreDraft string
-			Error        string
-		}
-		if err = json.Unmarshal(raw, &reply); err != nil {
-			return "", fmt.Errorf("prompt outcome unknown; invalid executor reply: %w", err)
-		}
-		if reply.Error != "" {
-			return reply.RestoreDraft, errors.New(reply.Error)
-		}
-		return reply.RestoreDraft, nil
-	}
+// normal Pi prompt on the exclusively owned backend. Unknown outcomes return
+// no draft to accidentally resend. The returned native response retains prompt
+// disposition (including extension-handled/queued input) for lifecycle decisions.
+func (c *Client) SubmitPrompt(ctx context.Context, payload map[string]any, draft string, mergeQueued bool) (string, json.RawMessage, error) {
 	command := make(map[string]any, len(payload)+1)
 	for k, v := range payload {
 		command[k] = v
@@ -45,7 +26,7 @@ func (c *Client) submitPrompt(ctx context.Context, payload map[string]any, draft
 	command["type"] = "prompt"
 	message, ok := command["message"].(string)
 	if !ok {
-		return draft, errors.New("prompt requires a string message")
+		return draft, nil, errors.New("prompt requires a string message")
 	}
 	restore := draft
 	if mergeQueued {
@@ -53,13 +34,13 @@ func (c *Client) submitPrompt(ctx context.Context, payload map[string]any, draft
 		if err != nil {
 			var rejected *ResponseError
 			if errors.As(err, &rejected) {
-				return draft, err
+				return draft, nil, err
 			}
-			return "", fmt.Errorf("queue outcome unknown; not retried: %w", err)
+			return "", nil, fmt.Errorf("queue outcome unknown; not retried: %w", err)
 		}
 		var queue struct{ Steering, FollowUp []string }
 		if err = json.Unmarshal(raw, &queue); err != nil {
-			return "", fmt.Errorf("removed queue unavailable; not retried: %w", err)
+			return "", nil, fmt.Errorf("removed queue unavailable; not retried: %w", err)
 		}
 		pending := append(queue.Steering, queue.FollowUp...)
 		if len(pending) > 0 {
@@ -73,13 +54,13 @@ func (c *Client) submitPrompt(ctx context.Context, payload map[string]any, draft
 			}
 		}
 	}
-	_, err := c.call(ctx, command, sent)
+	data, err := c.Call(ctx, command)
 	if err != nil {
 		var rejected *ResponseError
 		if errors.As(err, &rejected) {
-			return restore, err
+			return restore, nil, err
 		}
-		return "", fmt.Errorf("prompt outcome unknown; not retried: %w", err)
+		return "", nil, fmt.Errorf("prompt outcome unknown; not retried: %w", err)
 	}
-	return restore, nil
+	return restore, data, nil
 }

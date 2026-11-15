@@ -296,9 +296,9 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 		if !ok {
 			return nil
 		}
-		return call(t, "set_model", map[string]any{"provider": model.Provider, "modelId": model.ID})
+		return m.requestCall(t, "set_model", map[string]any{"provider": model.Provider, "modelId": model.ID})
 	case "thinking":
-		return call(t, "set_thinking_level", map[string]any{"level": value})
+		return m.requestCall(t, "set_thinking_level", map[string]any{"level": value})
 	case "branch-loading":
 		m.branchEpoch++
 		t.originJump = nil
@@ -306,7 +306,7 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 	case "fork":
 		return m.requestFork(t, value)
 	case "name":
-		return call(t, "set_session_name", map[string]any{"name": value})
+		return m.requestCall(t, "set_session_name", map[string]any{"name": value})
 	case "close":
 		if value != "yes" {
 			return nil
@@ -321,7 +321,7 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 
 // Ctrl+D closes an idle tab directly; /close and in-flight work require consent.
 func (m *Model) requestCloseSession(t *tab, confirm bool) tea.Cmd {
-	if confirm || t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.resume.submit != nil {
+	if confirm || t.cycle.phase == cycleStarting || t.resume.pending || t.cycle.intent != nil || (t.client != nil && t.cycle.phase == cycleActive && !m.opts.NoSession) || (t.readOnly() && (t.editor.Value() != "" || len(t.images) > 0)) || t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.resume.submit != nil {
 		d := m.newDialog("close", "Close this session?", "The saved history stays on disk. Its running task will be stopped.")
 		d.options = []option{{Label: "Cancel", Value: "no"}, {Label: "Close session", Value: "yes"}}
 		t.dialogs = append(t.dialogs, d)
@@ -371,19 +371,18 @@ func (m *Model) closeSession(t *tab) tea.Cmd {
 }
 
 func respond(t *tab, d *dialog, payload map[string]any) tea.Cmd {
-	if d.requestID == "" || t.client == nil || t.dead {
+	if d.requestID == "" || t.client == nil || t.dead || t.readOnly() || t.cycle.phase == cycleClosing {
 		return nil
 	}
-	c, id := t.client, t.id
+	c, id, generation := t.client, t.id, t.cycle.generation
+	t.cycle.inflight++
 	payload["type"] = "extension_ui_response"
 	payload["id"] = d.requestID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := c.Send(ctx, payload); err != nil {
-			return noticeMsg{id, err.Error()}
-		}
-		return nil
+		err := c.Send(ctx, payload)
+		return replyMsg{id: id, client: c, generation: generation, op: "extension_ui_response", err: err}
 	}
 }
 func (m *Model) extension(t *tab, raw json.RawMessage) tea.Cmd {
@@ -421,8 +420,7 @@ func (m *Model) extension(t *tab, raw json.RawMessage) tea.Cmd {
 		t.setValue(e.Text)
 		m.resizeEditor(t)
 	case "select", "confirm", "input", "editor":
-		// Replaying a still-pending shared request must not replace a local
-		// partial answer or stack the same question twice.
+		// Duplicate requests must not replace a partial answer or stack a question.
 		if e.ID != "" {
 			for _, existing := range t.dialogs {
 				if existing.requestID == e.ID {

@@ -25,11 +25,11 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('shared_resume_helpers', ROOT / 'script/test-shared-session.py')
+spec = importlib.util.spec_from_file_location('shared_resume_helpers', ROOT / 'script/test-session-ownership.py')
 shared = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(shared)
 HISTORY = 'SAVED-HISTORY-BEFORE-CONNECTION'
-BAD_STATUS = re.compile(r'\b(?:starting|stopped|stoped)\b|identity pending', re.I)
+BAD_STATUS = re.compile(r'\b(?:stopped|stoped)\b|identity pending', re.I)
 
 
 class Terminal(shared.Terminal):
@@ -100,11 +100,9 @@ class Suite(shared.Suite):
 
     def blank_ready(self, name):
         terminal = Terminal(self, name)
-        self.wait(lambda: 'resume-fixture' in terminal.text, name + ': blank backend ready')
-        self.wait(lambda: not BAD_STATUS.search(terminal.text), name + ': startup settled')
-        starts = [r for r in self.wire('start') if not r['saved']]
-        assert starts, 'blank fixture did not start'
-        assert all(not pathlib.Path(r['session']).exists() for r in starts), 'blank path unexpectedly persisted'
+        self.wait(lambda: '↵ send' in terminal.text and re.search(r'\bidle\b', terminal.text),
+                  name + ': blank local tab ready with idle status')
+        assert not self.wire('start'), 'opening a blank tab started Pi'
         return terminal
 
     def select_history(self, terminal, draft=False):
@@ -117,15 +115,15 @@ class Suite(shared.Suite):
         terminal.send('Resume acceptance')
         terminal.send('\r')
 
-    def preview_gated(self, terminal):
+    def preview_idle(self, terminal):
         self.watch = terminal
         self.wait(lambda: HISTORY in terminal.text, 'saved history visible before Pi ready')
-        self.wait(lambda: bool(self.wire('gate')), 'saved get_state reached external gate')
+        assert not self.wire('start'), 'history preview started Pi'
         assert not (self.root / 'release-state').exists()
         assert not self.wire('released'), 'fixture was already released'
         assert not self.commands('prompt'), 'unexpected prompt before connection ready'
         assert self.session.read_bytes() == self.saved_bytes, 'preview modified native saved history'
-        assert not BAD_STATUS.search(terminal.text), 'misleading resume status: ' + terminal.text
+        assert not BAD_STATUS.search(terminal.text) and 'Starting pi' not in terminal.text, 'misleading idle preview: ' + terminal.text
         self.pump(.35)
         assert all(not BAD_STATUS.search(f) for f in self.frames), 'transient starting/stopped during preview'
         self.dump()
@@ -138,6 +136,9 @@ class Suite(shared.Suite):
         terminal.send('FIRST-INTENT')
         self.wait(lambda: 'FIRST-INTENT' in terminal.editor, 'typing during blocked get_state')
         terminal.send('\r')
+        self.wait(lambda: bool(self.wire('gate')), 'explicit write reached the blocked get_state')
+        self.wait(lambda: 'working' in terminal.editor, 'working message visible while preparing submission')
+        assert not any(label in terminal.text for label in ('待发送', 'Starting pi', 'Loading current session'))
         terminal.send('LATER-LOCAL-DRAFT')
         self.wait(lambda: 'LATER-LOCAL-DRAFT' in terminal.editor, 'later draft while intent pending')
         assert not self.commands('prompt'), 'prompt escaped readiness gate'
@@ -153,37 +154,35 @@ class Suite(shared.Suite):
     def run_initial(self):
         terminal = Terminal(self, 'initial-saved', saved=True)
         self.watch = terminal
-        self.preview_gated(terminal)
+        self.preview_idle(terminal)
         self.first_send(terminal)
-        self.checkpoint('initial --session: native history precedes blocked get_state; editing/Enter retained once with later draft')
+        self.checkpoint('initial --session: idle native preview starts no Pi; explicit Enter waits for authoritative state and preserves later draft')
 
     def run_replace(self):
         sibling = self.blank_ready('other-live-blank')
         terminal = self.blank_ready('replace-blank')
-        assert len(self.wire('start')) == 2, 'blank sessions must be independent'
+        assert not self.wire('start'), 'blank sessions should be local views'
         self.select_history(terminal)
-        self.preview_gated(terminal)
+        self.preview_idle(terminal)
         self.first_send(terminal)
-        assert sibling.p.poll() is None and 'resume-fixture' in sibling.text
-        assert len(self.wire('start')) == 3, 'history started more than one backend'
-        self.checkpoint('empty native blank -> /resume: other unpersisted blank stays live, one history backend, no identity conflict')
+        assert sibling.p.poll() is None and '↵ send' in sibling.text and 'Idle' not in sibling.text
+        assert len(self.wire('start')) == 1, 'history started more than one backend'
+        self.checkpoint('empty native blank -> /resume: other blank stays local, only explicit history write starts Pi')
 
     def run_preserve(self):
         terminal = self.blank_ready('preserved-draft')
         terminal.send('ORIGINAL-BLANK-DRAFT')
         self.select_history(terminal, draft=True)
-        self.preview_gated(terminal)
+        self.preview_idle(terminal)
         terminal.send('HISTORY-LOCAL-DRAFT')
-        self.release()
-        self.wait(lambda: any(r['saved'] and r['command']['type'] == 'get_commands'
-                              for r in self.wire('command')), 'new history authoritative snapshot fetched')
+        assert not self.wire('start'), 'typing in a preview started Pi'
         terminal.send(b'\x1b[1;5A')  # Default app.session.previous (Ctrl+Up).
         self.wait(lambda: 'ORIGINAL-BLANK-DRAFT' in terminal.editor, 'original blank tab draft preserved')
         terminal.send(b'\x1b[1;5B')
         self.wait(lambda: 'HISTORY-LOCAL-DRAFT' in terminal.editor, 'resumed tab draft preserved')
         assert HISTORY in terminal.text
         assert not self.commands('prompt'), 'tab navigation sent a draft'
-        assert len(self.wire('start')) == 2, 'preserved blank plus history should use two backends'
+        assert not self.wire('start'), 'tab navigation started a backend'
         self.checkpoint('resume from a drafted blank opens a second tab; both local drafts survive tab navigation')
 
     def large_history(self):
@@ -246,7 +245,7 @@ class Suite(shared.Suite):
         x, y = target()
         os.write(terminal.master, ('\x1b[<35;%d;%dM' % (x, y)).encode())
         self.pump(1.0)  # Explicit prewarm interval; excluded from click-to-paint timing.
-        assert len(self.wire('start')) == 1, 'speculative preview started a Pi backend'
+        assert not self.wire('start'), 'speculative preview started a Pi backend'
         started = time.monotonic()
         os.write(terminal.master, ('\x1b[<0;%d;%dM\x1b[<0;%d;%dm' % (x, y, x, y)).encode())
         self.first_paint(terminal, started, 1.0)
@@ -257,8 +256,9 @@ class Suite(shared.Suite):
     def run_failure(self):
         (self.root / 'fail-state').touch()
         terminal = Terminal(self, 'failed-connection', saved=True)
-        self.preview_gated(terminal)
+        self.preview_idle(terminal)
         terminal.send('UNSENT-ON-FAILURE\r')
+        self.wait(lambda: bool(self.wire('gate')), 'explicit write reaches failing connection')
         terminal.send('LATER-FAILURE-DRAFT')
         self.release()
         self.wait(lambda: '连接失败' in terminal.text, 'real backend failure is clearly reported')

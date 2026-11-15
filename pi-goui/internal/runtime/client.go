@@ -1,5 +1,5 @@
-// Package runtime coordinates local instances and shared sessions using Pi's
-// existing JSONL protocol without modifying Pi's configuration.
+// Package runtime owns an exclusive native-session writer and Pi's existing
+// JSONL protocol without modifying Pi's configuration.
 package runtime
 
 import (
@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,14 +23,10 @@ type Config struct {
 	Bin, Cwd, AgentDir, SessionFile string
 	NoSession                       bool
 	Args                            []string
-	relayExtensions                 bool
-	environment                     []string
 }
 type Event struct {
-	Data    json.RawMessage
-	Err     error
-	owner   string // Captured at the backend transport edge, before response dispatch.
-	ordered func() // Internal response fence, consumed in the backend event FIFO.
+	Data json.RawMessage
+	Err  error
 }
 type reply struct {
 	data json.RawMessage
@@ -47,9 +44,13 @@ type Client struct {
 	stdin                io.WriteCloser
 	stdout               io.ReadCloser
 	stderr               *os.File
-	shared               *sharedConnection
-	idPrefix             string
-	relayExtensions      bool
+	lease                *SessionLease
+	sessionFile          string
+	closing              atomic.Bool
+	exitedBeforeClose    atomic.Bool
+	closeErr             error
+	waitErr              error
+	forcedShutdown       atomic.Bool
 	writes               chan *writeRequest
 	events               chan Event
 	eventBatches         chan []Event
@@ -61,25 +62,46 @@ type Client struct {
 	stderrDone           chan struct{}
 	mu                   sync.Mutex
 	pending              map[string]chan reply
-	orderedPending       map[string]func(reply)
 	extensionPending     map[string]chan reply
 	exitErr              error
 	stderrTail           []byte
 	next                 atomic.Uint64
-	eventOwner           atomic.Pointer[string]
 	closeOnce            sync.Once
 	killOnce             sync.Once
 	closeDone            chan struct{}
 }
 
 func Start(cfg Config) (*Client, error) {
-	if sharingEnabled.Load() && !cfg.NoSession {
-		return startShared(cfg)
+	cfg, err := prepareSessionConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
-	return startDirect(cfg)
+	if cfg.NoSession {
+		return startDirect(cfg)
+	}
+	lease, err := AcquireSession(cfg.AgentDir, cfg.SessionFile)
+	if err != nil {
+		return nil, err
+	}
+	if err = os.MkdirAll(filepath.Dir(cfg.SessionFile), 0700); err != nil {
+		_ = lease.Close()
+		return nil, err
+	}
+	if err = lease.prepareFile(); err != nil {
+		_ = lease.abortStart()
+		return nil, err
+	}
+	c, err := startLeased(cfg, lease)
+	if err != nil {
+		_ = lease.abortStart()
+		return nil, err
+	}
+	return c, nil
 }
 
-func startDirect(cfg Config) (*Client, error) {
+func startDirect(cfg Config) (*Client, error) { return startLeased(cfg, nil) }
+
+func startLeased(cfg Config, lease *SessionLease) (*Client, error) {
 	bin := cfg.Bin
 	if bin == "" {
 		bin = os.Getenv("PI_BIN")
@@ -103,9 +125,6 @@ func startDirect(cfg Config) (*Client, error) {
 	cmd := exec.Command(resolved, args...)
 	cmd.Dir = cfg.Cwd
 	cmd.Env = childEnvironment(cfg.AgentDir)
-	if cfg.environment != nil {
-		cmd.Env = append([]string(nil), cfg.environment...)
-	}
 	configureProcess(cmd)
 	inR, inW, err := os.Pipe()
 	if err != nil {
@@ -128,7 +147,16 @@ func startDirect(cfg Config) (*Client, error) {
 	cmd.Stdin = inR
 	cmd.Stdout = outW
 	cmd.Stderr = errW
-	c := &Client{cmd: cmd, relayExtensions: cfg.relayExtensions, stdin: inW, stdout: outR, stderr: errR, stderrDone: make(chan struct{}), writes: make(chan *writeRequest, 32), events: make(chan Event), eventBatches: make(chan []Event), batchNotify: make(chan struct{}), incoming: make(chan Event, 32), done: make(chan struct{}), stop: make(chan struct{}), readDone: make(chan struct{}), writeDone: make(chan struct{}), closeDone: make(chan struct{}), pending: make(map[string]chan reply)}
+	c := &Client{cmd: cmd, lease: lease, sessionFile: cfg.SessionFile, stdin: inW, stdout: outR, stderr: errR, stderrDone: make(chan struct{}), writes: make(chan *writeRequest, 32), events: make(chan Event), eventBatches: make(chan []Event), batchNotify: make(chan struct{}), incoming: make(chan Event), done: make(chan struct{}), stop: make(chan struct{}), readDone: make(chan struct{}), writeDone: make(chan struct{}), closeDone: make(chan struct{}), pending: make(map[string]chan reply)}
+	if lease != nil {
+		if err = lease.attach(cmd); err != nil {
+			for _, f := range []*os.File{inR, inW, outR, outW, errR, errW} {
+				f.Close()
+			}
+			return nil, err
+		}
+	}
+
 	if err = cmd.Start(); err != nil {
 		for _, f := range []*os.File{inR, inW, outR, outW, errR, errW} {
 			f.Close()
@@ -144,7 +172,11 @@ func startDirect(cfg Config) (*Client, error) {
 	go c.stderrLoop()
 	go func() {
 		err := cmd.Wait()
+		if !c.closing.Load() {
+			c.exitedBeforeClose.Store(true)
+		}
 		c.mu.Lock()
+		c.waitErr = err
 		if err == nil {
 			err = io.EOF
 		}
@@ -156,6 +188,13 @@ func startDirect(cfg Config) (*Client, error) {
 		c.stdin.Close()
 		c.kill()
 	}()
+	if lease != nil {
+		if err := lease.started(cmd.Process.Pid); err != nil {
+			c.setFailure(err)
+			_ = c.Close()
+			return nil, err
+		}
+	}
 	return c, nil
 }
 
@@ -183,11 +222,12 @@ func childEnvironment(agentDir string) []string {
 	return env
 }
 func (c *Client) PID() int {
-	if c.shared != nil {
-		return c.shared.pid
+	if c.cmd == nil || c.cmd.Process == nil {
+		return 0
 	}
 	return c.cmd.Process.Pid
 }
+func (c *Client) SessionFile() string { return c.sessionFile }
 
 // Events and EventBatches consume the same ordered stream. A consumer should
 // choose one API, not read both concurrently.
@@ -241,18 +281,8 @@ func (c *Client) failure() error {
 
 // Call returns response.data, not the outer response record. The caller owns its deadline.
 func (c *Client) Call(ctx context.Context, command map[string]any) (json.RawMessage, error) {
-	return c.call(ctx, command, nil)
-}
 
-// sent releases the executor's transaction only after the complete frame has
-// been written. Waiting for Pi's acknowledgement must not block abort or UI.
-func (c *Client) call(ctx context.Context, command map[string]any, sent func()) (json.RawMessage, error) {
-	return c.callOrdered(ctx, command, sent, nil)
-}
-
-// ordered runs on the broker event consumer at the response's exact wire position.
-func (c *Client) callOrdered(ctx context.Context, command map[string]any, sent func(), ordered func(reply)) (json.RawMessage, error) {
-	id := fmt.Sprintf("goui-%s%d", c.idPrefix, c.next.Add(1))
+	id := fmt.Sprintf("goui-%d", c.next.Add(1))
 	request := make(map[string]any, len(command)+1)
 	for k, v := range command {
 		request[k] = v
@@ -261,14 +291,8 @@ func (c *Client) callOrdered(ctx context.Context, command map[string]any, sent f
 	ch := make(chan reply, 1)
 	c.mu.Lock()
 	c.pending[id] = ch
-	if ordered != nil {
-		if c.orderedPending == nil {
-			c.orderedPending = make(map[string]func(reply))
-		}
-		c.orderedPending[id] = ordered
-	}
 	c.mu.Unlock()
-	defer func() { c.mu.Lock(); delete(c.pending, id); delete(c.orderedPending, id); c.mu.Unlock() }()
+	defer func() { c.mu.Lock(); delete(c.pending, id); c.mu.Unlock() }()
 	if err := c.Send(ctx, request); err != nil {
 		if ctx.Err() == nil {
 			select {
@@ -290,9 +314,6 @@ func (c *Client) callOrdered(ctx context.Context, command map[string]any, sent f
 		}
 		return nil, err
 	}
-	if sent != nil {
-		sent()
-	}
 	select {
 	case r := <-ch:
 		return r.data, r.err
@@ -311,6 +332,12 @@ func (c *Client) callOrdered(ctx context.Context, command map[string]any, sent f
 	}
 }
 func (c *Client) Send(ctx context.Context, command map[string]any) error {
+	if c.lease != nil {
+		switch command["type"] {
+		case "new_session", "switch_session", "fork":
+			return &ResponseError{Command: fmt.Sprint(command["type"]), Message: "close the writer and acquire the target session before changing sessions"}
+		}
+	}
 	data, err := json.Marshal(command)
 	if err != nil {
 		return err
@@ -399,6 +426,7 @@ func (c *Client) writeLoop() {
 // Invalidate synchronously, then kill rather than allowing graceful stdin drain
 // to deliver a timed-out command. Cleanup never waits on the calling writer.
 func (c *Client) failWrite(err error) {
+	c.forcedShutdown.Store(true)
 	c.setFailure(fmt.Errorf("pi RPC write failed: %w", err))
 	c.beginClose()
 	c.kill()
@@ -410,13 +438,7 @@ func (c *Client) readLoop() {
 	defer close(c.readDone)
 	defer c.stdout.Close()
 	scanner := bufio.NewScanner(c.stdout)
-	limit := nativeFrameLimit
-	if c.shared != nil {
-		// Match the broker's bounded state+entries snapshot envelope; native
-		// backend responses retain their smaller per-response limit.
-		limit = sharedFrameLimit
-	}
-	scanner.Buffer(make([]byte, 64*1024), limit)
+	scanner.Buffer(make([]byte, 64*1024), nativeFrameLimit)
 	for scanner.Scan() {
 		raw := bytes.TrimSuffix(scanner.Bytes(), []byte{'\r'})
 		if len(bytes.TrimSpace(raw)) == 0 {
@@ -436,38 +458,17 @@ func (c *Client) readLoop() {
 			}
 			continue
 		}
-		if envelope.Type == "goui_rpc_error" && c.shared != nil {
-			var message string
-			if err := json.Unmarshal(envelope.Message, &message); err != nil {
-				message = "invalid shared RPC error: " + err.Error()
-			}
-			err := errors.New(message)
-			if envelope.Fatal {
-				c.setFailure(err)
-			}
-			if !c.emit(Event{Err: err}) || envelope.Fatal {
-				return
-			}
-			continue
-		}
-		if envelope.Type == "extension_ui_request" && !c.relayExtensions && c.extensionReply(raw) {
+		if envelope.Type == "extension_ui_request" && c.extensionReply(raw) {
 			continue
 		}
 		if envelope.Type == "response" && envelope.ID != "" {
 			c.mu.Lock()
 			ch := c.pending[envelope.ID]
-			ordered := c.orderedPending[envelope.ID]
 			c.mu.Unlock()
 			if ch != nil {
 				r := reply{data: envelope.Data}
 				if !envelope.Success {
 					r.err = &ResponseError{Command: envelope.Command, Message: envelope.Error}
-				}
-				if ordered != nil {
-					// Charge retained responses to the same bounded FIFO as events.
-					if !c.emit(Event{Data: r.data, ordered: func() { ordered(r) }}) {
-						return
-					}
 				}
 				select {
 				case ch <- r:
@@ -476,29 +477,20 @@ func (c *Client) readLoop() {
 			}
 			continue
 		}
-		owner := ""
-		if scope := c.eventOwner.Load(); scope != nil {
-			owner = *scope
-		}
-		if !c.emit(Event{Data: append(json.RawMessage(nil), raw...), owner: owner}) {
+		if !c.emit(Event{Data: append(json.RawMessage(nil), raw...)}) {
 			return
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && !c.closing.Load() {
 		c.setFailure(fmt.Errorf("read pi stdout: %w", err))
+		c.forcedShutdown.Store(true)
 		c.kill()
 	}
-	if c.shared == nil {
-		c.finishProcessRead()
-	}
+	c.finishProcessRead()
 	select {
 	case <-c.stop:
 	default:
-		if c.shared != nil {
-			c.setFailure(errors.New("shared RPC connection closed"))
-		} else {
-			c.setFailure(errors.New("pi stdout closed"))
-		}
+		c.setFailure(errors.New("pi stdout closed"))
 		c.emit(Event{Err: c.failure()})
 	}
 }
@@ -514,6 +506,7 @@ func (c *Client) finishProcessRead() {
 		return
 	case <-time.After(2 * time.Second):
 		c.setFailure(errors.New("pi stdout closed before process exit"))
+		c.forcedShutdown.Store(true)
 		c.kill()
 		select {
 		case <-c.done:
@@ -538,11 +531,16 @@ func (c *Client) emit(e Event) bool {
 	case c.incoming <- e:
 		return true
 	case <-c.stop:
-		return false
+		// Close stops presentation, not the backend's final stdout writes.
+		// Keep draining until Wait completes; closing the pipe at this point
+		// could turn a clean dispose/flush into SIGPIPE and an unclean lease.
+		return true
 	}
 }
 
-// Queue independently of the UI so a background session never blocks stdout.
+// Buffer a bounded local burst, then apply ordinary pipe backpressure. A slow
+// view must not kill Pi or discard events. One legal native frame may cross the
+// soft byte limit; at most one further frame remains in readLoop.
 func (c *Client) eventLoop() {
 	defer close(c.events)
 	if c.eventBatches != nil {
@@ -566,25 +564,22 @@ func (c *Client) eventLoop() {
 				batches = c.eventBatches
 			}
 		}
+		input := in
+		if queue.count >= eventQueueLimit || queue.bytes >= eventQueueBytes {
+			input = nil
+		}
 		select {
 		case <-c.stop:
 			return
 		case <-batchNotify:
 			batchNotify = nil
-		case e, ok := <-in:
+		case e, ok := <-input:
 			if !ok {
 				in = nil
 			} else {
-				payloadBytes := len(e.Data) + len(e.owner)
+				payloadBytes := len(e.Data)
 				if e.Err != nil {
 					payloadBytes += len(e.Err.Error())
-				}
-				if c.shared != nil && !queue.accepts(payloadBytes) {
-					c.mu.Lock()
-					c.exitErr = queue.overflow("client", payloadBytes)
-					c.mu.Unlock()
-					c.beginClose()
-					return
 				}
 				queue.append(e, payloadBytes)
 			}
@@ -621,43 +616,71 @@ func (c *Client) stderrLoop() {
 
 func (c *Client) kill() {
 	c.killOnce.Do(func() {
-		if c.shared != nil {
-			_ = c.stdin.Close()
-		} else {
+		if c.cmd != nil {
 			killProcessGroup(c.cmd)
 		}
 	})
 }
 
-// Close is concurrent-safe, closes stdin for graceful disposal, then kills the
-// isolated process group after two seconds. Cmd.Wait has exactly one owner.
+// Close waits for actual process exit and descendant cleanup. Incomplete or
+// unexpected shutdown leaves durable uncertain ownership, never a false idle.
 func (c *Client) Close() error {
 	c.beginClose()
 	<-c.closeDone
-	return nil
+	return c.closeErr
 }
 
 func (c *Client) beginClose() {
 	c.closeOnce.Do(func() {
+		c.closing.Store(true)
 		close(c.stop)
 		go func() {
 			defer close(c.closeDone)
-			c.stdin.Close()
+			children, cleanupErr := captureDescendants(c.PID())
+			_ = c.stdin.Close()
+			exited := false
 			select {
 			case <-c.done:
+				exited = true
 			case <-time.After(2 * time.Second):
+				c.forcedShutdown.Store(true)
 				c.kill()
 				select {
 				case <-c.done:
+					exited = true
 				case <-time.After(time.Second):
 				}
 			}
 			c.kill()
-			c.stdout.Close()
+			cleanupErr = errors.Join(cleanupErr, finishDescendants(children))
+			_ = c.stdout.Close()
 			if c.stderr != nil {
-				c.stderr.Close()
+				_ = c.stderr.Close()
 			}
 			<-c.writeDone
+			if !exited {
+				cleanupErr = errors.Join(cleanupErr, errors.New("Pi did not exit after shutdown"))
+			}
+			if c.lease != nil {
+				c.mu.Lock()
+				waitErr := c.waitErr
+				c.mu.Unlock()
+				if waitErr != nil {
+					cleanupErr = errors.Join(cleanupErr, waitErr)
+				}
+				if c.forcedShutdown.Load() {
+					cleanupErr = errors.Join(cleanupErr, errors.New("Pi cleanup was forced; session writes may be incomplete"))
+				}
+				if c.exitedBeforeClose.Load() {
+					cleanupErr = errors.Join(cleanupErr, errors.New("Pi launcher exited before controlled shutdown; detached writers cannot be excluded"))
+				}
+				reason := ""
+				if cleanupErr != nil {
+					reason = cleanupErr.Error()
+				}
+				cleanupErr = errors.Join(cleanupErr, c.lease.finish(cleanupErr == nil, reason))
+			}
+			c.closeErr = cleanupErr
 		}()
 	})
 }

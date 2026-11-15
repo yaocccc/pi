@@ -40,6 +40,9 @@ type Capabilities struct {
 	InspectableCollection func(item session.Item) bool
 	// A fresh usage observer is created for each working run.
 	NewUsage func() Usage
+	// CheckRelease observes backend work that may outlive the main agent run.
+	// It must not start work, cancel it, refresh history, or wait for it to finish.
+	CheckRelease func(context.Context, Client) (ReleaseStatus, error)
 }
 
 // Client is the optional backend bridge; implementations must tolerate its absence.

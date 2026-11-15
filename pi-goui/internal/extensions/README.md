@@ -26,11 +26,13 @@ type Extension interface {
 
 [core/ui/extensions.go](../core/ui/extensions.go) 是核心唯一实现导入点，只以 `extension.New(extensions.New())` 组装 Runtime。其他核心使用方只消费中立接口，不暴露整个 Model、具体类型别名或可变全局 registry。
 
-该组合入口在启动时通过 [ConfigureSharedWorkingUsage](../runtime/working_snapshot.go) 为稳定执行者注入 `NewUsage` 工厂，helper 与普通 TUI 使用相同装配；不要在 runtime 增加第三方协议分支。共享工作行只传递汇总计数、时钟与 revision，不传输正文或回放完整工具结果；晚加入和原实例消费同一权威投影，独立模式仍使用同一累计算法。
+该组合入口给本地执行 TUI 的 working 累加器注入每轮独占的 `NewUsage` 工厂；runtime 不识别第三方载荷。独立只读 TUI 只刷新持久历史与占用状态，不回放流式工具结果、不补造当前轮统计；同一 TUI 的桌面/Web 镜像直接共用终端输出。
 
 WebUI 在网页终端中直接运行同一 TUI，复用上述扩展实现；无需浏览器专项适配或第二份扩展状态。
 
-跨进程 RPC 与会话所有权由 [runtime](../runtime/) 管理，不移入扩展装配层。独立 TUI 共享后端业务状态，但各自保留本地交互投影；问卷只有成功写入回答后才广播 resolved，失败不得提前清除。持久扩展状态按原生 `setStatus` / `setWidget` / `setTitle` 协议补给晚加入者，`set_editor_text` 不作持久广播回放。
+直接 RPC 与会话文件锁由 [runtime](../runtime/) 管理，不移入扩展装配层。问卷和控制操作只作用于持有会话锁的 TUI；独立只读查看者不得转发回答或修改后台状态。正常 idle 关闭 Pi 前，宿主通过中立的活动查询契约确认后台 worker、压缩及延迟写入结束；活动状态未知时保持占用并显示原因。
+
+[CheckRelease](../core/extension/release.go) 在首次权威状态就绪、执行写意图之前调用一次，初始化 Pi 的 idle 屏障；之后用同一查询观察完成状态。`Known=false` 仅用于未安装桥接能力时的原生状态回退；已有桥但不支持查询、响应不完整或查询失败不能伪装成 idle。`Sessions.Pending` 和 `InspectorPending` 也要覆盖前端已接受但尚未返回的扩展请求。Go 前端与配套桥接扩展须一起更新；未知第三方扩展的独立后台任务需要接入活动观察契约，不能假定原生 `isIdle` 包含它们。
 
 ## 依赖与实现归属
 

@@ -98,7 +98,7 @@ func (m *Model) requestSessionAction(origin *tab, selector *dialog, kind string)
 			selector.message = "A session operation is already in progress."
 			return nil
 		}
-		if target.client == nil && !target.dead || target.client != nil && target.state.ID == "" {
+		if target.cycle.phase == cycleStarting || target.cycle.phase == cycleClosing {
 			selector.message = "Wait until this session has finished starting."
 			return nil
 		}
@@ -175,19 +175,21 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 			d.message = "Selected session changed; cancel and select it again."
 			return nil
 		}
-		if target.client == nil && !target.dead {
+		if target.cycle.phase == cycleStarting || target.cycle.phase == cycleClosing {
 			d.message = "Wait until the session finishes starting."
 			return nil
 		}
-		if a.kind == "rename" && target.client == nil {
-			d.message = "Disconnected session: resume it before renaming."
+		if target.readOnly() {
+			d.message = target.ownershipStatus()
 			return nil
 		}
 		a.client = target.client
 		a.priorDead = target.dead
 		target.mutation = a
 		if a.kind == "delete" {
-			target.dead = true
+			if target.client != nil {
+				target.cycle.phase = cycleClosing
+			}
 		}
 	}
 	if m.sessionActions == nil {
@@ -196,39 +198,13 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 	m.sessionActions[a.key] = a
 	a.name = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(value))
 	origin.dialogs = origin.dialogs[1:]
-	// Saved rows may belong to a backend in another goui. Opening a temporary
-	// client joins that same session host before requesting a mutation lease.
-	cfg := rpc.Config{Bin: m.opts.Bin, Cwd: m.tabDirectory(origin), AgentDir: m.cfg.AgentDir, SessionFile: a.path, Args: append([]string(nil), m.opts.PiArgs...)}
-	pool := m.pool
+	agentDir := m.cfg.AgentDir
 	return func() tea.Msg {
 		result := sessionActionMsg{action: a}
-		var file *session.MutationFile
-		if a.path != "" && !(a.client != nil && a.kind == "rename") {
-			var err error
-			file, err = session.InspectMutationFile(a.path, a.sessionID)
-			if err != nil && !(a.client != nil && os.IsNotExist(err)) {
-				result.err = err
-				return result
-			}
-		} else if a.path == "" && a.targetID == 0 {
-			result.err = errors.New("no session file selected")
-			return result
-		}
-		client := a.client
-		temporary := client == nil && a.path != ""
-		if temporary {
-			var err error
-			client, err = pool.start(cfg)
-			if err != nil {
-				result.err = err
-				return result
-			}
-			defer client.Close()
-		}
-		if client != nil {
+		if a.client != nil && a.kind == "rename" {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			state, err := client.Call(ctx, map[string]any{"type": "get_state"})
+			raw, err := a.client.Call(ctx, map[string]any{"type": "get_state"})
 			if err != nil {
 				result.err = err
 				return result
@@ -237,7 +213,7 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 				ID   string `json:"sessionId"`
 				File string `json:"sessionFile"`
 			}
-			if err = json.Unmarshal(state, &current); err != nil {
+			if err = json.Unmarshal(raw, &current); err != nil {
 				result.err = err
 				return result
 			}
@@ -245,44 +221,42 @@ func (m *Model) beginSessionAction(origin *tab, d *dialog, value string) tea.Cmd
 				result.err = errors.New("RPC session changed since selection")
 				return result
 			}
-			if a.kind == "rename" && !temporary {
-				_, result.err = client.Call(ctx, map[string]any{"type": "set_session_name", "name": a.name})
-				return result
-			}
-			release, err := client.BeginFileMutation(ctx)
-			if err != nil {
-				result.err = err
-				return result
-			}
-			// The shared host may stop its sole writer when granting this
-			// lease. Do not issue RPC calls after acquisition. The lease
-			// outlives Client.Close and excludes attachments until release.
-			defer release()
-			if err = client.Close(); err != nil {
-				result.err = err
-				return result
-			}
-			result.closed = a.client != nil
+			_, result.err = a.client.Call(ctx, map[string]any{"type": "set_session_name", "name": a.name})
+			return result
 		}
-		if a.path != "" {
-			// Close can flush a final native record; accept appends, not replacement.
-			final, err := session.InspectMutationFile(a.path, a.sessionID)
-			if os.IsNotExist(err) && file == nil {
+		if a.client != nil {
+			result.err = a.client.Close()
+			result.closed = true
+			if result.err != nil {
 				return result
 			}
-			if err != nil {
-				result.err = err
-				return result
-			}
-			if file != nil && !file.SameFile(final) {
-				result.err = errors.New("session file was replaced while stopping its writer")
-				return result
-			}
+		}
+		if a.path == "" {
 			if a.kind == "rename" {
-				result.err = final.Rename(a.name)
-			} else {
-				result.err = final.Delete()
+				result.err = errors.New("save a message before renaming this session")
 			}
+			return result
+		}
+		// Even a successful presence poll cannot authorize a short write. Take
+		// the same OS lease as Start, then inspect the current native file.
+		lease, err := rpc.AcquireSession(agentDir, a.path)
+		if err != nil {
+			result.err = err
+			return result
+		}
+		defer lease.Close()
+		file, err := session.InspectMutationFile(a.path, a.sessionID)
+		if os.IsNotExist(err) && a.kind == "delete" && a.client != nil {
+			return result
+		}
+		if err != nil {
+			result.err = err
+			return result
+		}
+		if a.kind == "rename" {
+			result.err = file.Rename(a.name)
+		} else {
+			result.err = file.Delete()
 		}
 		return result
 	}
@@ -297,27 +271,23 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 	target := m.byID(a.targetID)
 	if target != nil && target.mutation == a {
 		target.mutation = nil
-		target.dead = a.priorDead || a.disconnected
+		if v.closed {
+			target.cycle.generation++
+			target.cycle.phase = cycleIdle
+			target.cycle.inflight = 0
+			target.client = nil
+			target.dead = false
+			target.state.Busy, target.state.Compacting, target.working.Active = false, false, false
+			target.sending, target.awaitingStart, target.interruptRequested = false, false, false
+			target.refreshing, target.refreshAgain = false, false
+			target.resume.pending, target.resume.authoritative = false, false
+		}
 	}
 	origin := m.byID(a.originID)
 	if v.err != nil {
 		message := "Session " + a.kind + " failed: " + v.err.Error()
 		if target != nil && v.closed {
-			// Keep history and draft visible, but retire the closed connection's ID so
-			// queued snapshots/replies cannot resurrect a stale writer or clear errors.
-			m.nextID++
-			target.id = m.nextID
-			target.client = nil
-			target.dead = true
-			target.state.Busy = false
-			target.state.Compacting = false
-			target.sending = false
-			target.awaitingStart = false
-			target.interruptRequested = false
-			target.refreshing = false
-			target.refreshAgain = false
-			target.working.Active = false
-			target.status = message + "; history and draft retained. Resume the history to reconnect."
+			target.status = message + "; history and draft retained."
 			m.patchSessionSelectors(a, target, false)
 		}
 		if origin == nil {
@@ -333,11 +303,7 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 				}
 			}
 		}
-		if target != nil && !target.dead && !v.closed && target.client != nil && target.client.Shared() {
-			// A refused lease keeps this session alive; catch changes received
-			// while the pending delete temporarily suppressed its UI updates.
-			return m.refresh(target)
-		}
+
 		return nil
 	}
 	if a.kind == "rename" {

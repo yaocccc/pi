@@ -12,15 +12,11 @@ import (
 	rpc "pi-goui/internal/runtime"
 )
 
-// A tab formats the shared executor's view or uses the same accumulator locally.
+// A tab accumulates and formats only its own backend events.
 type workingState rpc.WorkingState
 type workingUsageObserver = rpc.WorkingUsageObserver
 
 func (w *workingState) view() rpc.WorkingSnapshot { return (*rpc.WorkingState)(w).View() }
-func (w *workingState) applyShared(raw json.RawMessage) bool {
-	return (*rpc.WorkingState)(w).ApplyShared(raw)
-}
-
 func (w *workingState) apply(raw json.RawMessage, now time.Time) {
 	(*rpc.WorkingState)(w).Apply(raw, now)
 }

@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionManager, buildSessionProjection, estimateTokens } from "@earendil-works/pi-coding-agent";
+import { SessionManager, buildSessionProjection, estimateTokens, createEventBus } from "@earendil-works/pi-coding-agent";
+import { sessionActivities } from "../capabilities.ts";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createOnlineContextCompactExtension, ONLINE_METRICS_ENTRY } from "../extensions/online-context-compact/extension.ts";
 import { resolveOnlineSettings, resolveSummarySettings } from "../extensions/online-context-compact/settings.ts";
@@ -28,12 +29,13 @@ function harness({ summaryResult = () => fauxAssistantMessage("Checkpoint"), ...
   let model = { id: "test", provider: "faux", api: "faux", contextWindow: 1000000, maxTokens: 4096, reasoning: false };
   const parent = new AbortController();
   const pi = {
-    events: { emit: (_channel, { event }) => notices.push(event) },
+    events: createEventBus(),
     on(name, fn) { handlers.set(name, fn); },
     registerTool(tool) { tools.set(tool.name, tool); },
     getActiveTools() { return active; }, setActiveTools(next) { active = next; },
     appendEntry(type, data) { manager.appendCustomEntry(type, data); },
   };
+  pi.events.on("pi:frontend-event:v1", ({ event }) => notices.push(event));
   const ctx = {
     sessionManager: { getSessionFile: () => "persistent-test.jsonl", getSessionId: () => manager.getSessionId(), getBranch: () => manager.getBranch(), getLeafId: () => manager.getLeafId() },
     get model() { return model; }, signal: parent.signal, getSystemPrompt: () => "test", thinkingLevel: "off",
@@ -100,8 +102,10 @@ test("background decision prices verified replayed reasoning at an unchanged pla
 
 test("background summary does not block, survives another run, preserves new messages and current plan", async () => {
   const h = harness();
+  assert.deepEqual(sessionActivities(h.pi), [{ name: "Online compaction" }]);
   assert.equal(await h.boundary(), undefined); // Must resolve before the summary is released.
   await h.ready;
+  assert.match(sessionActivities(h.pi)[0].reason, /still running/);
   assert.equal(settle(h), undefined); // Not ready: never wait.
   h.handlers.get("before_agent_start")({}, h.ctx);
   h.manager().appendMessage({ role: "user", content: "NEW MESSAGE", timestamp: 4 });
@@ -110,6 +114,7 @@ test("background summary does not block, survives another run, preserves new mes
   const requestsBefore = restoreOnlineState(h.manager().getBranch()).requestCount;
   h.handlers.get("turn_start")({}, h.ctx);
   h.finish(); await tick();
+  assert.deepEqual(sessionActivities(h.pi), [{ name: "Online compaction" }], "a prepared idle checkpoint is not an active model request");
   assert.equal(h.requests.length, 1);
   assert.equal(h.notices.length, 1);
   assert.equal(h.notices[0].name, "context.ready");
@@ -391,8 +396,10 @@ for (const event of ["session_start", "session_tree", "session_before_tree", "se
     await h.ready;
     await h.handlers.get(event)(event === "input" ? { streamingBehavior: "steer", text: "CORRECTION: different task" } : {}, h.ctx);
     assert.equal(h.signal().aborted, true);
+    assert.match(sessionActivities(h.pi)[0].reason, /still running/, "abort does not finish a pending summary");
     h.finish();
     await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(sessionActivities(h.pi), [{ name: "Online compaction" }]);
     assert.equal(await pending, undefined);
     assert.equal(await h.handlers.get("turn_end")({ outcome: "completed", message: fauxAssistantMessage("final"), toolResults: [], entries: [] }, h.ctx), undefined);
   });

@@ -33,22 +33,24 @@ type resumeSubmitReadyMsg struct {
 }
 
 type resumePreviewMsg struct {
-	owner    *tab
-	client   *rpc.Client
-	file     string
-	revision uint64
-	header   session.Header
-	prepared *session.PreparedSnapshot
-	stamp    resumePreviewStamp
-	err      error
+	owner      *tab
+	client     *rpc.Client
+	file       string
+	revision   uint64
+	generation uint64
+	header     session.Header
+	prepared   *session.PreparedSnapshot
+	stamp      resumePreviewStamp
+	err        error
 }
 
 func (m *Model) previewSession(t *tab) tea.Cmd {
-	if !t.resume.pending || t.state.File == "" {
+	if t.state.File == "" || t.client != nil || t.cycle.previewPending || t.cycle.phase == cycleClosing {
 		return nil
 	}
 	owner, client, file, revision := t, t.client, resumePreviewPath(t.state.File), t.revision
-	v := resumePreviewMsg{owner: owner, client: client, file: file, revision: revision}
+	t.cycle.previewPending = true
+	v := resumePreviewMsg{owner: owner, client: client, file: file, revision: revision, generation: t.cycle.generation}
 	p := &m.resumePreload
 	if cached := p.cached; cached != nil && cached.file == file && cached.stamp.current(file) {
 		v.header, v.prepared, v.err, v.stamp = cached.header, cached.prepared, cached.err, cached.stamp
@@ -75,23 +77,31 @@ func (m *Model) previewSession(t *tab) tea.Cmd {
 
 func (m *Model) receiveResumePreview(v resumePreviewMsg) tea.Cmd {
 	t := m.byID(v.owner.id)
-	if t != v.owner || t.resume.authoritative || t.revision != v.revision || resumePreviewPath(t.state.File) != v.file || (v.client != nil && t.client != v.client) {
+	if t != v.owner || t.cycle.generation != v.generation || resumePreviewPath(t.state.File) != v.file || t.client != v.client {
+		return nil
+	}
+	t.cycle.previewPending = false
+	if t.resume.authoritative || t.revision != v.revision {
 		return nil
 	}
 	if v.err == nil && v.stamp.info != nil && !v.stamp.current(v.file) {
-		return m.previewSession(t)
+		return nil // The next presence poll retries a concurrently appended file.
 	}
 	if v.err != nil {
-		if !t.resume.failed {
+		if !t.resume.failed && !t.readOnly() && !t.emptyNewHistory(v.err) {
 			t.status = "暂时无法读取会话历史：" + v.err.Error()
 		}
 		return nil
 	}
 	t.state.ApplySnapshot(v.prepared)
+	t.state.Busy, t.state.Compacting = false, false
+	t.state.Steering, t.state.FollowUp = nil, nil
+	t.cycle.preview = v.stamp
+	t.revision++
 	t.origin = v.header
 	t.resume.preview = true
 	if !t.resume.failed {
-		t.status = ""
+		t.status = t.ownershipStatus()
 	}
 	// Do not touch the editor, attachments, draft revision or scroll position.
 	t.invalidateDocument()
@@ -127,7 +137,7 @@ func (m *Model) flushResumeSubmission(t *tab) tea.Cmd {
 	}
 	// A slow connect may outlive the inspection performed at Enter. Apply the
 	// same idle-history guard again without substituting a newer editor draft.
-	if !t.ownRunActive() {
+	if !t.ownRunActive() && t.state.File != "" && !(t.newSession && t.state.MessageCount == 0 && len(t.state.Items) == 0) {
 		pending.checking = true
 		v := resumeSubmitReadyMsg{owner: t, client: t.client, file: t.state.File, pending: pending}
 		return func() tea.Msg {
@@ -195,7 +205,7 @@ func (m *Model) restoreResumeDraft(t *tab, pending *resumeSubmission) {
 func (m *Model) failResume(t *tab, err error) {
 	t.resume.pending = false
 	t.resume.failed = true
-	m.restoreResumeSubmission(t)
+	m.restoreCycleIntent(t)
 	t.status = "连接会话失败：" + err.Error() + "；历史和未发送内容已保留"
 }
 

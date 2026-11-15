@@ -122,10 +122,15 @@ func (m *Model) receiveResumePreload(v resumePreloadMsg) tea.Cmd {
 	}
 	var cmds []tea.Cmd
 	for _, waiter := range waiters {
-		if t := m.byID(waiter.owner.id); t != waiter.owner || t.resume.authoritative || t.revision != waiter.revision || resumePreviewPath(t.state.File) != waiter.file || (waiter.client != nil && waiter.client != t.client) {
+		if t := m.byID(waiter.owner.id); t != waiter.owner || t.cycle.generation != waiter.generation || resumePreviewPath(t.state.File) != waiter.file || waiter.client != t.client {
+			continue
+		}
+		waiter.owner.cycle.previewPending = false
+		if waiter.owner.resume.authoritative || waiter.owner.revision != waiter.revision {
 			continue
 		}
 		if !valid {
+			waiter.owner.cycle.previewPending = false
 			cmds = append(cmds, m.previewSession(waiter.owner))
 			continue
 		}

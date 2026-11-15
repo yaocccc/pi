@@ -45,7 +45,7 @@ func (c *Client) CallExtension(ctx context.Context, method string, params any) (
 	if !available {
 		return nil, ErrExtensionUnavailable
 	}
-	id := fmt.Sprintf("goui-ext-%s%d", c.idPrefix, c.next.Add(1))
+	id := fmt.Sprintf("goui-ext-%d", c.next.Add(1))
 	body, err := json.Marshal(struct {
 		ID     string `json:"id"`
 		Method string `json:"method"`

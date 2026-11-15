@@ -9,7 +9,7 @@ import (
 )
 
 func TestEscapeAbortsActiveSessionBeforeCompletionsAndSearch(t *testing.T) {
-	for _, state := range []string{"streaming", "tool", "compacting", "sending", "preflight", "shared-late-join"} {
+	for _, state := range []string{"streaming", "tool", "compacting", "sending", "preflight"} {
 		t.Run(state, func(t *testing.T) {
 			m := testModel(t, "")
 			tab := m.current()
@@ -24,12 +24,7 @@ func TestEscapeAbortsActiveSessionBeforeCompletionsAndSearch(t *testing.T) {
 				tab.sending = true
 			case "preflight":
 				tab.awaitingStart = true
-			case "shared-late-join":
-				tab.resume.pending = true
-				tab.working.applyShared(json.RawMessage(`{"type":"goui_working_snapshot","gouiWorking":{"revision":1,"active":true,"present":true,"started":"2026-01-01T00:00:00Z"}}`))
-				if !tab.working.Active || tab.state.Busy {
-					t.Fatal("fixture must represent a late join without agent_start")
-				}
+
 			}
 			tab.state.Steering = []string{"keep queue"}
 			tab.setValue("/cpt")

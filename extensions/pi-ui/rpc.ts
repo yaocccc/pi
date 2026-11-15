@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
-import { getCapability, registerCapability } from '../shared/capabilities.ts';
+import { getCapability, registerCapability, sessionActivities } from '../shared/capabilities.ts';
 
 export const EXTENSION_RPC_COMMAND = 'pi-ui-rpc';
 export const EXTENSION_RPC_PREFIX = 'pi-ui:rpc:v1:';
@@ -22,6 +22,54 @@ export function registerExtensionRpc(pi: ExtensionAPI): void {
     const key = 'pi-ui.rpc.bridge:v1';
     if (getCapability(pi, key)) return;
     registerCapability(pi, key, true);
+    let generation = 0;
+    let waitForIdle: (() => Promise<void>) | undefined;
+    let waiting = false;
+    let unobservedRun = false;
+    const reset = () => { generation++; waitForIdle = undefined; waiting = false; unobservedRun = false; };
+    const observeRun = () => {
+        if (waiting) return;
+        if (!waitForIdle) { unobservedRun = true; return; }
+        const owner = generation;
+        waiting = true;
+        unobservedRun = false;
+        try {
+            // Capture while Pi is busy. Calling waitForIdle only after settled
+            // would bypass the SDK resolver and miss its deferred actions.
+            void waitForIdle().then(() => {
+                if (owner === generation) waiting = false;
+            }, () => {
+                if (owner === generation) { waiting = false; unobservedRun = true; }
+            });
+        } catch {
+            waiting = false;
+            unobservedRun = true;
+        }
+    };
+    const lifecycleAvailable = typeof pi.on === 'function';
+    if (lifecycleAvailable) {
+        pi.on('session_start', reset);
+        pi.on('session_shutdown', reset);
+        pi.on('agent_start', observeRun);
+    }
+    registerRpcMethod(pi, 'session.activity', async (_params, ctx) => {
+        if (!lifecycleAvailable || typeof ctx.isIdle !== 'function' || typeof ctx.hasPendingMessages !== 'function' || typeof ctx.waitForIdle !== 'function') {
+            throw Object.assign(new Error('Pi idle barrier is unavailable'), { code: 'activity-unavailable' });
+        }
+        // The frontend primes this once before admitting writes. Busy probes
+        // may also attach to the current run, but never await it or add waiters.
+        waitForIdle = () => ctx.waitForIdle();
+        if (!ctx.isIdle()) observeRun();
+        const reasons: string[] = [];
+        if (waiting) reasons.push('Pi is finishing its run and deferred actions');
+        if (unobservedRun) reasons.push('Pi run completion was not observed; keep this session open');
+        if (!ctx.isIdle()) reasons.push('Pi is running or compacting');
+        if (ctx.hasPendingMessages()) reasons.push('Pi has queued messages');
+        for (const activity of sessionActivities(pi)) {
+            if (activity.reason) reasons.push(`${activity.name}: ${activity.reason}`);
+        }
+        return { version: 1, idle: reasons.length === 0, reasons };
+    });
     pi.registerCommand(EXTENSION_RPC_COMMAND, {
         description: 'Optional extension UI RPC bridge (JSON request)',
         handler: async (args, ctx) => {

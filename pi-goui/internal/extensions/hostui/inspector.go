@@ -27,6 +27,8 @@ type Inspector struct {
 }
 type InspectorView = extension.InspectorView
 
+func (p *Inspector) Pending() bool { return p.Worker != nil && p.Worker.Pending }
+
 func NewInspector(item session.Item, key string, thinking bool, client worker.RPCClient, tools *render.ToolViews) (*Inspector, bool) {
 	if key == "" {
 		return nil, false

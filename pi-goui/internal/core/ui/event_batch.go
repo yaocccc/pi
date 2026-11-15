@@ -40,9 +40,7 @@ func streamUpdate(event rpc.Event) bool {
 }
 
 func applyWorkingEvent(t *tab, raw json.RawMessage) {
-	if t.client == nil || !t.client.Shared() || !t.working.applyShared(raw) {
-		t.working.apply(raw, time.Now())
-	}
+	t.working.apply(raw, time.Now())
 }
 
 // Only adjacent stream updates share a projection. Control events, unknown
@@ -50,10 +48,6 @@ func applyWorkingEvent(t *tab, raw json.RawMessage) {
 // and see the fully projected state preceding them.
 func (m *Model) applyEventBatch(t *tab, events []rpc.Event) (cmds []tea.Cmd, renderNow bool) {
 	for i := 0; i < len(events); {
-		if cmd := m.sharedHistorySnapshot(t, events[i]); cmd != nil {
-			t.snapshotTail = append([]rpc.Event(nil), events[i+1:]...)
-			return append(cmds, cmd), true
-		}
 		if streamUpdate(events[i]) {
 			end := i + 1
 			for end < len(events) && streamUpdate(events[end]) {
@@ -91,9 +85,6 @@ func (m *Model) applySingleEvent(t *tab, event rpc.Event) (cmds []tea.Cmd, rende
 	if len(event.Data) == 0 {
 		return cmds, false
 	}
-	if handled, cmd := m.sharedSessionEvent(t, event.Data); handled {
-		return append(cmds, cmd), true
-	}
 	var env struct{ Type string }
 	_ = json.Unmarshal(event.Data, &env)
 	wasWorking := t.working.Active
@@ -101,9 +92,6 @@ func (m *Model) applySingleEvent(t *tab, event rpc.Event) (cmds []tea.Cmd, rende
 		t.workingStart = len(t.state.Items)
 	}
 	applyWorkingEvent(t, event.Data)
-	if env.Type == "goui_working_snapshot" {
-		return cmds, false
-	}
 	if env.Type == "extension_ui_request" {
 		return append(cmds, m.extension(t, event.Data)), false
 	}
@@ -135,7 +123,10 @@ func (m *Model) applySingleEvent(t *tab, event rpc.Event) (cmds []tea.Cmd, rende
 	return cmds, false
 }
 
-func (m *Model) closeEventStream(t *tab, err error) {
+func (m *Model) closeEventStream(t *tab, err error) tea.Cmd {
+	if t.cycle.phase == cycleClosing {
+		return nil // Close's actual-wait result alone releases this cycle.
+	}
 	if err != nil {
 		t.lastEventErr = err
 	}
@@ -143,20 +134,24 @@ func (m *Model) closeEventStream(t *tab, err error) {
 		t.mutation.disconnected = true
 	}
 	t.revision++
-	t.dead = true
-	t.state.Busy = false
-	t.sending = false
+	t.state.Busy, t.state.Compacting = false, false
+	t.sending, t.awaitingStart, t.working.Active = false, false, false
 	if t.resume.pending {
-		err := t.lastEventErr
-		if err == nil {
-			err = errors.New("连接在初始化完成前关闭")
+		failure := t.lastEventErr
+		if failure == nil {
+			failure = errors.New("connection closed during initialization")
 		}
-		m.failResume(t, err)
+		m.failResume(t, failure)
 	} else {
-		t.status = "pi stopped"
-		if t.lastEventErr != nil {
-			t.status += " · " + t.lastEventErr.Error()
-		}
-		t.status += " · /new to start another session"
+		m.restoreCycleIntent(t)
+		t.status = "pi stopped · history and draft retained"
 	}
+	t.dead = true
+	t.resume.pending = false
+	if t.lastEventErr != nil && !t.resume.failed {
+		t.status += " · " + t.lastEventErr.Error()
+	}
+	// Reap the old writer and retain its lease until runtime confirms exit.
+	// Never replay an operation with an unknown outcome.
+	return m.closeCycle(t)
 }

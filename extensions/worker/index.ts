@@ -10,7 +10,7 @@ import { captureWorkerSession, type WorkerSessionSnapshot } from "./session.ts";
 import { beginWorkerShutdown, createWorkerOwner, executeTask } from "./process.ts";
 import { workerTaskScopesConflict } from "./security.ts";
 import { saveWorkerSettings } from "./settings.ts";
-import { registerCapability } from "./capabilities.ts";
+import { registerCapability, registerSessionActivity } from "./capabilities.ts";
 import { WorkerTranscriptReader } from "./transcript-reader.ts";
 import { notifyFrontendEvent } from "./frontend.ts";
 import { PRESETS, WORKER_CAPABILITY, type WorkerCapability, type WorkerSessionView, type WorkerStateChange } from "./api.ts";
@@ -141,6 +141,7 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 	};
 	const transcripts = new WorkerTranscriptReader(agentDir);
 	let session = createSession([], true);
+	registerSessionActivity(pi, "Worker", () => session.runtime.busy ? "tasks are running, queued, or cleaning up" : undefined);
 	registerCapability<WorkerCapability>(pi, WORKER_CAPABILITY, {
 		readTranscript: (request) => transcripts.read(request),
 		getSession: () => session.view,

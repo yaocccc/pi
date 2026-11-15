@@ -221,8 +221,10 @@ func TestCodexFastFailureAndPerTabState(t *testing.T) {
 	if m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != "" {
 		t.Fatal("new backend inherited another tab's state")
 	}
-	first.extensions[0].(*hostui.Session).Codex.Pending = true
-	m.Update(hostui.CodexResult{ID: first.id, Version: first.extensions[0].(*hostui.Session).Codex.Version, State: codexState("ultrafast")})
+	working, _ := codexClient(t, "normal")
+	first.client = working
+	request := first.extensions[0].(*hostui.Session).Request(first.id, working, false, "ultrafast", time.Now())
+	m.Update(request())
 	if m.current() == first || m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != "" || first.extensions[0].(*hostui.Session).Codex.State.Level != "ultrafast" {
 		t.Fatal("response applied to wrong tab")
 	}

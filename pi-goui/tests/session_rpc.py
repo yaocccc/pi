@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline JSONL Pi fixture for script/test-shared-session.py; no model/tool calls."""
+"""Offline JSONL Pi fixture for script/test-session-ownership.py; no model/tool calls."""
 import json
 import os
 import pathlib
@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 
-ROOT = pathlib.Path(os.environ['GOUI_SHARED_TEST_ROOT'])
+ROOT = pathlib.Path(os.environ['GOUI_SESSION_TEST_ROOT'])
 SESSION = pathlib.Path(sys.argv[sys.argv.index('--session') + 1])
 PID = os.getpid()
 LOCK = threading.RLock()
@@ -15,9 +15,9 @@ STOP = threading.Event()
 BUSY = False
 PENDING = None
 CURRENT = None
-SNAPSHOT_BURST = False
-MODEL = {'id': 'shared-fixture', 'name': 'Shared fixture', 'provider': 'test', 'contextWindow': 200000}
-ENTRIES = [json.loads(s) for s in SESSION.read_text().splitlines() if s.strip()]
+KEEP_ALIVE = False
+MODEL = {'id': 'session-fixture', 'name': 'Session fixture', 'provider': 'test', 'contextWindow': 200000}
+ENTRIES = [json.loads(s) for s in SESSION.read_text().splitlines() if s.strip()] if SESSION.exists() else []
 ENTRIES = [e for e in ENTRIES if e.get('type') != 'session']
 
 
@@ -41,6 +41,10 @@ def append_message(msg):
     entry = {'type': 'message', 'id': str(len(ENTRIES) + 1),
              'parentId': ENTRIES[-1]['id'] if ENTRIES else None, 'message': msg}
     ENTRIES.append(entry)
+    SESSION.parent.mkdir(parents=True, exist_ok=True)
+    if not SESSION.exists() or SESSION.stat().st_size == 0:
+        SESSION.write_text(json.dumps({'type': 'session', 'version': 3, 'id': 'ownership-e2e',
+                                       'timestamp': '2026-01-01T00:00:00Z', 'cwd': str(ROOT / 'cwd')}) + '\n')
     with SESSION.open('a') as out:
         out.write(json.dumps(entry) + '\n')
 
@@ -80,7 +84,7 @@ def advance_progress():
 
 
 def control():
-    global SNAPSHOT_BURST
+    global KEEP_ALIVE
     path = ROOT / 'control.jsonl'
     offset = 0
     while not STOP.wait(.025):
@@ -101,12 +105,13 @@ def control():
                     advance_progress()
                 elif cmd['type'] == 'event':
                     emit(cmd['event'])
-                elif cmd['type'] == 'snapshot_burst':
-                    SNAPSHOT_BURST = True
-                    log('snapshot_burst_armed')
+                elif cmd['type'] == 'keep_alive_after_eof':
+                    KEEP_ALIVE = True
+                    log('keep_alive')
 
 
-log('start', birth=pathlib.Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19])
+log('loaded', texts=[part.get('text', '') for e in ENTRIES for part in e.get('message', {}).get('content', []) if isinstance(part, dict)])
+log('start', session=str(SESSION), birth=pathlib.Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19])
 threading.Thread(target=control, daemon=True).start()
 try:
     for line in sys.stdin:
@@ -116,28 +121,16 @@ try:
             typ = req['type']
             data = {}
             if typ == 'get_state':
-                data = {'sessionId': 'shared-e2e', 'sessionFile': str(SESSION), 'sessionName': 'Shared acceptance',
+                data = {'sessionId': 'ownership-e2e', 'sessionFile': str(SESSION), 'sessionName': 'Ownership acceptance',
                         'model': MODEL, 'thinkingLevel': 'medium', 'isStreaming': BUSY,
+                        'isCompacting': False, 'pendingMessageCount': 0,
                         'steeringMessages': [], 'followUpMessages': [], 'messageCount': len(ENTRIES)}
             elif typ == 'get_entries':
                 data = {'entries': ENTRIES, 'leafId': ENTRIES[-1]['id'] if ENTRIES else None}
-                if SNAPSHOT_BURST:
-                    SNAPSHOT_BURST = False
-                    assert CURRENT is not None and BUSY
-                    # A deterministic wire fence: one delta before the history
-                    # reply, four after it, without sleeps or model activity.
-                    for index in range(5):
-                        if index == 1:
-                            emit({'type': 'response', 'command': typ, 'id': req['id'], 'success': True, 'data': data})
-                        CURRENT['content'][0]['text'] += '|'
-                        emit({'type': 'message_update', 'message': CURRENT,
-                              'assistantMessageEvent': {'type': 'text_delta', 'contentIndex': 0, 'delta': '|'}})
-                    log('snapshot_burst_complete')
-                    continue
             elif typ == 'get_messages':
                 data = {'messages': [e['message'] for e in ENTRIES if e['type'] == 'message']}
             elif typ == 'get_session_stats':
-                data = {'sessionId': 'shared-e2e', 'sessionFile': str(SESSION), 'totalMessages': len(ENTRIES),
+                data = {'sessionId': 'ownership-e2e', 'sessionFile': str(SESSION), 'totalMessages': len(ENTRIES),
                         'tokens': {'input': 10, 'output': 5, 'total': 15}, 'cost': 0}
             elif typ == 'get_available_models':
                 data = {'models': [MODEL]}
@@ -162,5 +155,9 @@ try:
                 complete()
             emit({'type': 'response', 'command': typ, 'id': req.get('id'), 'success': True, 'data': data})
 finally:
+    if KEEP_ALIVE:
+        log('orphan')
+        while not STOP.wait(.1):
+            pass
     STOP.set()
     log('stop')

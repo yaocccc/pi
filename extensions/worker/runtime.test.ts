@@ -102,6 +102,7 @@ test("concurrency cap and writer overlap are based on actual execution", async (
 
 test("invocation abort waits for cleanup, cancellation wins over late success, and old signals detach", async () => {
 	const runtime = new WorkerRuntime(conflicts);
+	assert.equal(runtime.busy, false);
 	const cleanup = gate();
 	const batch = start(runtime, [task("a.ts"), task("a.ts")], async (running) => {
 		await new Promise<void>((resolve) => running.controller.signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -117,7 +118,9 @@ test("invocation abort waits for cleanup, cancellation wins over late success, a
 	assert.equal(returned, false);
 	assert.equal(batch.tasks[0].state, "running");
 	assert.equal(batch.tasks[1].state, "finished");
+	assert.equal(runtime.busy, true, "abort does not release the session while cleanup still owns its paths");
 	cleanup.resolve(); await waiting;
+	assert.equal(runtime.busy, false);
 	assert.equal(batch.tasks[0].result?.failure.category, "cancelled");
 	assert.equal(batch.tasks[0].result?.execution.termination_source, "invocation_abort");
 	runtime.cancel(batch.id);

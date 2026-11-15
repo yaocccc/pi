@@ -17,6 +17,7 @@ func (Adapter) Capabilities() extension.Capabilities {
 		NewSession:       func() extension.Session { return &Session{} },
 		SessionMessageID: SessionMessageID,
 		NewUsage:         func() extension.Usage { return &Usage{} },
+		CheckRelease:     checkRelease,
 		OpenDialog: func(h extension.DialogHost, v extension.DialogView, title, payload string) (extension.DialogHandler, string) {
 			if protocol.Dialog(title) == "" {
 				return nil, ""

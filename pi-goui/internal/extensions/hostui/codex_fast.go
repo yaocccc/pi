@@ -13,6 +13,7 @@ import (
 	"pi-goui/internal/extensions/internal/protocol"
 	"pi-goui/internal/extensions/toolrender/cards"
 	rpc "pi-goui/internal/runtime"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -57,6 +58,7 @@ type CodexState struct {
 	Checked time.Time
 	Pending bool
 	Version uint64
+	client  extension.Client
 }
 type CodexResult struct {
 	ID      int
@@ -64,6 +66,7 @@ type CodexResult struct {
 	State   codexfast.State
 	Setting bool
 	Err     error
+	client  extension.Client
 }
 
 func (c *CodexState) Mode(dead bool) string {
@@ -73,7 +76,14 @@ func (c *CodexState) Mode(dead bool) string {
 	return ""
 }
 func (c *CodexState) Request(id int, client extension.Client, dead bool, level string, now time.Time) tea.Cmd {
-	if client == nil || dead || c.Pending {
+	if client == nil || dead {
+		return nil
+	}
+	if reflect.ValueOf(c.client) != reflect.ValueOf(client) {
+		c.client, c.Pending, c.Checked = client, false, time.Time{}
+		c.Version++
+	}
+	if c.Pending {
 		return nil
 	}
 	if level == "" && !c.Checked.IsZero() && now.Sub(c.Checked) < 5*time.Second {
@@ -92,10 +102,13 @@ func (c *CodexState) Request(id int, client extension.Client, dead bool, level s
 		} else {
 			state, err = codexfast.Set(ctx, client, level)
 		}
-		return CodexResult{ID: id, Version: version, State: state, Setting: level != "", Err: err}
+		return CodexResult{ID: id, Version: version, State: state, Setting: level != "", Err: err, client: client}
 	}
 }
 func (c *CodexState) Apply(v CodexResult, dead bool, notify func(string)) {
+	if reflect.ValueOf(c.client) != reflect.ValueOf(v.client) {
+		return
+	}
 	c.Pending = false
 	if dead {
 		return

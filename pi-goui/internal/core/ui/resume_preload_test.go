@@ -215,10 +215,11 @@ func TestResumePreloadInvalidatesFileIdentityAndMetadata(t *testing.T) {
 				}
 			}
 			retry := m.receiveResumePreview(pending)
-			if tab.resume.preview || len(tab.state.Items) != 0 || retry == nil {
+			if tab.resume.preview || len(tab.state.Items) != 0 || retry != nil {
 				t.Fatal("changed file was published from delayed warm hit")
 			}
-			fresh := retry().(resumePreviewMsg)
+			// A changing writer is retried by the next foreground poll, not a parse loop.
+			fresh := m.previewSession(tab)().(resumePreviewMsg)
 			if fresh.prepared == cached.prepared {
 				t.Fatal("invalid cache was reused")
 			}

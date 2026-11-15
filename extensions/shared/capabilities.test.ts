@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
-import { getCapability, registerCapability } from "./capabilities.ts";
+import { getCapability, registerCapability, registerSessionActivity, sessionActivities } from "./capabilities.ts";
 import { FRONTEND_EVENT, notifyFrontendEvent } from "./frontend.ts";
 
 test("discovery is optional, bus-local, load-order independent and removable", () => {
@@ -13,6 +13,19 @@ test("discovery is optional, bus-local, load-order independent and removable", (
 	assert.equal(getCapability(second, "example"), undefined);
 	remove();
 	assert.equal(getCapability(first, "example"), undefined);
+});
+
+test("session activity is synchronous, bus-local, removable, and fails closed on unknown state", () => {
+	const pi = { events: createEventBus() }, other = { events: createEventBus() };
+	let busy = true;
+	const remove = registerSessionActivity(pi, "Worker", () => busy ? "cleaning up" : undefined);
+	registerSessionActivity(pi, "Broken", () => { throw new Error("private failure"); });
+	assert.deepEqual(sessionActivities(pi), [{ name: "Worker", reason: "cleaning up" }, { name: "Broken", reason: "activity could not be confirmed" }]);
+	assert.deepEqual(sessionActivities(other), []);
+	busy = false;
+	assert.deepEqual(sessionActivities(pi)[0], { name: "Worker" });
+	remove();
+	assert.equal(sessionActivities(pi).length, 1);
 });
 
 test("frontend facts are available without UI and observers cannot fail a capability", () => {

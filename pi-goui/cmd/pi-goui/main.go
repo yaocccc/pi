@@ -20,9 +20,6 @@ import (
 )
 
 func run() error {
-	if handled, err := rpc.RunSharedSessionHelper(os.Args[1:]); handled {
-		return err
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -48,7 +45,7 @@ func run() error {
 	fs.BoolVar(&cont, "c", false, "resume latest session")
 	fs.BoolVar(&check, "check", false, "check real RPC without sending a prompt or saving a session")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: pi-goui [flags] [-- additional pi flags]\nIndependent pi frontend · one RPC process per open session")
+		fmt.Fprintln(fs.Output(), "Usage: pi-goui [flags] [-- additional pi flags]\nIndependent pi frontend · exclusive execution with read-only session viewers")
 		fs.PrintDefaults()
 	}
 	if err = fs.Parse(args); err != nil {
@@ -149,15 +146,9 @@ func run() error {
 		fmt.Printf("RPC OK · model=%s/%s · thinking=%s · streaming=%v · full-history=yes\n", s.Model.Provider, s.Model.ID, s.Thinking, raw["isStreaming"])
 		return nil
 	}
-	rpc.EnableSessionSharing()
 	if sharing {
 		return runShared(opts, cfg.AgentDir)
 	}
-	member, err := rpc.JoinSessionMember(cfg.AgentDir)
-	if err != nil {
-		return err
-	}
-	defer member.Close()
 	model := ui.New(opts, cfg)
 	defer model.Close()
 	defer fmt.Fprint(os.Stdout, ansi.SetPointerShape("default"))

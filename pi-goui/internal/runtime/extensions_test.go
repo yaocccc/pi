@@ -78,7 +78,7 @@ func extensionClient(t *testing.T, mode string) (*Client, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := Start(Config{Bin: executable, Args: []string{"-test.run=^TestExtensionRPCProcess$", "--"}, Cwd: root, AgentDir: root})
+	c, err := Start(Config{NoSession: true, Bin: executable, Args: []string{"-test.run=^TestExtensionRPCProcess$", "--"}, Cwd: root, AgentDir: root})
 	if err != nil {
 		t.Fatal(err)
 	}

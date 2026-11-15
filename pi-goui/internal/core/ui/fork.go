@@ -52,14 +52,14 @@ func (v forkSnapshotMsg) prepare() forkSnapshotMsg {
 }
 
 func (m *Model) requestFork(t *tab, selected string) tea.Cmd {
-	if t.forkPending {
+	if t.forkPending || t.readOnly() || t.cycle.phase == cycleStarting || t.cycle.phase == cycleClosing {
 		return nil
 	}
 	if t.mutation != nil || m.reservedSession(t.state.File) {
 		t.notify("请等待当前会话修改完成后再创建分支")
 		return nil
 	}
-	if t.client == nil || t.dead || m.opts.NoSession || t.state.File == "" || t.state.ID == "" {
+	if t.dead || m.opts.NoSession || t.state.File == "" || t.state.ID == "" {
 		t.notify("当前会话尚未保存，无法创建分支")
 		return nil
 	}
@@ -78,13 +78,23 @@ func (m *Model) requestFork(t *tab, selected string) tea.Cmd {
 	t.forkPending = true
 	t.forkSequence++
 	v := forkSnapshotMsg{id: t.id, sequence: t.forkSequence, revision: t.revision, path: t.state.File, sourceID: t.state.ID, cwd: t.state.Cwd, name: session.DisplayName(t.state), selected: selected, client: t.client, history: t.state.ForkCheckpoint()}
-	client := t.client
+	client, agentDir := t.client, m.cfg.AgentDir
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		// Never send fork/switch_session to the original process: those commands
 		// replace its session and would remove the original from Active.
-		v.entries, v.err = client.Call(ctx, map[string]any{"type": "get_entries"})
+		if client != nil {
+			v.entries, v.err = client.Call(ctx, map[string]any{"type": "get_entries"})
+		} else {
+			lease, err := rpc.AcquireSession(agentDir, v.path)
+			if err != nil {
+				v.err = err
+				return v
+			}
+			defer lease.Close()
+			v.entries, v.err = session.ReadFile(v.path)
+		}
 		return v.prepare()
 	}
 }
@@ -99,7 +109,7 @@ func (m *Model) forkSnapshot(v forkSnapshotMsg) tea.Cmd {
 		t.notify("创建分支失败：" + v.err.Error())
 		return nil
 	}
-	if t.dead || t.client == nil || t.client != v.client || m.opts.NoSession || t.state.File != v.path || t.state.ID != v.sourceID || t.mutation != nil || m.reservedSession(v.path) {
+	if t.dead || t.client != v.client || m.opts.NoSession || t.state.File != v.path || t.state.ID != v.sourceID || t.mutation != nil || m.reservedSession(v.path) {
 		t.forkPending = false
 		t.notify("会话已变化，请重新选择分支消息")
 		return nil
@@ -175,7 +185,7 @@ func forkChoice(t *tab, id, text string) option {
 
 func (m *Model) forkCreated(v forkCreatedMsg) tea.Cmd {
 	t := m.byID(v.id)
-	if v.client != nil {
+	if v.sourceID != "" {
 		if t == nil || !t.forkPending || t.forkSequence != v.sequence {
 			return nil
 		}
