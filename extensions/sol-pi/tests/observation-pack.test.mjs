@@ -6,6 +6,8 @@ import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createObservationPackExtension } from "../extensions/observation-pack/index.ts";
 import { registerOnlineTools } from "../extensions/online-context-compact/tools.ts";
 import { runtimeRoot } from "../runtime-paths.ts";
@@ -224,7 +226,8 @@ test("standalone pack and paged recall preserve UTF-8 data and stored message hi
   const directory = await mkdtemp(join(tmpdir(), "op-refactor-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { tool, contextHandler } = setup();
-  const ctx = { sessionManager: { getSessionDir: () => directory, getSessionId: () => "op-refactor" } };
+  const ctx = { sessionManager: { getSessionDir: () => directory, getSessionId: () => "op-refactor",
+    getBranch: () => [{ type: "message", message }] } };
   const original = `first\n${"large observation 编译🙂\n".repeat(1100)}last\n`;
   const message = { role: "toolResult", toolCallId: "op-test", toolName: "bash", isError: false, content: [{ type: "text", text: original }] };
   const project = async () => (await contextHandler({ messages: [message] }, ctx)).messages[0].content[0].text;
@@ -311,14 +314,18 @@ test("one OP instance isolates temporary sessions and send counts, and refuses u
   const roots = new Set();
   t.after(async () => { for (const root of roots) await rm(root, { recursive: true, force: true }); });
   const { tool, contextHandler } = setup();
+  const histories = new Map();
   const contexts = [0, 1].map(() => {
     const id = randomUUID();
-    return { sessionManager: { getSessionDir: () => "", getSessionId: () => id } };
+    return { sessionManager: { getSessionDir: () => "", getSessionId: () => id, getBranch: () => histories.get(id) ?? [] } };
   });
   for (const ctx of contexts) roots.add(runtimeRoot(ctx));
   const original = "isolated observation\n".repeat(2000);
   const message = { role: "toolResult", toolCallId: "same-call", toolName: "bash", isError: false, content: [{ type: "text", text: original }] };
-  const project = async ctx => (await contextHandler({ messages: [message] }, ctx)).messages[0].content[0].text;
+  const project = async ctx => {
+    histories.set(ctx.sessionManager.getSessionId(), [{ type: "message", message }]);
+    return (await contextHandler({ messages: [message] }, ctx)).messages[0].content[0].text;
+  };
   assert.equal(await project(contexts[0]), original);
   assert.equal(await project(contexts[0]), original);
   const packed = await project(contexts[0]);
@@ -335,6 +342,77 @@ test("one OP instance isolates temporary sessions and send counts, and refuses u
     for (const badId of ["../escape", "obs_" + "f".repeat(24) + "/../escape", "obs_" + "f".repeat(23), "obs_" + "F".repeat(24)]) {
       await assert.rejects(tool.execute("unsafe", { id: badId }, undefined, undefined, ctx), /Unknown observation id/);
     }
+  }
+});
+
+for (const persistent of [false, true]) test(`SDK ${persistent ? "persistent" : "in-memory"} compaction then fork rebuilds inherited observations from the raw branch`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "op-compacted-fork-"));
+  const roots = new Set();
+  t.after(async () => {
+    for (const root of roots) await rm(root, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true });
+  });
+  const manager = persistent ? SessionManager.create(directory, join(directory, "sessions")) : SessionManager.inMemory(directory);
+  const ctx = { sessionManager: manager };
+  const parentRoot = runtimeRoot(ctx);
+  roots.add(parentRoot);
+  const { tool, contextHandler } = setup();
+  const original = `head\n${"编译🙂 exact bytes ".repeat(2200)}\ntail\n`;
+  const message = { role: "toolResult", toolCallId: "inherited-large", toolName: "read", isError: false,
+    content: [{ type: "text", text: original }], timestamp: 2 };
+  manager.appendMessage({ role: "user", content: "read", timestamp: 1 });
+  manager.appendMessage(fauxAssistantMessage(fauxToolCall("read", {}, { id: message.toolCallId }), { stopReason: "toolUse" }));
+  manager.appendMessage(message);
+  const id = createObservation(message, parentRoot).id;
+  await contextHandler({ messages: manager.buildSessionProjection().messages }, ctx);
+  const parentRecall = await tool.execute("parent-recall", { id }, undefined, undefined, ctx);
+  assert.equal(parentRecall.details.id, id);
+  assert.equal(await readFile(createObservation(message, parentRoot).filePath, "utf8"), original);
+
+  const kept = manager.appendMessage({ role: "user", content: `Remember observation ${id}`, timestamp: 3 });
+  const forkPoint = manager.appendCompaction(`Stored observation ${id}`, kept, 20000);
+  const foreign = { ...message, toolCallId: "abandoned-branch", content: [{ type: "text", text: "foreign\n".repeat(3000) }] };
+  manager.appendMessage(foreign);
+  await contextHandler({ messages: manager.buildSessionProjection().messages }, ctx);
+  const foreignId = createObservation(foreign, parentRoot).id;
+  manager.branch(forkPoint);
+  await assert.rejects(tool.execute("abandoned", { id: foreignId }, undefined, undefined, ctx), /Unknown observation id/,
+    "an archive still on disk cannot authorize a result outside the active branch");
+  const beforeFork = JSON.stringify(manager.getBranch());
+  manager.createBranchedSession(forkPoint);
+  const childRoot = runtimeRoot(ctx);
+  roots.add(childRoot);
+  assert.notEqual(childRoot, parentRoot);
+  assert.ok(manager.getBranch().some(entry => entry.type === "message" && entry.message.toolCallId === message.toolCallId));
+  const projection = manager.buildSessionProjection().messages;
+  assert.ok(!projection.some(result => result.role === "toolResult" && result.toolCallId === message.toolCallId));
+  assert.ok(!manager.getBranch().some(entry => entry.type === "message" && entry.message.toolCallId === foreign.toolCallId));
+  const childPath = createObservation(message, childRoot).filePath;
+  await assert.rejects(stat(childPath), { code: "ENOENT" });
+  await contextHandler({ messages: projection }, ctx);
+  await assert.rejects(stat(childPath), { code: "ENOENT" }, "projected context cannot rebuild the compacted result");
+
+  let offset = 0, recalled = "", pages = 0;
+  for (;;) {
+    const result = await tool.execute("child-recall", { id, offset }, undefined, undefined, ctx);
+    const text = result.content[0].text;
+    assert.ok(Buffer.byteLength(text) <= 16 * 1024);
+    assert.ok(countLines(text) <= 400);
+    assert.equal(result.details.offset, offset);
+    recalled += text.slice(text.indexOf("\n", text.indexOf("\n") + 1) + 1);
+    pages++;
+    if (result.details.eof) break;
+    assert.ok(result.details.nextOffset > offset);
+    offset = result.details.nextOffset;
+  }
+  assert.ok(pages > 1);
+  assert.equal(recalled, original);
+  assert.equal(await readFile(childPath, "utf8"), original);
+  assert.equal(await readFile(createObservation(message, parentRoot).filePath, "utf8"), original);
+  assert.equal(JSON.stringify(manager.getBranch()), beforeFork, "recall never edits the original history");
+  for (const missing of [foreignId, "obs_" + "f".repeat(24)]) {
+    await assert.rejects(tool.execute("missing", { id: missing }, undefined, undefined, ctx), /Unknown observation id/);
+    await assert.rejects(stat(join(childRoot, "observation-pack", "objects", `${missing}.txt`)), { code: "ENOENT" });
   }
 });
 

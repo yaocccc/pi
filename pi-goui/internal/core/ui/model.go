@@ -55,6 +55,14 @@ type tab struct {
 	images                                                                         []map[string]any
 	imagePending                                                                   int
 	imageGeneration                                                                uint64
+	// Shared snapshots pause consumption at an ordered history fence. Only the
+	// remainder of the current bounded batch is retained here; the transport
+	// keeps enforcing its existing backlog budget while preparation runs.
+	snapshotRequest uint64
+	snapshotOwner   *snapshotMsg
+	snapshotPaused  bool
+	snapshotTail    []rpc.Event
+
 	// revision protects asynchronous snapshots; draftRevision protects failed submissions.
 	revision, draftRevision uint64
 	title                   string
@@ -315,6 +323,8 @@ type replyMsg struct {
 	deferred      bool // Local intent captured before the first authoritative snapshot.
 }
 type snapshotMsg struct {
+	request                         uint64 // Nonzero for a shared, ordered history fence.
+	metadataRevision                uint64 // Event metadata checkpoint before get_state.
 	id                              int
 	revision                        uint64
 	state, entries, stats, commands json.RawMessage
@@ -392,6 +402,22 @@ func (m *Model) refresh(t *tab) tea.Cmd {
 	t.refreshAgain = false
 	id, c, file, revision := t.id, t.client, t.state.File, t.revision
 	sourceID := t.state.ID
+	if c.Shared() {
+		t.snapshotRequest++
+		s := snapshotMsg{id: id, revision: revision, client: c, file: file, sourceID: sourceID, request: t.snapshotRequest, metadataRevision: t.state.MetadataRevision()}
+		t.snapshotOwner = &s
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_, err := c.Call(ctx, map[string]any{"type": "goui_get_snapshot", "request": s.request})
+			if err == nil {
+				return nil // Preparation starts when the ordered event reaches the UI.
+			}
+			result := s // The owner token shared with the UI remains immutable.
+			result.err, result.preparationDone = err, true
+			return result
+		}
+	}
 	preparation := t.state.SnapshotPreparation()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -509,6 +535,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		t.client = v.client
+		t.snapshotOwner, t.snapshotTail, t.snapshotPaused = nil, nil, false
 		t.lastEventErr = nil
 		if v.err != nil {
 			t.dead = true
@@ -530,11 +557,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t == nil || (v.client != nil && v.client != t.client) {
 			return m, nil
 		}
-		if !v.closed && t.client != nil {
-			cmds = append(cmds, nextEventCommand(t.id, t.client))
-		}
 		var eventCmds []tea.Cmd
 		eventCmds, renderNow = m.applyEventBatch(t, v.events)
+		if !v.closed && t.client != nil && !t.snapshotPaused {
+			cmds = append(cmds, nextEventCommand(t.id, t.client))
+		}
 		cmds = append(cmds, eventCmds...)
 		if v.closed {
 			m.closeEventStream(t, v.err)
@@ -552,12 +579,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applySnapshotMetadata(v)
 	case snapshotMsg:
 		t := m.byID(v.id)
+		if v.request != 0 {
+			if t == nil || t.snapshotOwner == nil || t.snapshotOwner.request != v.request || t.client != v.client {
+				return m, nil
+			}
+			t.snapshotOwner = nil
+			t.refreshing = false
+			if t.snapshotPaused {
+				t.snapshotPaused = false
+				tail := eventBatchMsg{id: t.id, client: t.client, events: t.snapshotTail}
+				t.snapshotTail = nil
+				cmds = append(cmds, func() tea.Msg { return tail })
+			}
+		}
 		if t == nil || (v.client != nil && (t.client != v.client || t.state.File != v.file || t.state.ID != v.sourceID)) {
-			return m, nil
+			return m, tea.Batch(cmds...)
 		}
 		t.refreshing = false
 		if v.err != nil {
 			t.status = "Refresh: " + v.err.Error()
+			if v.request != 0 {
+				// A failed request has no snapshot to validate or retry on every
+				// delta. Surface initialization failure instead of a busy loop.
+				if t.resume.pending {
+					m.failResume(t, v.err)
+				}
+				return m, tea.Batch(cmds...)
+			}
 		}
 		if !t.dead && v.revision == t.revision && len(v.commands) > 0 {
 			var c struct{ Commands []command }
@@ -618,7 +666,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.inspectSession(t, false, false, time.Now()))
 		// During a run, keep consuming live events rather than spin on snapshots
 		// that immediately become stale. agent_settled requests the final refresh.
-		if t.refreshAgain && !t.state.Busy && !t.state.Compacting {
+		// An ordered initialization can retry a local revision change: live
+		// deltas cannot starve preparation beyond its next FIFO fence.
+		if t.refreshAgain && (!t.ownRunActive() || (v.request != 0 && t.resume.pending)) {
 			cmds = append(cmds, m.refresh(t))
 		}
 	case sessionGuardMsg:

@@ -48,12 +48,10 @@ export default (pi: ExtensionAPI) => {
         { pattern: /\b(gh[pousr]_[a-zA-Z0-9]{36,})\b/g, replacement: '[GITHUB_TOKEN_REDACTED]' },
         { pattern: /\b(xox[baprs]-[a-zA-Z0-9-]{10,})\b/g, replacement: '[SLACK_TOKEN_REDACTED]' },
         { pattern: /\b(AKIA[A-Z0-9]{16})\b/g, replacement: '[AWS_KEY_REDACTED]' },
-        {
-            pattern: /\b(private[_-]?key|wallet[_-]?key|evm[_-]?private[_-]?key)\s*[=:]\s*['"]?(?:0x)?[a-fA-F0-9]{64}['"]?/gi,
-            replacement: '$1=[WEB3_PRIVATE_KEY_REDACTED]',
-        },
-        { pattern: /\b0x[a-fA-F0-9]{64}\b/g, replacement: '[WEB3_PRIVATE_KEY_REDACTED]' },
-        { pattern: /\b[a-fA-F0-9]{64}\b/g, replacement: '[WEB3_PRIVATE_KEY_REDACTED]' },
+        // Tool-derived 32-byte hex values are treated conservatively, including
+        // public hashes/bytes32: their shape cannot distinguish them from keys.
+        // This hook never processes user messages.
+        { pattern: /\b(?:0x)?[a-f0-9]{64}\b/gi, replacement: '[WEB3_PRIVATE_KEY_REDACTED]' },
         {
             pattern: /\b(api[_-]?key|apikey)\s*[=:]\s*['"]?([a-zA-Z0-9_-]{20,})['"]?/gi,
             replacement: '$1=[REDACTED]',
@@ -69,8 +67,8 @@ export default (pi: ExtensionAPI) => {
         },
         { pattern: /(mongodb(\+srv)?:\/\/[^:]+:)[^@]+(@)/gi, replacement: '$1[REDACTED]$3' },
         { pattern: /(postgres(ql)?:\/\/[^:]+:)[^@]+(@)/gi, replacement: '$1[REDACTED]$3' },
-        { pattern: /(mysql:\/\/[^:]+:)[^@]+(@)/gi, replacement: '$1[REDACTED]$3' },
-        { pattern: /(redis:\/\/[^:]+:)[^@]+(@)/gi, replacement: '$1[REDACTED]$3' },
+        { pattern: /(mysql:\/\/[^:]+:)[^@]+(@)/gi, replacement: '$1[REDACTED]$2' },
+        { pattern: /(redis:\/\/[^:]+:)[^@]+(@)/gi, replacement: '$1[REDACTED]$2' },
         {
             pattern: /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END \1PRIVATE KEY-----/g,
             replacement: '[PRIVATE_KEY_REDACTED]',
@@ -86,13 +84,8 @@ export default (pi: ExtensionAPI) => {
     ];
 
     pi.on('tool_result', async (event, ctx) => {
-        if (event.isError) return undefined;
-
-        if (event.toolName === 'read' && typeof event.input.path === 'string') {
+        if (!event.isError && event.toolName === 'read' && typeof event.input.path === 'string') {
             const filePath = event.input.path;
-            if (/(^|\/)\.env\.example$/i.test(filePath)) {
-                return undefined;
-            }
             for (const pattern of sensitiveFiles) {
                 if (pattern.test(filePath)) {
                     notifyFrontendEvent(pi, ctx, { name: 'filter.redacted', data: { path: filePath } });

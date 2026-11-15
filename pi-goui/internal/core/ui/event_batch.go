@@ -50,6 +50,10 @@ func applyWorkingEvent(t *tab, raw json.RawMessage) {
 // and see the fully projected state preceding them.
 func (m *Model) applyEventBatch(t *tab, events []rpc.Event) (cmds []tea.Cmd, renderNow bool) {
 	for i := 0; i < len(events); {
+		if cmd := m.sharedHistorySnapshot(t, events[i]); cmd != nil {
+			t.snapshotTail = append([]rpc.Event(nil), events[i+1:]...)
+			return append(cmds, cmd), true
+		}
 		if streamUpdate(events[i]) {
 			end := i + 1
 			for end < len(events) && streamUpdate(events[end]) {

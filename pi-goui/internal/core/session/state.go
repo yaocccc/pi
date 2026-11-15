@@ -134,7 +134,7 @@ func (s *State) LoadState(raw json.RawMessage) error {
 		s.runActive = true
 	}
 	s.Busy = s.runActive
-	s.Compacting = v.IsCompacting || s.Compacting
+	s.Compacting = v.IsCompacting
 	s.loadedState = true
 	if v.Steering != nil {
 		s.Steering = v.Steering
@@ -427,6 +427,7 @@ func (s *State) Apply(raw json.RawMessage) bool {
 	}
 	s.init()
 	s.observeExtensionEvent(raw)
+	s.observeMetadataEvent(e.Type)
 	refresh := false
 	switch e.Type {
 	case "agent_start":

@@ -141,7 +141,20 @@ waitForRename:
 			view.client, view.state.ID, view.state.File = second, "shared", p
 			view.setValue("second instance local draft")
 			_, refresh := other.sharedSessionEvent(view, event.Data)
-			snapshot := refresh().(snapshotMsg)
+			if result := refresh(); result != nil {
+				t.Fatalf("ordered snapshot request failed: %+v", result)
+			}
+			var snapshot snapshotMsg
+			for snapshot.prepared == nil {
+				select {
+				case event := <-second.Events():
+					if prepare := other.sharedHistorySnapshot(view, event); prepare != nil {
+						snapshot = prepare().(snapshotMsg)
+					}
+				case <-deadline:
+					t.Fatal("ordered history fence was not delivered")
+				}
+			}
 			if snapshot.err != nil || snapshot.prepareErr != nil {
 				t.Fatalf("other-instance refresh: %v / %v", snapshot.err, snapshot.prepareErr)
 			}

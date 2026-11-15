@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,12 +9,18 @@ import { FRONTEND_EVENT } from "../shared/frontend.ts";
 import { WORKER_CAPABILITY, type WorkerCapability } from "./api.ts";
 import type { RoutingConfig } from "./types.ts";
 import workerExtension from "./index.ts";
-import { DEFAULT_OPTIONS } from "./config.ts";
+import { DEFAULT_OPTIONS, loadRoutingConfig } from "./config.ts";
+import { configureWorkerSettings as runWorkerSettings } from "../pi-ui/worker/settings.ts";
 import { WORKER_USAGE_EVENT } from "./events.ts";
 
-function fixture(t: test.TestContext) {
+function fixture(t: test.TestContext, actualRouting = false, taskResult: Record<string, any> = { status: "completed", summary: ["done"] }) {
 	const dir = mkdtempSync(join(tmpdir(), "worker-api-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	if (actualRouting) {
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = dir;
+		t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
+	}
 	const events = new EventEmitter();
 	const handlers = new Map<string, any>();
 	const tools = new Map<string, any>();
@@ -30,11 +36,47 @@ function fixture(t: test.TestContext) {
 	const previous = process.env.PI_WORKER_DEPTH;
 	process.env.PI_WORKER_DEPTH = "0";
 	try {
-		workerExtension(pi as any, { executeTask: async () => ({ status: "completed", summary: ["done"] }), loadRoutingConfig: () => ({ config, path: join(dir, "settings.json"), warnings: [] }) });
+		workerExtension(pi as any, { executeTask: async () => taskResult, loadRoutingConfig: actualRouting ? loadRoutingConfig : () => ({ config, path: join(dir, "settings.json"), warnings: [] }) });
 	} finally { if (previous === undefined) delete process.env.PI_WORKER_DEPTH; else process.env.PI_WORKER_DEPTH = previous; }
 	t.after(() => handlers.get("session_shutdown")());
 	return { pi, ctx, tools, handlers, dir, setConfig: (value: typeof config) => { config = value; }, capability: getCapability<WorkerCapability>(pi as any, WORKER_CAPABILITY)! };
 }
+
+test("first-run settings can cancel without writing or explicitly select and save every route", async (t) => {
+	const h = fixture(t, true);
+	const file = join(h.dir, "worker-settings.json");
+	assert.throws(() => loadRoutingConfig(), /缺少 Worker 路由配置/);
+	const draft = h.capability.getSettings();
+	assert.equal(draft.fast.model, "");
+	assert.throws(() => h.capability.saveSettings(h.ctx, draft));
+	assert.equal(existsSync(file), false);
+	const choices: Array<string | undefined> = [undefined];
+	const ctx = { cwd: h.dir, hasUI: true, mode: "interactive", modelRegistry: h.ctx.modelRegistry, ui: {
+		select: async (_title: string, options: string[]) => {
+			assert.ok(choices.length, "unexpected settings loop");
+			const choice = choices.shift();
+			if (!choice) return undefined;
+			const selected = options.find((option) => option.includes(choice));
+			assert.ok(selected, `missing choice: ${choice}`);
+			return selected;
+		}, notify() {},
+	} } as any;
+	assert.equal(await runWorkerSettings(ctx, h.capability), undefined);
+	assert.equal(existsSync(file), false);
+	for (const preset of ["Fast", "Normal", "Deep"]) choices.push(`${preset} ·`, "模型 ·", "fixture/local", "返回");
+	choices.push("保存并退出");
+	const saved = await runWorkerSettings(ctx, h.capability);
+	assert.equal(choices.length, 0);
+	for (const preset of ["fast", "normal", "deep"] as const) assert.deepEqual(saved?.[preset], { model: "fixture/local", thinking: "off" });
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), saved);
+	assert.throws(() => h.capability.saveSettings(ctx, { ...saved, deep: { model: "fixture/local", thinking: "high" } }), /thinking-unsupported/);
+	for (const corrupt of ["{broken", JSON.stringify({ ...saved, deep: { model: "fixture/local", thinking: "invalid" } })]) {
+		writeFileSync(file, corrupt);
+		assert.throws(() => h.capability.getSettings());
+		assert.throws(() => h.capability.saveSettings(ctx, saved));
+		assert.equal(readFileSync(file, "utf8"), corrupt);
+	}
+});
 
 test("headless transcript reads are capability-owned and shutdown resets continuations", async (t) => {
 	const h = fixture(t);
@@ -112,6 +154,35 @@ test("saved-fact observer failure cannot fail a successful headless save", (t) =
 	const value = { ...h.capability.getSettings(), maxConcurrentWorkers: 4 };
 	assert.deepEqual(h.capability.saveSettings(h.ctx, value), value);
 	assert.deepEqual(JSON.parse(readFileSync(join(h.dir, "settings.json"), "utf8")), value);
+});
+
+test("session snapshots hide credential fields without changing usage types or source results", async (t) => {
+	const usage = { input: 20, output: 10, cacheRead: 3, cacheWrite: 4, contextTokens: 1200, turns: 2 };
+	const credentialFields = [
+		{ credentials: "fake-short-credential", authentication: { value: "fake-auth-value" }, secretAccessKey: "fake-secret-key" },
+		{ client_credentials: "fake-client-credential", clientAuthentication: "fake-client-auth", aws_secret_access_key: "fake-aws-key" },
+		{ apiKey: "fake-api-key", api_key: "fake-api-key", privateKey: "fake-private-key", wallet_key: "fake-wallet-key" },
+		{ password: "fake-password", accessToken: "fake-token", refresh_token: "fake-refresh-token", cookie: "fake-cookie" },
+	];
+	const result = { status: "completed", summary: ["done"], execution: { usage }, failure: { fields: credentialFields, active: false, contextTokens: 1200, tokenCount: 7 } };
+	const original = structuredClone(result);
+	const h = fixture(t, false, result);
+	await h.handlers.get("session_start")({}, h.ctx);
+	const response = await h.tools.get("worker").execute("credentials", { tasks: [{ mode: "scout", preset: "normal", sessionMode: "new", objective: "inspect" }] }, undefined, undefined, h.ctx);
+	const session = h.capability.getSession();
+	const snapshot = session.lookup(response.details.batchId)!;
+	const expected = { fields: credentialFields.map((fields) => Object.fromEntries(Object.keys(fields).map((key) => [key, "[已隐藏]"]))), active: false, contextTokens: 1200, tokenCount: 7 };
+	for (const details of [response.details, snapshot, JSON.parse(JSON.stringify(snapshot))]) {
+		assert.deepEqual(details.tasks[0].result.failure, expected);
+		assert.deepEqual(details.tasks[0].usage, usage);
+	}
+	assert.deepEqual(JSON.parse(response.content[0].text).result.results[0].failure, expected);
+	snapshot.tasks[0].usage.contextTokens = -1;
+	snapshot.tasks[0].result!.failure.fields[0].credentials = "tampered";
+	const next = session.lookup(response.details.batchId)!;
+	assert.equal(next.tasks[0].usage.contextTokens, 1200);
+	assert.deepEqual(next.tasks[0].result!.failure, expected);
+	assert.deepEqual(result, original);
 });
 
 test("session views publish isolated snapshots, survive observer errors and never adopt replacement sessions", async (t) => {

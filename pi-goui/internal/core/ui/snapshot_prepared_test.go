@@ -90,6 +90,27 @@ func TestRefreshPreparesBeforeReturningToUI(t *testing.T) {
 	}
 }
 
+// Shared peers can observe working activity without the preceding agent_start.
+func TestStaleSnapshotDoesNotSpinDuringSharedWorkingRun(t *testing.T) {
+	m := testModel(t, "")
+	tab := m.current()
+	tab.client, _ = fakeClient(t)
+	tab.resume.pending = true
+	tab.working.Active = true
+	msg := m.refresh(tab)().(snapshotMsg)
+	if msg.err != nil || msg.prepareErr != nil {
+		t.Fatalf("prepare snapshot: %v / %v", msg.err, msg.prepareErr)
+	}
+	tab.revision++ // A streaming delta arrived during snapshot preparation.
+	_, cmd := m.Update(msg)
+	if cmd != nil || tab.refreshing || !tab.refreshAgain {
+		t.Fatal("stale snapshot started another refresh during an active shared run")
+	}
+	if !tab.resume.pending {
+		t.Fatal("rejected snapshot was treated as authoritative")
+	}
+}
+
 func TestPreparedRefreshRejectsChangedOwner(t *testing.T) {
 	for _, change := range []string{"backend", "path", "identity", "revision", "closed"} {
 		t.Run(change, func(t *testing.T) {

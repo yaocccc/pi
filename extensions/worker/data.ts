@@ -3,7 +3,13 @@ import type { WorkerUiActivity, WorkerUiDetails, WorkerUsage } from "./types";
 
 export const UI_ACTIVITY_LIMIT = 20;
 export const UI_DETAIL_CAP = 160;
-export const UI_SENSITIVE_KEY = /(?:password|passwd|token|secret|api[-_]?key|private[-_]?key|mnemonic|authorization|cookie|credential|auth)/i;
+export const UI_SENSITIVE_KEY = /password|passwd|secret|api[-_]?key|private[-_]?key|wallet[-_]?key|mnemonic|authorization|cookie|credential|auth|token/i;
+
+function isSensitiveUiField(key: string, value: unknown): boolean {
+	// Only explicit numeric counters are exempt; similarly named strings may be credentials.
+	if ((key === "contextTokens" || key === "tokenCount") && typeof value === "number" && Number.isFinite(value) && value >= 0) return false;
+	return UI_SENSITIVE_KEY.test(key);
+}
 
 export function sanitizeUiText(value: string): string {
 	const stripped = value
@@ -19,8 +25,32 @@ export function sanitizeUiText(value: string): string {
 	return stripped;
 }
 
+function sanitizeStructuredRecord(value: Record<string, any>): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, sanitizeStructuredValue(nested, key)]));
+}
+
+/** Typed protocol metadata is copied, while arbitrary/display content is sanitized. */
+export function sanitizeUiDetails(details: WorkerUiDetails): WorkerUiDetails {
+	const clean = (value: string) => truncateUtf8Text(sanitizeUiText(value), 16 * 1024);
+	return {
+		...details,
+		controlErrors: details.controlErrors?.map((error) => ({ ...error, message: clean(error.message) })),
+		payload: details.payload ? sanitizeStructuredRecord(details.payload) : undefined,
+		tasks: details.tasks.map((task) => ({
+			...task,
+			title: task.title === undefined ? undefined : clean(task.title),
+			objective: clean(task.objective), phase: clean(task.phase),
+			modelId: task.modelId === undefined ? undefined : clean(task.modelId),
+			usage: { ...task.usage },
+			transcript: task.transcript ? { ...task.transcript } : undefined,
+			result: task.result ? sanitizeStructuredRecord(task.result) : undefined,
+			activities: task.activities.map((activity) => ({ ...activity, label: clean(activity.label), detail: activity.detail === undefined ? undefined : clean(activity.detail) })),
+		})),
+	};
+}
+
 export function sanitizeStructuredValue(value: unknown, key = "", depth = 0): unknown {
-	if (UI_SENSITIVE_KEY.test(key)) return "[已隐藏]";
+	if (isSensitiveUiField(key, value)) return "[已隐藏]";
 	if (typeof value === "string") return truncateUtf8Text(sanitizeUiText(value), 16 * 1024);
 	if (value === null || typeof value !== "object") return value;
 	if (depth >= 12) return "[内容层级过深]";
@@ -45,19 +75,38 @@ function compactResultText(value: string, maxBytes: number): string {
 	return `${truncateUtf8Text(value, Math.max(0, maxBytes - 3))}…`;
 }
 
-function compactResultValue(value: unknown, profile: ResultCompactProfile, depth = 0): unknown {
-	if (typeof value === "string") return compactResultText(value, profile.stringBytes);
-	if (value === null || typeof value !== "object") return value;
-	if (depth >= 5) return "[内容已压缩]";
-	if (Array.isArray(value)) return value.slice(0, profile.nestedItems).map((item) => compactResultValue(item, profile, depth + 1));
-	return Object.fromEntries(
-		Object.entries(value as Record<string, unknown>)
-			.slice(0, profile.objectKeys)
-			.map(([key, nested]) => [key, compactResultValue(nested, profile, depth + 1)]),
-	);
+type Omissions = Record<string, number>;
+
+function recordOmission(omitted: Omissions, field: string, count: number): void {
+	if (count > 0) omitted[field] = (omitted[field] ?? 0) + count;
 }
 
-function compactExecution(value: unknown, profile: ResultCompactProfile): unknown {
+function compactResultValue(value: unknown, profile: ResultCompactProfile, omitted: Omissions, field: string, depth = 0): unknown {
+	if (typeof value === "string") {
+		const compact = compactResultText(value, profile.stringBytes);
+		recordOmission(omitted, `${field}.bytes`, Buffer.byteLength(value) - Buffer.byteLength(compact));
+		return compact;
+	}
+	if (value === null || typeof value !== "object") return value;
+	if (depth >= 5) { recordOmission(omitted, field, 1); return "[内容已压缩]"; }
+	if (Array.isArray(value)) {
+		recordOmission(omitted, field, value.length - profile.nestedItems);
+		return value.slice(0, profile.nestedItems).map((item) => compactResultValue(item, profile, omitted, field, depth + 1));
+	}
+	const entries = Object.entries(value as Record<string, unknown>);
+	recordOmission(omitted, `${field}.keys`, entries.length - profile.objectKeys);
+	return Object.fromEntries(entries.slice(0, profile.objectKeys).map(([key, nested]) => [key, compactResultValue(nested, profile, omitted, field, depth + 1)]));
+}
+
+// Only explicit protocol values influence priority; never infer severity from prose.
+function resultPriority(value: any): number {
+	if (!value || typeof value !== "object") return 0;
+	if (["failed", "failure", "error", "blocked"].includes(String(value.result ?? value.status).toLowerCase())) return 3;
+	const severity = String(value.severity ?? value.priority).toLowerCase();
+	return ["critical", "blocker", "p0"].includes(severity) ? 3 : ["high", "p1"].includes(severity) ? 2 : ["medium", "p2"].includes(severity) ? 1 : 0;
+}
+
+function compactExecution(value: unknown, profile: ResultCompactProfile, omitted: Omissions): unknown {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const execution = value as Record<string, any>;
 	const usage = execution.usage && typeof execution.usage === "object" ? execution.usage as Record<string, any> : undefined;
@@ -81,26 +130,32 @@ function compactExecution(value: unknown, profile: ResultCompactProfile): unknow
 		termination: execution.termination,
 		termination_source: execution.termination_source,
 		warnings: execution.warnings,
-	}).map(([key, value]) => [key, compactResultValue(value, profile, 1)]));
+	}).map(([key, value]) => [key, compactResultValue(value, profile, omitted, `execution.${key}`, 1)]));
 }
 
 export function compactWorkerResult(result: Record<string, any>, level: "standard" | "minimal" = "standard"): Record<string, any> {
 	const profile = RESULT_COMPACT_PROFILES[level];
+	const omitted: Omissions = Object.fromEntries(Object.entries(result.omitted ?? {}).filter(([, count]) => typeof count === "number" && Number.isFinite(count) && count > 0)) as Omissions;
 	const compact: Record<string, any> = {
 		status: result.status,
-		execution: compactExecution(result.execution, profile),
-		failure: compactResultValue(result.failure, profile),
+		execution: compactExecution(result.execution, profile, omitted),
+		failure: compactResultValue(result.failure, profile, omitted, "failure"),
 	};
 	for (const [key, limit] of Object.entries(profile.fields)) {
-		compact[key] = Array.isArray(result[key])
-			? result[key].slice(0, limit).map((item: unknown) => compactResultValue(item, profile))
-			: [];
+		const items = Array.isArray(result[key]) ? result[key] : [];
+		recordOmission(omitted, key, items.length - limit);
+		const prioritized = items.length > limit && ["findings", "validation", "acceptance"].includes(key)
+			? [...items].sort((a, b) => resultPriority(b) - resultPriority(a)) : items;
+		compact[key] = prioritized.slice(0, limit).map((item: unknown) => compactResultValue(item, profile, omitted, key));
 	}
+	if (result.truncated || Object.keys(omitted).length) compact.truncated = true;
+	if (Object.keys(omitted).length) compact.omitted = omitted;
 	return compact;
 }
 
 export function serializePayload(payload: Record<string, any>, maxBytes: number): { payload: Record<string, any>; text: string } {
-	let bounded = payload;
+	let bounded = Array.isArray(payload.results) && payload.results.some((item: Record<string, any>) => item.truncated)
+		? { ...payload, truncated: true } : payload;
 	let text = JSON.stringify(bounded);
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
 	bounded = Array.isArray(payload.results)
@@ -109,12 +164,18 @@ export function serializePayload(payload: Record<string, any>, maxBytes: number)
 	text = JSON.stringify(bounded);
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
 	bounded = Array.isArray(payload.results)
-		? { status: payload.status, truncated: true, results: payload.results.map((item: Record<string, any>, index: number) => ({ index, status: item.status })) }
+		? { status: payload.status, truncated: true, results: payload.results.map((item: Record<string, any>, index: number) => ({ index, status: item.status, truncated: true, omitted: "detail fields (see Worker transcript)" })) }
 		: { status: payload.status, truncated: true, summary: ["Worker 结果超过输出上限，详细字段已省略"] };
 	text = JSON.stringify(bounded);
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { payload: bounded, text };
-	bounded = { status: "failed", truncated: true, summary: ["Worker 结果超过输出上限"] };
-	return { payload: bounded, text: JSON.stringify(bounded) };
+	bounded = { status: payload.status, truncated: true, summary: ["Worker 结果超过输出上限；请查看 Worker transcript"] };
+	text = JSON.stringify(bounded);
+	if (Buffer.byteLength(text, "utf8") > maxBytes) {
+		bounded = { truncated: true };
+		text = JSON.stringify(bounded);
+		if (Buffer.byteLength(text, "utf8") > maxBytes) throw new RangeError("Worker output budget cannot fit a truncation marker");
+	}
+	return { payload: bounded, text };
 }
 
 export function truncateUtf8Text(value: string, maxBytes: number): string {
@@ -135,7 +196,7 @@ export function compactUiValue(value: unknown, maxLength = UI_DETAIL_CAP): strin
 	if (typeof value === "string") return uiSnippet(value, maxLength) || undefined;
 	if (typeof value === "number" || typeof value === "boolean") return String(value);
 	try {
-		return uiSnippet(JSON.stringify(value, (key, nested) => UI_SENSITIVE_KEY.test(key) ? "[已隐藏]" : nested), maxLength) || undefined;
+		return uiSnippet(JSON.stringify(value, (key, nested) => isSensitiveUiField(key, nested) ? "[已隐藏]" : nested), maxLength) || undefined;
 	} catch {
 		return "[无法显示]";
 	}
@@ -146,7 +207,7 @@ export function summarizeToolArgs(args: unknown): string | undefined {
 	const record = args as Record<string, unknown>;
 	const preferred = ["command", "path", "pattern", "query", "url", "task", "offset", "limit"];
 	const keys = [...preferred.filter((key) => key in record), ...Object.keys(record).filter((key) => !preferred.includes(key) && !["content", "oldText", "newText", "edits"].includes(key))].slice(0, 3);
-	const text = keys.map((key) => `${key}=${UI_SENSITIVE_KEY.test(key) ? "[已隐藏]" : compactUiValue(record[key], 80) ?? ""}`).join(" · ");
+	const text = keys.map((key) => `${key}=${isSensitiveUiField(key, record[key]) ? "[已隐藏]" : compactUiValue(record[key], 80) ?? ""}`).join(" · ");
 	return text ? uiSnippet(text, 140) : undefined;
 }
 

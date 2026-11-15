@@ -71,6 +71,8 @@ type State struct {
 	active             string
 	runActive          bool
 	loadedState        bool
+	metadataRevision   uint64
+	metadataChanges    map[string]uint64
 	entriesCache       *snapshotCache
 	deferProjection    bool
 	projectionPending  bool

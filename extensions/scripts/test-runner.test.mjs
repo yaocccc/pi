@@ -41,16 +41,17 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 test('runner strips inherited credentials', () => {
   assert.equal(process.env.TEST_PROVIDER_SECRET, undefined);
+  assert.equal(process.env.NODE_OPTIONS, undefined);
   assert.equal(process.env.PI_OFFLINE, '1');
   assert.notEqual(process.env.HOME, ${JSON.stringify(process.env.HOME)});
 });
 test('intentional failure is propagated', () => { throw new Error('mjs-failure-propagated'); });
 `);
   const result = spawnSync(process.execPath, [join(root, "scripts/test.mjs")], {
-    env: { ...process.env, TEST_PROVIDER_SECRET: "not-a-real-secret" }, encoding: "utf8", timeout: 20_000,
+    env: { ...process.env, TEST_PROVIDER_SECRET: "not-a-real-secret", NODE_OPTIONS: "--test-reporter=spec" }, encoding: "utf8", timeout: 20_000,
   });
   assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stdout, /ok 1 - runner strips inherited credentials/);
-  assert.match(result.stdout, /not ok 2 - intentional failure is propagated/);
+  assert.match(result.stdout, /^ok 1 - runner strips inherited credentials$/m);
+  assert.match(result.stdout, /^not ok 2 - intentional failure is propagated$/m);
   assert.match(result.stdout, /mjs-failure-propagated/);
 });

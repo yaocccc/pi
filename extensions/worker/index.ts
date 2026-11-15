@@ -15,7 +15,7 @@ import { WorkerTranscriptReader } from "./transcript-reader.ts";
 import { notifyFrontendEvent } from "./frontend.ts";
 import { PRESETS, WORKER_CAPABILITY, type WorkerCapability, type WorkerSessionView, type WorkerStateChange } from "./api.ts";
 import type { WorkerToolInput, WorkerUiDetails } from "./types";
-import { cloneUiDetails, compactWorkerResult, emptyWorkerUsage, sanitizeStructuredValue, serializePayload } from "./data.ts";
+import { compactWorkerResult, emptyWorkerUsage, sanitizeStructuredValue, sanitizeUiDetails, serializePayload } from "./data.ts";
 import { WorkerRuntime, type Batch } from "./runtime.ts";
 import { present } from "./callbacks.ts";
 import { workerBranchSnapshots, WORKER_SNAPSHOT_ENTRY } from "./history.ts";
@@ -62,7 +62,7 @@ const respond = <T>(text: string, details: T) => ({ content: [{ type: "text" as 
 
 /** One sanitized, detached view shared by live rows and serialized tool results. */
 export function batchUiSnapshot(batch: Batch): WorkerUiDetails {
-	const details = sanitizeStructuredValue(cloneUiDetails(batch.ui)) as WorkerUiDetails;
+	const details = sanitizeUiDetails(batch.ui);
 	details.batchId = batch.id;
 	// Opaque Pi routing IDs are metadata, not user text: never redact or truncate them.
 	details.originToolCallId = batch.ui.originToolCallId;
@@ -79,17 +79,21 @@ export function batchUiSnapshot(batch: Batch): WorkerUiDetails {
 
 /** Keep IDs/control state outside result compression so truncation cannot strand a batch. */
 export function batchResponse(batch: Batch) {
-	const results = batch.tasks.map((task) => task.result ?? { status: task.state });
+	// The serialized payload is also exposed in UI details: never share runtime results.
+	const results = batch.tasks.map((task) => structuredClone(task.result ?? { status: task.state }));
 	const resultPayload = { status: results.every((item) => item.status === "completed") ? "completed" : "partial", results };
-	const compressed = serializePayload(resultPayload, batch.maxOutputBytes);
-	const payload = {
+	const envelope = {
 		batchId: batch.id,
 		status: batch.finished ? resultPayload.status : batch.cancelled ? "cancelling" : "running",
 		finished: batch.finished,
 		tasks: batch.tasks.map((task) => ({ taskId: task.id, status: task.state === "finished" ? task.result?.status : task.state })),
-		result: compressed.payload,
+		result: null,
 		next_action: batch.finished ? "Review results and actual diff." : "Call worker({batchId}) to await completion, or worker({batchId, cancel:true}) to cancel and clean up. Active tasks retain path locks.",
 	};
+	// Control metadata must survive, but still counts toward the tool text budget.
+	const overhead = Buffer.byteLength(JSON.stringify(envelope), "utf8") - 4;
+	const compressed = serializePayload(resultPayload, batch.maxOutputBytes - overhead);
+	const payload = { ...envelope, result: compressed.payload };
 	const details = batchUiSnapshot(batch);
 	details.payload = payload;
 	return respond(JSON.stringify(payload), details);
@@ -140,10 +144,10 @@ export default function workerExtension(pi: ExtensionAPI, services = { executeTa
 	registerCapability<WorkerCapability>(pi, WORKER_CAPABILITY, {
 		readTranscript: (request) => transcripts.read(request),
 		getSession: () => session.view,
-		getSettings: () => structuredClone(services.loadRoutingConfig().config),
+		getSettings: () => structuredClone(services.loadRoutingConfig({ allowMissing: true }).config),
 		getModels: (ctx) => ctx.modelRegistry.getAvailable().map((model) => ({ id: `${model.provider}/${model.id}`, thinking: supportedThinking(model) })),
 		saveSettings: (ctx, value) => {
-			const current = services.loadRoutingConfig();
+			const current = services.loadRoutingConfig({ allowMissing: true });
 			const saved = saveWorkerSettings(ctx, value, current.path);
 			if (JSON.stringify(current.config) !== JSON.stringify(saved)) {
 				notifyFrontendEvent(pi, ctx, { name: "worker.settings-saved", data: {} });

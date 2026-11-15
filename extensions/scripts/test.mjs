@@ -26,7 +26,9 @@ export async function runTests() {
     for (const key of ["PATH", "SystemRoot", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM", "CI"]) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
-    const result = spawnSync(process.execPath, ["--experimental-transform-types", "--test", ...await collectTests(extensions)], {
+    // Keep output stable across Node versions and TTY/CI defaults; NODE_OPTIONS
+    // is intentionally not inherited, so select the reporter here.
+    const result = spawnSync(process.execPath, ["--experimental-transform-types", "--test", "--test-reporter=tap", ...await collectTests(extensions)], {
       // Historical Worker fixtures resolve extensions/worker from repository cwd.
       cwd: dirname(extensions.replace(/[\\/]$/, "")), env, stdio: "inherit",
     });

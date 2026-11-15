@@ -10,7 +10,10 @@ const (
 	// for empty events; tiny frames cannot bypass the memory bound by count.
 	backlogEventOverhead = 256
 	nativeFrameLimit     = 64 * 1024 * 1024
-	sharedFrameLimit     = nativeFrameLimit + workingFrameAllowance
+	// A history snapshot combines two independently legal native responses
+	// (state and entries), plus its bounded envelope. The queue byte budget
+	// remains unchanged: an oversize frame must be its sole queued item.
+	sharedFrameLimit = 2*nativeFrameLimit + workingFrameAllowance
 )
 
 type backlogItem[T any] struct {

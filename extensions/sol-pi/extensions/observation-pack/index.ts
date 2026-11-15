@@ -19,6 +19,7 @@
  */
 
 import { join } from "node:path";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runtimeRoot } from "../../runtime-paths.ts";
@@ -50,6 +51,9 @@ const RECALL_LIMITS = {
 export function createObservationPackExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
 		const sentCounts = new Map<string, number>();
+		// Raw branch messages are immutable. Cache identities so paging does not
+		// repeatedly hash every large result while checking branch membership.
+		const observationIds = new WeakMap<ToolResultMessage, string | undefined>();
 		const ledgers = new Map<string, Ledger>();
 		const ledgerFor = (ctx: ExtensionContext): Ledger => {
 			const root = runtimeRoot(ctx);
@@ -73,14 +77,32 @@ export function createObservationPackExtension(): ExtensionFactory {
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				if (!isObservationId(params.id)) throw new Error(`Unknown observation id: ${params.id}`);
 				const offset = params.offset ?? 0;
+				const root = runtimeRoot(ctx);
+				const path = observationPath(root, params.id);
+				let source: ToolResultMessage | undefined;
+				for (const entry of ctx.sessionManager.getBranch()) {
+					if (entry.type !== "message" || !isPureTextResult(entry.message)) continue;
+					if (!observationIds.has(entry.message)) {
+						observationIds.set(entry.message, createObservation(entry.message, root)?.id);
+					}
+					if (observationIds.get(entry.message) === params.id) {
+						source = entry.message;
+						break;
+					}
+				}
+				if (!source) throw new Error(`Unknown observation id: ${params.id}`);
 				let chunk: RecallChunk;
 				try {
-					chunk = await readRecallChunk(observationPath(runtimeRoot(ctx), params.id), offset, RECALL_LIMITS);
+					chunk = await readRecallChunk(path, offset, RECALL_LIMITS);
 				} catch (error) {
-					if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-						throw new Error(`Unknown observation id: ${params.id}`);
-					}
-					throw error;
+					if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+					// A fork gets a new archive root, but compaction may already have
+					// removed the inherited result from the context projection. Rebuild
+					// only from the active raw branch, never other sessions/directories.
+					const observation = createObservation(source, root);
+					if (!observation) throw new Error(`Unknown observation id: ${params.id}`);
+					await ensureStored(observation);
+					chunk = await readRecallChunk(path, offset, RECALL_LIMITS);
 				}
 				const header = [
 					`[obs_recall id=${params.id} offset=${offset} next_offset=${chunk.nextOffset} eof=${chunk.eof}]`,

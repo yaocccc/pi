@@ -62,9 +62,14 @@ export function supportedThinking(model: Model<any>): Thinking[] {
 	return levels.filter((level) => map[level] !== null);
 }
 
-export function loadRoutingConfig(): { config: RoutingConfig; warnings: string[]; path: string } {
+export function loadRoutingConfig(options: { allowMissing?: boolean } = {}): { config: RoutingConfig; warnings: string[]; path: string } {
 	const configPath = path.join(agentDir(), "worker-settings.json");
-	if (!fs.existsSync(configPath)) throw new Error(`缺少 Worker 路由配置：${configPath}`);
+	if (!fs.existsSync(configPath)) {
+		if (!options.allowMissing) throw new Error(`缺少 Worker 路由配置：${configPath}；请打开 Worker 设置，为 fast/normal/deep 选择模型后保存`);
+		// An unsaved settings draft, never a runnable default route. Saving still
+		// validates every model/thinking pair against the available registry.
+		return { config: { ...DEFAULT_OPTIONS, fast: { model: "", thinking: "off" }, normal: { model: "", thinking: "off" }, deep: { model: "", thinking: "off" } }, warnings: [], path: configPath };
+	}
 	let current: unknown;
 	try {
 		current = JSON.parse(fs.readFileSync(configPath, "utf8"));

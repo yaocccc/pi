@@ -37,6 +37,8 @@ type sessionBroker struct {
 type brokerSession struct {
 	working         WorkingState
 	workingRevision uint64
+	liveReplay      eventBacklog[json.RawMessage]
+	liveReplayErr   error
 	broker          *sessionBroker
 	backend         *Client
 	key, file       string
@@ -47,6 +49,8 @@ type brokerSession struct {
 	opMu            sync.Mutex
 	uiState         map[string]json.RawMessage
 	inFlight        map[string]int
+	responses       int
+	responsesDone   chan struct{} // Closed once admitted command responses are queued.
 }
 
 const brokerPeerWriteTimeout = 5 * time.Second
@@ -587,6 +591,9 @@ func (b *sessionBroker) attach(cfg Config, conn net.Conn) (*brokerPeer, *brokerS
 			b.sessions["path:"+path] = s
 		}
 	}
+	if s.liveReplayErr != nil {
+		return nil, nil, s.liveReplayErr
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &brokerPeer{id: sharedID(), conn: conn, out: make(chan json.RawMessage, 1), done: make(chan struct{}), finishing: make(chan struct{}), ctx: ctx, cancel: cancel, session: s}
 	s.clients[p.id] = p
@@ -597,6 +604,11 @@ func (b *sessionBroker) attach(cfg Config, conn net.Conn) (*brokerPeer, *brokerS
 	if view := s.working.View(); view.Present {
 		view.Revision = s.workingRevision
 		p.initial = append(p.initial, withWorkingSnapshot(brokerJSON(map[string]any{"type": "goui_working_snapshot"}), view))
+	}
+	for _, raw := range s.liveReplay.batch(s.liveReplay.count, sharedFrameLimit) {
+		view := s.working.View()
+		view.Revision = s.workingRevision
+		p.initial = append(p.initial, withWorkingSnapshot(raw, view))
 	}
 	for _, raw := range s.uiState {
 		p.initial = append(p.initial, bytes.Clone(raw))
@@ -748,15 +760,33 @@ func (b *sessionBroker) command(p *brokerPeer, command map[string]any, written c
 	}
 	// UI session/tab changes create or attach a separate client. A shared
 	// backend cannot be redirected underneath other views by raw RPC commands.
-	if (strings.HasPrefix(kind, "goui_") && kind != "goui_submit_prompt") || kind == "new_session" || kind == "switch_session" || kind == "fork" {
+	if (strings.HasPrefix(kind, "goui_") && kind != "goui_submit_prompt" && kind != "goui_get_snapshot") || kind == "new_session" || kind == "switch_session" || kind == "fork" {
 		b.mu.Unlock()
 		respond(nil, errors.New("shared sessions must be opened as separate goui tabs"))
 		return
 	}
 	backend := s.backend
 	s.inFlight[p.id]++
+	if s.responses == 0 {
+		s.responsesDone = make(chan struct{})
+	}
+	s.responses++
 	s.updateEventOwner()
 	b.mu.Unlock()
+	responsePending := true
+	completeResponse := func() {
+		if !responsePending {
+			return
+		}
+		responsePending = false
+		b.mu.Lock()
+		s.responses--
+		if s.responses == 0 {
+			close(s.responsesDone)
+		}
+		b.mu.Unlock()
+	}
+	defer completeResponse()
 	defer func() {
 		b.mu.Lock()
 		s.inFlight[p.id]--
@@ -770,7 +800,42 @@ func (b *sessionBroker) command(p *brokerPeer, command map[string]any, written c
 	defer cancel()
 	var data json.RawMessage
 	var err error
-	if kind == "goui_submit_prompt" {
+	if kind == "goui_get_snapshot" {
+		var request uint64
+		requestData, requestErr := json.Marshal(command["request"])
+		if requestErr == nil {
+			requestErr = json.Unmarshal(requestData, &request)
+		}
+		var state json.RawMessage
+		if requestErr != nil || request == 0 {
+			err = errors.New("goui_get_snapshot requires a nonzero uint64 request")
+		} else {
+			state, err = backend.call(ctx, map[string]any{"type": "get_state"}, release)
+		}
+		if err == nil {
+			_, err = backend.callOrdered(ctx, map[string]any{"type": "get_entries"}, release, func(r reply) {
+				if r.err != nil {
+					return
+				}
+				// The response fence travels through the backend event FIFO, so
+				// no delta after this history can overtake its publication.
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				if !s.closed {
+					// get_state precedes this fence; busy metadata must reflect
+					// the same stream position as the authoritative history.
+					if s.working.Present {
+						var fields map[string]json.RawMessage
+						if json.Unmarshal(state, &fields) == nil && fields != nil {
+							fields["isStreaming"], _ = json.Marshal(s.working.Active)
+							state = snapshotJSON(fields)
+						}
+					}
+					p.send(historySnapshotFrame(request, state, r.data))
+				}
+			})
+		}
+	} else if kind == "goui_submit_prompt" {
 		payload, _ := command["payload"].(map[string]any)
 		draft, _ := command["draft"].(string)
 		merge, _ := command["mergeQueued"].(bool)
@@ -785,11 +850,14 @@ func (b *sessionBroker) command(p *brokerPeer, command map[string]any, written c
 		data, err = backend.call(ctx, command, release)
 	}
 	release()
+	// Deliver determined results before optional path queries. EOF waits for
+	// this response phase, not for auxiliary registration work.
+	respond(data, err)
+	completeResponse()
 	if err == nil && ctx.Err() == nil && (kind == "prompt" || kind == "goui_submit_prompt") {
 		s.registerPath()
 	}
-	respond(data, err)
-	if err != nil || strings.HasPrefix(kind, "get_") {
+	if err != nil || strings.HasPrefix(kind, "get_") || kind == "goui_get_snapshot" {
 		return
 	}
 	if kind == "prompt" {
@@ -825,6 +893,10 @@ func (s *brokerSession) updateEventOwner() {
 }
 func (s *brokerSession) events() {
 	for event := range s.backend.Events() {
+		if event.ordered != nil {
+			event.ordered()
+			continue
+		}
 		b := s.broker
 		b.mu.Lock()
 		if !s.closed && event.Err != nil {
@@ -832,6 +904,7 @@ func (s *brokerSession) events() {
 		}
 		if !s.closed && len(event.Data) > 0 {
 			s.working.Apply(event.Data, time.Now())
+			s.retainLiveMessage(event.Data)
 			s.workingRevision++
 			view := s.working.View()
 			view.Revision = s.workingRevision
@@ -869,13 +942,29 @@ func (s *brokerSession) events() {
 	}
 	b := s.broker
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !s.lease && !s.closed {
-		s.closed = true
-		b.removeSession(s)
-		for _, p := range s.clients {
-			p.finish(fmt.Errorf("pi backend stopped: %w", s.backend.failure()))
+	if s.lease || s.closed {
+		b.mu.Unlock()
+		return
+	}
+	s.closed = true // Fence new commands before observing the response barrier.
+	b.removeSession(s)
+	responsesDone := s.responsesDone
+	b.mu.Unlock()
+	if responsesDone != nil {
+		// After EOF, Client calls can return their final response or unknown
+		// outcome. Finishing peers first would cancel those calls and
+		// reject their responses if the command goroutine has not run yet.
+		timer := time.NewTimer(brokerPeerWriteTimeout)
+		select {
+		case <-responsesDone:
+		case <-timer.C:
 		}
+		timer.Stop()
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, p := range s.clients {
+		p.finish(fmt.Errorf("pi backend stopped: %w", s.backend.failure()))
 	}
 }
 func (s *brokerSession) registerPath() {

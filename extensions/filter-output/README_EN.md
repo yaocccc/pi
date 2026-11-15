@@ -2,7 +2,7 @@
 
 [中文](README.md)
 
-Masks selected sensitive text in successful tool results and hides whole read results for designated sensitive files. It does not change execution, inputs, files on disk, or failed results, and is not a complete data-loss prevention system.
+Masks selected sensitive text in tool results (including failures) and hides whole successful read results for designated sensitive files. It does not change execution, user input, or files on disk, and is not a complete data-loss prevention system.
 
 ## Installation
 
@@ -31,9 +31,10 @@ Filtering is UI-independent; only notices require the adapter. There is no confi
 
 ## Scope and limitations
 
-- read matches for .env/.env.*, .dev.vars*, secret(s).json/yaml/yml/toml, or credentials-prefixed filenames replace the entire content with a safe placeholder and publish filter.redacted; original line structure is not retained. Reading .env.example skips processing, not every path ending in example.
-- Other successful results—including ordinary read, bash, and other tools—apply heuristics to text blocks for selected key prefixes, token/password assignments, database credentials, private keys, and similar patterns. Non-text blocks are preserved; changed text produces a replacement result but no dedicated fact.
-- Unknown formats, images, and errors are not guaranteed coverage, and ordinary text may be misclassified. Raw data may remain on disk, in archives, or in other logs. This does not replace authorization, access control, credential rotation, or manual review.
+- read matches for .env/.env.*, .dev.vars*, secret(s).json/yaml/yml/toml, or credentials-prefixed filenames replace the entire content with a safe placeholder and publish filter.redacted; original line structure is not retained. Reading .env.example skips whole-file hiding but still applies text masking; not every path ending in example is exempt from whole-file hiding.
+- All tool results—including failures, ordinary read, bash, and other tools—apply heuristics to text blocks for selected key prefixes, token/password assignments, database credentials, private keys, and similar patterns. Non-text blocks are preserved; changed text produces a replacement result but no dedicated fact.
+- Every complete 64-digit hexadecimal value in tool results (bare or prefixed with 0x/0X, case-insensitive) is replaced with [WEB3_PRIVATE_KEY_REDACTED], regardless of field name. Since shape alone cannot distinguish private keys, this policy intentionally also masks public transaction/block hashes, topics, bytes32, and SHA-256 digests. Only user-sent messages pass through unchanged: this extension registers only tool_result and never processes or rewrites user messages. Values echoed back by a tool are still masked as tool output.
+- Unknown formats, images, and non-text data are not guaranteed coverage, and ordinary text may be misclassified. Raw data may remain on disk, in archives, or in other logs. This does not replace authorization, access control, credential rotation, or manual review.
 
 [index.ts](index.ts) is authoritative. Frontends must not rerun masking or try to restore text.
 
