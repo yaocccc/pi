@@ -13,10 +13,10 @@ import (
 )
 
 func TestWorkerReadableSectionsPreserveUnknownData(t *testing.T) {
-	raw := `{"snapshotAt":12000,"futureBatch":"BATCH","tasks":[{"title":"检查代码","objective":"first\n\nlast","status":"running","mode":"scout","modelId":"provider/model","startedAt":1000,"usage":{"input":168234,"output":4321,"turns":2,"futureUsage":"USAGE"},"activities":[{"label":"read","status":"completed","type":"tool","detail":"file.go","id":"ACTIVITY-ID","futureActivity":"ACTIVITY"}],"result":{"status":"blocked","summary":["SUMMARY"],"validation":[{"command":"go test","result":"passed"}],"futureResult":"RESULT"},"futureTask":"TASK"}]}`
+	raw := `{"snapshotAt":12000,"futureBatch":"BATCH","tasks":[{"title":"检查代码","objective":"first\n\nlast","status":"running","mode":"scout","modelId":"provider/model","startedAt":1000,"usage":{"input":168234,"output":4321,"turns":2,"cacheRead":3,"cacheWrite":4,"contextTokens":1200,"futureUsage":"USAGE"},"activities":[{"label":"read","status":"completed","type":"tool","detail":"file.go","id":"ACTIVITY-ID","futureActivity":"ACTIVITY"}],"result":{"status":"blocked","summary":["SUMMARY"],"validation":[{"command":"go test","result":"passed"}],"futureResult":"RESULT"},"futureTask":"TASK"}]}`
 	item := session.Item{ToolName: "worker", Details: json.RawMessage(raw)}
 	text := strings.Join(tooldetail.Render(item, config.Theme{}, 60, testHooks(t), toolrender.NewViews().FullDetail), "\n")
-	for _, want := range []string{"! Task 1 · blocked", "Title\n检查代码", "Objective\nfirst\n\nlast", "Duration · 11s", "mode: scout", "modelId: provider/model", "input: 168234", "Activity · 1", "✓ read", "Result\nSummary", "Validation", "USAGE", "ACTIVITY", "RESULT", "TASK", "BATCH"} {
+	for _, want := range []string{"! Task 1 · blocked", "Title\n检查代码", "Objective\nfirst\n\nlast", "Duration · 11s", "mode: scout", "modelId: provider/model", "input: 168234", "cacheRead: 3", "cacheWrite: 4", "contextTokens: 1200", "Activity · 1", "✓ read", "Result\nSummary", "Validation", "USAGE", "ACTIVITY", "RESULT", "TASK", "BATCH"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q:\n%s", want, text)
 		}

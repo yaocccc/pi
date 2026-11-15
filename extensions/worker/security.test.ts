@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	attributeChangedFiles,
+	changedSince,
+	fileHash,
+	runCommand,
+	snapshotWorkspace,
 	declaredWriteBoundary,
 	filterChangedFilesToBoundary,
 	workerTaskScopesConflict,
@@ -22,6 +26,47 @@ async function workspace(t: test.TestContext): Promise<string> {
 	t.after(() => rm(root, { recursive: true, force: true }));
 	return root;
 }
+
+test("already-dirty files retain content while worktree and index executable modes are detected", async (t) => {
+	const root = await workspace(t);
+	const git = async (...args: string[]) => assert.equal((await runCommand("git", args, root)).code, 0);
+	await git("init", "-q");
+	await git("config", "core.filemode", "true");
+	const file = join(root, "file.txt");
+	await writeFile(file, "original");
+	await chmod(file, 0o644);
+	await git("add", "file.txt");
+	await writeFile(file, "user modification");
+	const before = await snapshotWorkspace(root);
+	assert.equal(before.statusPaths.has("file.txt"), true);
+	await chmod(file, 0o755);
+	const changed = await changedSince(before);
+	assert.deepEqual(changed.changed, ["file.txt"]);
+	assert.deepEqual(changed.after.statusPaths, before.statusPaths);
+	assert.equal(await readFile(file, "utf8"), "user modification");
+	await git("update-index", "--chmod=+x", "file.txt");
+	assert.deepEqual((await changedSince(changed.after)).changed, ["file.txt"]);
+	assert.equal(await readFile(file, "utf8"), "user modification");
+});
+
+test("symlink fingerprints use link text even when both targets contain identical bytes", async (t) => {
+	const root = await workspace(t);
+	assert.equal((await runCommand("git", ["init", "-q"], root)).code, 0);
+	await writeFile(join(root, "a"), "same bytes");
+	await writeFile(join(root, "b"), "same bytes");
+	const link = join(root, "link");
+	await symlink("a", link);
+	assert.equal((await runCommand("git", ["add", "."], root)).code, 0);
+	const before = await snapshotWorkspace(root);
+	const oldBytes = await readFile(link);
+	const oldHash = fileHash(link);
+	await unlink(link);
+	await symlink("b", link);
+	// Minimal reproduction of the old stat/readFile implementation's blind spot.
+	assert.deepEqual(await readFile(link), oldBytes);
+	assert.notEqual(fileHash(link), oldHash);
+	assert.deepEqual((await changedSince(before)).changed, ["link"]);
+});
 
 test("read/read is concurrent while read/write is exclusive", async (t) => {
 	const root = await workspace(t);

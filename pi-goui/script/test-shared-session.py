@@ -259,8 +259,13 @@ class Suite:
         self.wait(lambda: self.record().get('PID') == survivor.p.pid and
                   self.record().get('Socket') != initial['Socket'], 'surviving actual TUI wins new term')
         # Join only after election, while the original run is still active.
+        self.control(pid, 'snapshot_burst')
+        self.wait(lambda: self.wire('snapshot_burst_armed'), 'arm deterministic snapshot/delta handoff')
         c = Terminal(self, 'C')
         c.visible('3 turns · ↑51k ↓665')
+        c.visible('STREAM-during-failover|||||')
+        self.wait(lambda: self.wire('snapshot_burst_complete'), 'deltas surround authoritative history reply')
+        snapshot_reads = len(self.commands('get_entries'))
         def synchronized_progress():
             old, joined = survivor.working, c.working
             return (old is not None and joined is not None and
@@ -271,7 +276,9 @@ class Suite:
         self.wait(lambda: c.working is not None and c.working['seconds'] > before,
                   'late join elapsed clock continues without new native events')
         assert len(self.commands('prompt')) == 3, 'late join replayed a prompt'
-        self.control(pid, 'finish')
+        assert len(self.commands('get_entries')) == snapshot_reads, 'busy snapshot refresh loop'
+        c.send(b'\x1b')
+        self.wait(lambda: len(self.commands('abort')) == 1, 'late join Escape aborts the active shared backend')
         for t in (survivor, c):
             t.visible('RESULT-during-failover')
         self.wait(lambda: all('1 working' not in t.text for t in (survivor, c)), 'shared run settles')
@@ -279,7 +286,7 @@ class Suite:
         assert frozen == c.working and frozen['turns'] == 3 and frozen['output'] == '665', 'settled statistics differ'
         self.pump(1.2)
         assert survivor.working == c.working == frozen, 'settled elapsed/TPS did not freeze'
-        self.checkpoint('late join during active run inherits turns/tokens/original elapsed/TPS; settles identically without replay')
+        self.checkpoint('late join commits history across a delta burst, retains live prefix, avoids refresh loops and Escape aborts; statistics settle identically')
         assert len(self.wire('start')) == 1 and identity(pid), 'failover restarted Pi'
         self.checkpoint('SIGKILL during active turn: new term, same live Pi, completion preserved')
 

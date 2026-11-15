@@ -197,10 +197,12 @@ test("result compaction preserves every field's standard and minimal limits", ()
 	const original = structuredClone(source);
 	for (const [i, level] of (["standard", "minimal"] as const).entries()) {
 		const result = compactWorkerResult(source, level);
-		assert.deepEqual(Object.keys(result), ["status", "execution", "failure", ...Object.keys(limits)]);
+		assert.deepEqual(Object.keys(result), ["status", "execution", "failure", ...Object.keys(limits), "truncated", "omitted"]);
+		assert.equal(result.truncated, true);
 		assert.equal(result.status, "completed");
 		for (const [key, counts] of Object.entries(limits)) {
 			assert.deepEqual(result[key], (source as any)[key].slice(0, counts[i]), `${level}.${key}`);
+			assert.equal(result.omitted[key], 60 - counts[i]);
 		}
 		for (const malformed of [undefined, null, "text", {}, 42]) {
 			const compact = compactWorkerResult(Object.fromEntries(Object.keys(limits).map((key) => [key, malformed])), level);
@@ -221,9 +223,9 @@ test("both compaction levels preserve fixed execution diagnostics through serial
 	const source = { status: "failed", execution, summary: Array(20).fill("诊断内容".repeat(100)) };
 	const before = structuredClone(source);
 	for (const level of ["standard", "minimal"] as const) {
-		const compact = compactWorkerResult(source, level);
+		const compact = level === "standard" ? compactWorkerResult(source) : compactWorkerResult(compactWorkerResult(source), level);
 		assert.deepEqual(compact.execution, execution, `${level}: fixed keys must not be truncated`);
-		const expected = { status: "failed", ...(level === "minimal" ? { truncated: true } : {}), results: [compact] };
+		const expected = { status: "failed", truncated: true, results: [compact] };
 		const budget = Buffer.byteLength(JSON.stringify(expected));
 		const serialized = serializePayload({ status: "failed", results: [compactWorkerResult(source)] }, budget);
 		assert.deepEqual(JSON.parse(serialized.text), JSON.parse(JSON.stringify(expected)), `${level}: preserve diagnostics at the output boundary`);

@@ -3,7 +3,7 @@ import test from "node:test";
 import workerExtension, { validateWorkerInput, batchResponse, batchUiSnapshot } from "./index.ts";
 import { WorkerRuntime } from "./runtime.ts";
 import { DEFAULT_OPTIONS } from "./config.ts";
-import { compactWorkerResult } from "./data.ts";
+import { compactWorkerResult, serializePayload, sanitizeStructuredValue } from "./data.ts";
 import type { executeTask } from "./process.ts";
 import { until, start, task as writeTask } from "./fixtures/helpers.ts";
 
@@ -42,6 +42,62 @@ function harness(execute: typeof executeTask, maxConcurrentWorkers = DEFAULT_OPT
 	};
 }
 
+
+test("field clipping is visible, keeps explicit failures, and survives further byte compression", async () => {
+	const result = {
+		status: "completed",
+		findings: [...Array.from({ length: 10 }, () => ({ severity: "low" })), { severity: "critical" }],
+		validation: [...Array.from({ length: 8 }, () => ({ result: "passed" })), { result: "failed" }],
+		acceptance: [...Array.from({ length: 8 }, () => ({ result: "passed" })), { result: "failed" }],
+		changed_files: Array.from({ length: 51 }, (_, i) => String(i)),
+	};
+	assert.ok(Buffer.byteLength(JSON.stringify(result)) < 1024);
+	const original = structuredClone(result);
+	const compact = compactWorkerResult(result);
+	assert.equal(compact.truncated, true);
+	assert.deepEqual(compact.omitted, { findings: 1, validation: 1, acceptance: 1, changed_files: 1 });
+	assert.equal(compact.findings[0].severity, "critical");
+	assert.equal(compact.validation[0].result, "failed");
+	assert.equal(compact.acceptance[0].result, "failed");
+	const minimal = compactWorkerResult(compact, "minimal");
+	assert.equal(minimal.omitted.findings, 7);
+	assert.equal(minimal.omitted.validation, 6);
+	for (const budget of [8192, 800, 300, 20]) {
+		const serialized = serializePayload({ status: "completed", results: [compact] }, budget);
+		assert.ok(Buffer.byteLength(serialized.text) <= budget);
+		assert.equal(JSON.parse(serialized.text).truncated, true);
+	}
+	assert.equal(compactWorkerResult(complete).truncated, undefined);
+	assert.equal(serializePayload({ results: [compactWorkerResult(complete)] }, 8192).payload.truncated, undefined);
+	assert.deepEqual(result, original);
+	const h = harness(async () => structuredClone(result));
+	try {
+		const response = await h.call({ tasks: [task] });
+		assert.equal(payload(response).result.truncated, true);
+		assert.equal(payload(response).result.results[0].omitted.findings, 1);
+		assert.equal(payload(response).result.results[0].validation[0].result, "failed");
+	} finally { await h.close(); }
+});
+
+test("real UI snapshots preserve numeric protocol usage and detach sanitized user content", async () => {
+	const usage = { input: 20, output: 10, cacheRead: 3, cacheWrite: 4, contextTokens: 1200, turns: 2 };
+	const result = { ...complete, execution: { usage }, failure: { api_key: "credential", accessToken: "credential", active: false, contextTokens: 1200 } };
+	const original = structuredClone(result);
+	const h = harness(async () => result);
+	try {
+		const response = await h.call({ tasks: [task] });
+		const snapshot = response.details;
+		assert.deepEqual(snapshot.tasks[0].usage, usage);
+		assert.deepEqual(JSON.parse(JSON.stringify(snapshot)).tasks[0].usage, usage);
+		assert.deepEqual(sanitizeStructuredValue(result.failure), { api_key: "[已隐藏]", accessToken: "[已隐藏]", active: false, contextTokens: 1200 });
+		snapshot.tasks[0].usage.contextTokens = -1;
+		snapshot.tasks[0].activities.push({ label: "tampered" });
+		const next = await h.call({ batchId: snapshot.batchId });
+		assert.equal(next.details.tasks[0].usage.contextTokens, 1200);
+		assert.equal(next.details.tasks[0].activities.some((item: any) => item.label === "tampered"), false);
+		assert.deepEqual(result, original);
+	} finally { await h.close(); }
+});
 
 test("title survives schema, execution and UI snapshots without replacing objective", async () => {
 	const titled = { ...task, title: "Inspect task cards" };
@@ -322,6 +378,18 @@ const batchResultFixture = {
 	out_of_scope: ["fixture exclusion"],
 	recommended_next_action: ["Review actual diff."],
 };
+
+test("final tool text includes control metadata within its byte budget", async (t) => {
+	const runtime = new WorkerRuntime(() => false);
+	t.after(() => runtime.dispose());
+	const batch = start(runtime, [writeTask("budget.ts")], async () => ({ status: "completed", summary: ["x".repeat(8000)] }));
+	await runtime.wait(batch.id);
+	batch.maxOutputBytes = 8192;
+	const response = batchResponse(batch);
+	assert.ok(Buffer.byteLength(response.content[0].text) <= batch.maxOutputBytes);
+	assert.equal(payload(response).batchId, batch.id);
+	assert.equal(payload(response).result.truncated, true);
+});
 
 test("single and multi batch JSON is compact and preserves fields and detached UI details", async (t) => {
 	t.mock.method(Date, "now", () => 1_700_000_000_000);

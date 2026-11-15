@@ -15,6 +15,7 @@ STOP = threading.Event()
 BUSY = False
 PENDING = None
 CURRENT = None
+SNAPSHOT_BURST = False
 MODEL = {'id': 'shared-fixture', 'name': 'Shared fixture', 'provider': 'test', 'contextWindow': 200000}
 ENTRIES = [json.loads(s) for s in SESSION.read_text().splitlines() if s.strip()]
 ENTRIES = [e for e in ENTRIES if e.get('type') != 'session']
@@ -79,6 +80,7 @@ def advance_progress():
 
 
 def control():
+    global SNAPSHOT_BURST
     path = ROOT / 'control.jsonl'
     offset = 0
     while not STOP.wait(.025):
@@ -99,6 +101,9 @@ def control():
                     advance_progress()
                 elif cmd['type'] == 'event':
                     emit(cmd['event'])
+                elif cmd['type'] == 'snapshot_burst':
+                    SNAPSHOT_BURST = True
+                    log('snapshot_burst_armed')
 
 
 log('start', birth=pathlib.Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19])
@@ -116,6 +121,19 @@ try:
                         'steeringMessages': [], 'followUpMessages': [], 'messageCount': len(ENTRIES)}
             elif typ == 'get_entries':
                 data = {'entries': ENTRIES, 'leafId': ENTRIES[-1]['id'] if ENTRIES else None}
+                if SNAPSHOT_BURST:
+                    SNAPSHOT_BURST = False
+                    assert CURRENT is not None and BUSY
+                    # A deterministic wire fence: one delta before the history
+                    # reply, four after it, without sleeps or model activity.
+                    for index in range(5):
+                        if index == 1:
+                            emit({'type': 'response', 'command': typ, 'id': req['id'], 'success': True, 'data': data})
+                        CURRENT['content'][0]['text'] += '|'
+                        emit({'type': 'message_update', 'message': CURRENT,
+                              'assistantMessageEvent': {'type': 'text_delta', 'contentIndex': 0, 'delta': '|'}})
+                    log('snapshot_burst_complete')
+                    continue
             elif typ == 'get_messages':
                 data = {'messages': [e['message'] for e in ENTRIES if e['type'] == 'message']}
             elif typ == 'get_session_stats':

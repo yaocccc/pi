@@ -51,6 +51,10 @@ new 使用 --no-session。fork 在批次接收时复制父会话活动分支，�
 
 可选 UI 的 /worker_settings 或同进程能力 API 编辑配置。worker-settings.json 位于配置的 agent 目录。必须配置 fast/normal/deep 模型路由，**没有可移植默认模型 ID**，无关键词推断、auto 档位、启用开关或 manual 参数。运行默认项：并发 **3**、超时 **900000 ms**、输出 **65536 字节**。Thinking 原样使用 off/minimal/low/medium/high/xhigh/max，须模型支持；换模型不自动换 Thinking，也不静默降级。旧顶层 max 路由迁移，automaticDelegationEnabled 废弃项删除。
 
+首次没有配置文件时，设置界面提供模型为空、Thinking 为 off 的未保存草稿。分别为 fast/normal/deep 选择可用模型和兼容 Thinking，再保存；取消不创建文件。执行任务仍要求完整配置；已有损坏配置报错并保留原文件，不会作为首次安装重置。
+
+结果字段达到数量上限时带 `truncated: true` 和 `omitted` 省略计数（`.bytes`/`.keys` 表示文本字节/对象字段裁剪）；明确失败及高严重度项优先保留。后续字节压缩保留截断提示，完整输出可通过现有 Worker transcript 入口查看。
+
 通过本模块 capabilities.ts/api.ts 按需发现 worker:v1，提供 getSettings/getModels/saveSettings/getSession/readTranscript。会话 lookup/history 返回脱离运行时的快照，subscribe 事件为 changed/history/batch/closed；关闭/替换时取消订阅，不跨会话保留所有权。观察者不能阻止清理或接管执行。
 
 ## 第三方 UI

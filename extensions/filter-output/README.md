@@ -2,7 +2,7 @@
 
 [English](README_EN.md)
 
-过滤成功工具结果中的部分敏感文本，并整体隐藏指定敏感文件的 read 结果。不改变工具执行、输入、磁盘文件或失败结果，也不是完整数据防泄漏系统。
+过滤工具结果（包括失败结果）中的部分敏感文本，并整体隐藏指定敏感文件的成功 read 结果。不改变工具执行、用户输入或磁盘文件，也不是完整数据防泄漏系统。
 
 ## 安装
 
@@ -31,9 +31,10 @@ export default function (pi: ExtensionAPI) {
 
 ## 过滤范围与局限
 
-- read 命中 .env/.env.*、.dev.vars*、secret(s).json/yaml/yml/toml 或 credentials 前缀文件名时，整个 content 替换为安全占位文本并发布 filter.redacted 事实；不保留原行结构。读取 .env.example 直接跳过处理，并非所有 example 后缀都豁免。
-- 其他成功结果（包括普通 read、bash 及其他工具）的 text block 使用启发式规则，覆盖部分密钥前缀、token/password 赋值、数据库凭据、私钥等。非 text block 原样保留；只有实际替换才返回新结果，此路径不发布专用事实。
-- 不保证覆盖未知格式、图片或错误消息，也可能误判普通文本。原始数据可能仍在磁盘、归档或其他日志中；不能替代授权、访问控制、密钥轮换或人工审查。
+- read 命中 .env/.env.*、.dev.vars*、secret(s).json/yaml/yml/toml 或 credentials 前缀文件名时，整个 content 替换为安全占位文本并发布 filter.redacted 事实；不保留原行结构。读取 .env.example 不整体隐藏，但仍执行文本脱敏；并非所有 example 后缀都豁免整体隐藏。
+- 所有工具结果（包括失败结果、普通 read、bash 及其他工具）的 text block 使用启发式规则，覆盖部分密钥前缀、token/password 赋值、数据库凭据、私钥等。非 text block 原样保留；只有实际替换才返回新结果，此路径不发布专用事实。
+- 工具结果中的完整 64 位十六进制值（裸值或带 0x/0X 前缀，大小写均匹配）一律替换为 [WEB3_PRIVATE_KEY_REDACTED]，不以字段名区分。由于仅凭外形无法区分私钥，本策略有意同时遮蔽交易/区块哈希、topic、bytes32、SHA-256 等公开值。仅用户发送的消息原封不动传送：扩展只注册 tool_result，不处理或改写用户消息；工具再次输出用户提供的值时，仍按工具结果脱敏。
+- 不保证覆盖未知格式、图片或非文本数据，也可能误判普通文本。原始数据可能仍在磁盘、归档或其他日志中；不能替代授权、访问控制、密钥轮换或人工审查。
 
 权威实现见 [index.ts](index.ts)；前端不重复执行脱敏，也不尝试还原文本。
 

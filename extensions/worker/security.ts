@@ -321,16 +321,22 @@ export async function gitChangedPaths(gitRoot: string, signal?: AbortSignal): Pr
 
 export function fileHash(filePath: string): string | null {
 	try {
-		if (!fs.statSync(filePath).isFile()) return null;
-		return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+		const stat = fs.lstatSync(filePath);
+		// Git stores the link text, not its target's content, and only the owner
+		// executable bit is meaningful for regular-file modes.
+		if (stat.isSymbolicLink()) return `120000:${createHash("sha256").update(fs.readlinkSync(filePath, { encoding: "buffer" })).digest("hex")}`;
+		if (!stat.isFile()) return stat.isDirectory() ? "040000" : "special";
+		return `${stat.mode & 0o100 ? "100755" : "100644"}:${createHash("sha256").update(fs.readFileSync(filePath)).digest("hex")}`;
 	} catch {
 		return null;
 	}
 }
 
 export async function indexHash(gitRoot: string, relativePath: string, signal?: AbortSignal): Promise<string | null> {
-	const result = await runCommand("git", ["rev-parse", `:${relativePath}`], gitRoot, { maxBytes: 1024, signal });
-	return result.code === 0 ? result.stdout.toString("utf8").trim() : null;
+	const result = await runCommand("git", ["ls-files", "--stage", "-z", "--", `:(literal)${relativePath}`], gitRoot, { maxBytes: 16 * 1024, signal });
+	// Include mode and conflict stage as well as blob identity. Strip only the
+	// pathname; tabs/newlines in Git paths must not alter the fingerprint.
+	return result.code === 0 ? result.stdout.toString("utf8").split("\0").filter(Boolean).map((entry) => entry.slice(0, entry.indexOf("\t"))).join("\0") || null : null;
 }
 
 export async function snapshotWorkspace(cwd: string, includePaths: Set<string> = new Set(), signal?: AbortSignal): Promise<WorkspaceSnapshot> {

@@ -24,7 +24,7 @@ const configurePreset = async (ctx: ExtensionContext, draft: RoutingConfig, pres
 	while (true) {
 		const setting = draft[preset];
 		const items = [
-			{ key: "model", label: `模型 · ${setting.model}` },
+			{ key: "model", label: `模型 · ${setting.model || "未配置"}` },
 			{ key: "thinking", label: `Thinking · ${setting.thinking}` },
 			{ key: "back", label: "返回" },
 		] as const;
@@ -36,7 +36,7 @@ const configurePreset = async (ctx: ExtensionContext, draft: RoutingConfig, pres
 		const available = getModels();
 		if (key === "model") {
 			const modelIds = [...new Set(available.map((model) => model.id))].sort((a, b) => a.localeCompare(b));
-			if (!modelIds.includes(setting.model)) modelIds.unshift(setting.model);
+			if (setting.model && !modelIds.includes(setting.model)) modelIds.unshift(setting.model);
 			const availableIds = new Set(available.map((model) => model.id));
 			const options = modelIds.map((modelId) => [
 				modelId === setting.model ? "●" : "○",
@@ -89,7 +89,7 @@ const inputInteger = async (
 const menuItems = (config: RoutingConfig): Array<{ key: MenuKey; label: string }> => [
 	...PRESETS.map((preset) => ({
 		key: preset,
-		label: `${PRESET_LABELS[preset]} · ${config[preset].model} · ${config[preset].thinking}`,
+		label: `${PRESET_LABELS[preset]} · ${config[preset].model || "未配置"} · ${config[preset].thinking}`,
 	})),
 	{ key: "maxConcurrentWorkers", label: `并发上限 · ${config.maxConcurrentWorkers}` },
 	{ key: "defaultTimeoutMs", label: `默认超时 · ${formatDuration(config.defaultTimeoutMs)}` },

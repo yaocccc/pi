@@ -60,6 +60,7 @@ export interface WorkspaceSnapshot {
 	gitRoot: string;
 	cwd: string;
 	statusPaths: Set<string>;
+	/** Git mode/type plus content identity (link text for symlinks); index includes stage. */
 	files: Map<string, { worktree: string | null; index: string | null }>;
 }
 

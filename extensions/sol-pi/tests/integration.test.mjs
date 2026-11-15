@@ -75,6 +75,7 @@ test("large text is sent twice, then referenced; recall reconstructs the origina
   const original = `head ☾\n${"middle observation\n".repeat(1100)}tail\n`;
   const message = { role: "toolResult", toolCallId: "call-1", toolName: "bash", content: [{ type: "text", text: original }], isError: false, timestamp: 1 };
   const ctx = context(cwd);
+  ctx.sessionManager.getBranch = () => [{ type: "message", message }];
   const first = await project(pi, [message], ctx);
   const second = await project(pi, [message], ctx);
   const third = await project(pi, [message], ctx);

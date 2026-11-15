@@ -26,9 +26,10 @@ type Config struct {
 	environment                     []string
 }
 type Event struct {
-	Data  json.RawMessage
-	Err   error
-	owner string // Captured at the backend transport edge, before response dispatch.
+	Data    json.RawMessage
+	Err     error
+	owner   string // Captured at the backend transport edge, before response dispatch.
+	ordered func() // Internal response fence, consumed in the backend event FIFO.
 }
 type reply struct {
 	data json.RawMessage
@@ -60,6 +61,7 @@ type Client struct {
 	stderrDone           chan struct{}
 	mu                   sync.Mutex
 	pending              map[string]chan reply
+	orderedPending       map[string]func(reply)
 	extensionPending     map[string]chan reply
 	exitErr              error
 	stderrTail           []byte
@@ -245,6 +247,11 @@ func (c *Client) Call(ctx context.Context, command map[string]any) (json.RawMess
 // sent releases the executor's transaction only after the complete frame has
 // been written. Waiting for Pi's acknowledgement must not block abort or UI.
 func (c *Client) call(ctx context.Context, command map[string]any, sent func()) (json.RawMessage, error) {
+	return c.callOrdered(ctx, command, sent, nil)
+}
+
+// ordered runs on the broker event consumer at the response's exact wire position.
+func (c *Client) callOrdered(ctx context.Context, command map[string]any, sent func(), ordered func(reply)) (json.RawMessage, error) {
 	id := fmt.Sprintf("goui-%s%d", c.idPrefix, c.next.Add(1))
 	request := make(map[string]any, len(command)+1)
 	for k, v := range command {
@@ -254,8 +261,14 @@ func (c *Client) call(ctx context.Context, command map[string]any, sent func()) 
 	ch := make(chan reply, 1)
 	c.mu.Lock()
 	c.pending[id] = ch
+	if ordered != nil {
+		if c.orderedPending == nil {
+			c.orderedPending = make(map[string]func(reply))
+		}
+		c.orderedPending[id] = ordered
+	}
 	c.mu.Unlock()
-	defer func() { c.mu.Lock(); delete(c.pending, id); c.mu.Unlock() }()
+	defer func() { c.mu.Lock(); delete(c.pending, id); delete(c.orderedPending, id); c.mu.Unlock() }()
 	if err := c.Send(ctx, request); err != nil {
 		if ctx.Err() == nil {
 			select {
@@ -443,11 +456,18 @@ func (c *Client) readLoop() {
 		if envelope.Type == "response" && envelope.ID != "" {
 			c.mu.Lock()
 			ch := c.pending[envelope.ID]
+			ordered := c.orderedPending[envelope.ID]
 			c.mu.Unlock()
 			if ch != nil {
 				r := reply{data: envelope.Data}
 				if !envelope.Success {
 					r.err = &ResponseError{Command: envelope.Command, Message: envelope.Error}
+				}
+				if ordered != nil {
+					// Charge retained responses to the same bounded FIFO as events.
+					if !c.emit(Event{Data: r.data, ordered: func() { ordered(r) }}) {
+						return
+					}
 				}
 				select {
 				case ch <- r:

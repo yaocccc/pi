@@ -49,7 +49,7 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 			return nil
 		}
 	}
-	if match("app.interrupt") && (t.state.Busy || t.state.Compacting || t.sending || t.awaitingStart || t.interruptRequested || t.resume.submit != nil) {
+	if match("app.interrupt") && (t.ownRunActive() || t.interruptRequested || t.resume.submit != nil) {
 		return m.interrupt(t)
 	}
 	if match("tui.input.copy") || match("app.message.copy") {

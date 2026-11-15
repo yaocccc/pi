@@ -51,6 +51,10 @@ worker({ batchId: "<returned batchId>", cancel: true })
 
 Use optional UI `/worker_settings` or in-process capability settings APIs. `worker-settings.json` lives in the configured agent directory. Supply all fast/normal/deep model routes: there is no portable default model ID, keyword routing, auto preset, enable switch or manual flag. Runtime defaults: concurrency **3**, timeout **900000 ms**, output **65536 bytes**. Thinking is exactly `off/minimal/low/medium/high/xhigh/max`, subject to backend model support; changing a model does not silently change thinking or downgrade it. Legacy max routing migrates; obsolete automaticDelegationEnabled is removed.
 
+When the configuration file is missing, settings opens an unsaved draft with empty model IDs and `off` thinking. Select available models and compatible thinking for all three routes before saving; cancelling creates no file. Execution still requires complete routes. Existing malformed configuration is reported and preserved, never reset as a first installation.
+
+Field limits produce `truncated: true` and `omitted` counts (`.bytes`/`.keys` indicate text-byte/object-key clipping). Explicit failures and high-severity findings take priority. Further byte compression retains a truncation notice; use the existing Worker transcript viewer for full output.
+
 `worker:v1` (discovered via this module's `capabilities.ts`/`api.ts`) exposes `getSettings/getModels/saveSettings/getSession/readTranscript`. Detached session `lookup/history` snapshots and `subscribe` events (`changed/history/batch/closed`) belong only to that session; unsubscribe on close/replacement. Discover at use time; observers cannot block cleanup or own execution.
 
 ## Third-party UI
