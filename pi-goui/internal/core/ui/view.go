@@ -157,7 +157,7 @@ func (m *Model) View() tea.View {
 		m.overlayToolInspect(visible)
 		m.overlayFork(visible)
 		text := strings.Join(visible, "\n")
-		if len(t.state.Items) == 0 && !m.showStartupInfo(t) {
+		if len(t.state.Items) == 0 && t.promptEcho == nil && !m.showStartupInfo(t) {
 			text = m.welcomeView()
 		}
 		var rows []string

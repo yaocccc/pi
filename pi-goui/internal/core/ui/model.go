@@ -37,6 +37,8 @@ type tab struct {
 	state                                                                          session.State
 	editor                                                                         input.Editor
 	doc                                                                            render.Document
+	nativeDocument                                                                 render.Document
+	promptEcho                                                                     *promptEcho
 	renderCache                                                                    render.TranscriptCache
 	docLinesText                                                                   string
 	docLines                                                                       []string
@@ -329,6 +331,7 @@ type replyMsg struct {
 	images        []map[string]any
 	draftRevision uint64
 	deferred      bool // Local intent captured before the first authoritative snapshot.
+	echo          *promptEcho
 }
 type snapshotMsg struct {
 	id                              int
@@ -594,6 +597,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// allow a queued refresh below to run.
 			if prepared != nil {
 				t.state.ApplySnapshot(prepared)
+				t.confirmPromptEcho()
 				if t.resume.pending && len(v.state) > 0 && len(v.entries) > 0 {
 					t.resume.authoritative = true
 					if v.err == nil && prepareErr == nil {
@@ -965,7 +969,9 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 			// Restore for manual recovery only; never automatically resubmit.
 			t.notify(v.err.Error())
 		}
-		if v.op == "prompt" && v.deferred {
+		if v.op == "prompt" && v.echo != nil {
+			m.restorePromptEcho(t, v.echo)
+		} else if v.op == "prompt" && v.deferred {
 			// This intent was captured before newer typing. Keep both drafts
 			// for manual recovery, including unknown completion; never retry.
 			m.restoreResumeDraft(t, &resumeSubmission{original: v.text, images: v.images})
@@ -1074,6 +1080,7 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 		var p struct{ Disposition string }
 		_ = json.Unmarshal(v.data, &p)
 		if p.Disposition == "queued" || p.Disposition == "handled" {
+			m.clearPromptEcho(t, v.echo)
 			t.awaitingStart = false
 			if !t.state.Busy && !t.state.Compacting {
 				t.interruptRequested = false

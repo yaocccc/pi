@@ -41,8 +41,8 @@ func TestSessionPresenceDismissesPreviousRunOnForeignOwnership(t *testing.T) {
 
 	presence.status = rpc.SessionStatus{}
 	m.sessionPresence(presence)
-	if got := m.workingLine(owner); got != m.paint("idle", m.cfg.Theme.Muted) {
-		t.Fatalf("foreign writer finished without restoring idle: %q", got)
+	if got := m.workingLine(owner); got != "" {
+		t.Fatalf("foreign writer finished but working row was not cleared: %q", got)
 	}
 	if owner.editor.Value() != "unsent local draft" || owner.assistantStats["local-answer"] != "saved answer statistics" || owner.client != nil {
 		t.Fatal("handoff changed the draft, saved answer statistics or backend")

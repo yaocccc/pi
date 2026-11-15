@@ -53,13 +53,20 @@ class Suite(shared.Suite):
         super().__init__(root, binary)
         self.env['PI_OFFLINE'] = '1'
         (root / 'agent/keybindings.json').write_text(json.dumps({'app.session.resume': ['ctrl+y']}))
+        (root / 'agent/settings.json').write_text(json.dumps({
+            'defaultProvider': 'test', 'defaultModel': 'resume-fixture', 'defaultThinkingLevel': 'low'}))
+        (root / 'agent/models.json').write_text(json.dumps({'providers': {'test': {'models': [
+            {'id': 'resume-fixture', 'name': 'Resume fixture', 'contextWindow': 200000}]}}}))
         self.session = root / 'agent/sessions/project/saved.jsonl'
         self.session.parent.mkdir(parents=True)
         header = {'type': 'session', 'version': 3, 'id': 'resume-saved',
                   'timestamp': '2026-01-01T00:00:00Z', 'cwd': str(root / 'cwd')}
         entries = [header,
                    {'type': 'session_info', 'id': 'info', 'parentId': None, 'name': 'Resume acceptance'},
-                   {'type': 'message', 'id': 'old-user', 'parentId': 'info',
+                   {'type': 'model_change', 'id': 'model', 'parentId': 'info',
+                    'provider': 'test', 'modelId': 'resume-fixture'},
+                   {'type': 'thinking_level_change', 'id': 'thinking', 'parentId': 'model', 'thinkingLevel': 'high'},
+                   {'type': 'message', 'id': 'old-user', 'parentId': 'thinking',
                     'message': self.message('user', 'NATIVE-SAVED-QUESTION')},
                    {'type': 'message', 'id': 'old-answer', 'parentId': 'old-user',
                     'message': self.message('assistant', HISTORY)}]
@@ -102,6 +109,8 @@ class Suite(shared.Suite):
         terminal = Terminal(self, name)
         self.wait(lambda: '↵ send' in terminal.text and re.search(r'\bidle\b', terminal.text),
                   name + ': blank local tab ready with idle status')
+        self.wait(lambda: 'resume-fixture' in terminal.editor and 'low' in terminal.editor,
+                  name + ': local default model and thinking visible before startup')
         assert not self.wire('start'), 'opening a blank tab started Pi'
         return terminal
 
@@ -118,6 +127,9 @@ class Suite(shared.Suite):
     def preview_idle(self, terminal):
         self.watch = terminal
         self.wait(lambda: HISTORY in terminal.text, 'saved history visible before Pi ready')
+        assert 'resume-fixture' in terminal.editor and 'high' in terminal.editor, 'saved model/thinking missing before startup'
+        assert re.search(r'\bin\s+1\s+out\s+1\b', terminal.text), 'saved usage missing before startup'
+        assert '2/200K' in terminal.text, 'saved context tokens and configured window missing before startup'
         assert not self.wire('start'), 'history preview started Pi'
         assert not (self.root / 'release-state').exists()
         assert not self.wire('released'), 'fixture was already released'
@@ -132,16 +144,49 @@ class Suite(shared.Suite):
     def release(self):
         (self.root / 'release-state').touch()
 
+    @staticmethod
+    def editor_row(terminal):
+        lines = terminal.text.splitlines()
+        # A full transcript can put its last bubble within the bottom nine
+        # rows. Find the editor via its footer and contiguous content rows;
+        # failure notices can replace the editor's top border.
+        row = next((i for i in reversed(range(len(lines)))
+                    if lines[i].startswith('│') and '↵ send' in lines[i]), None)
+        if row is None:  # A partially received repaint is not evidence yet.
+            return 0
+        while row > 0 and lines[row - 1].startswith('│'):
+            row -= 1
+        return row
+
+    @classmethod
+    def user_bubbles(cls, terminal, text):
+        transcript = '\n'.join(terminal.text.splitlines()[:cls.editor_row(terminal)])
+        return len(re.findall(r'│\s*' + re.escape(text) + r'\s*│', transcript))
+
     def first_send(self, terminal):
         terminal.send('FIRST-INTENT')
         self.wait(lambda: 'FIRST-INTENT' in terminal.editor, 'typing during blocked get_state')
-        terminal.send('\r')
+        started = time.monotonic()
+        os.write(terminal.master, b'\r')
+        while self.user_bubbles(terminal, 'FIRST-INTENT') != 1:
+            if time.monotonic() - started > 3:
+                raise AssertionError('ordinary user bubble missing before backend readiness: ' + terminal.text)
+            self.pump(.005)
+        echo_ms = round((time.monotonic() - started) * 1000, 1)
+        editor = '\n'.join(terminal.text.splitlines()[self.editor_row(terminal):])
+        assert 'FIRST-INTENT' not in editor, 'echo left a duplicate in the editor'
+        assert not self.commands('prompt'), 'echo waited for actual prompt submission'
+        assert self.session.read_bytes() == self.saved_bytes, 'echo changed native saved history'
         self.wait(lambda: bool(self.wire('gate')), 'explicit write reached the blocked get_state')
-        self.wait(lambda: 'working' in terminal.editor, 'working message visible while preparing submission')
-        assert not any(label in terminal.text for label in ('待发送', 'Starting pi', 'Loading current session'))
+        self.wait(lambda: '1 turns · 0s' in terminal.editor, 'first turn and initial duration visible before blocked startup finishes')
+        assert not re.search(r'\bworking\b', terminal.editor), 'submission flashed an intermediate working label'
+        assert not any(label in terminal.text for label in ('待发送', '发送中', 'Starting pi', 'Loading current session'))
         terminal.send('LATER-LOCAL-DRAFT')
         self.wait(lambda: 'LATER-LOCAL-DRAFT' in terminal.editor, 'later draft while intent pending')
+        assert self.user_bubbles(terminal, 'FIRST-INTENT') == 1, 'later typing erased or duplicated the echo'
         assert not self.commands('prompt'), 'prompt escaped readiness gate'
+        native_file = pathlib.Path(self.wire('start')[-1]['session'])
+        assert 'FIRST-INTENT' not in native_file.read_text(), 'display echo was persisted before dispatch'
         self.release()
         self.wait(lambda: len(self.commands('prompt')) == 1, 'deferred intent submitted once after ready')
         self.wait(lambda: 'RESULT-FIRST-INTENT' in terminal.text, 'deferred prompt result visible')
@@ -149,7 +194,17 @@ class Suite(shared.Suite):
         self.pump(.8)
         prompts = self.commands('prompt')
         assert len(prompts) == 1 and prompts[0]['message'] == 'FIRST-INTENT', prompts
+        assert self.user_bubbles(terminal, 'FIRST-INTENT') == 1, 'native confirmation duplicated or lost the user bubble'
+        records = [json.loads(line) for line in native_file.read_text().splitlines() if line.strip()]
+        users = [entry.get('message', {}) for entry in records if entry.get('message', {}).get('role') == 'user']
+        assert sum(any(part.get('text') == 'FIRST-INTENT' for part in msg.get('content', [])) for msg in users) == 1
         assert all(not BAD_STATUS.search(f) for f in self.frames), 'misleading resume status after ready'
+        print(json.dumps({'prompt_echo': terminal.name, 'visible_ms': echo_ms, 'prompt_blocked_until_release': True}), flush=True)
+
+    def run_blank_echo(self):
+        terminal = self.blank_ready('blank-echo')
+        self.first_send(terminal)
+        self.checkpoint('blank session: normal user bubble before gated startup, no local history write, one confirmed message')
 
     def run_initial(self):
         terminal = Terminal(self, 'initial-saved', saved=True)
@@ -228,7 +283,9 @@ class Suite(shared.Suite):
         self.first_paint(terminal, started, 3.0)
         terminal.send('LARGE-COLD-DRAFT')
         assert 'LARGE-COLD-DRAFT' in terminal.editor
-        self.checkpoint('large native history: cold first paint before backend readiness, editing remains available')
+        terminal.send(b'\x01\x0b')  # Clear only the fixture's draft before the send check.
+        self.first_send(terminal)
+        self.checkpoint('large native history: cold first paint and immediate user echo before backend readiness, confirmed once')
 
     def run_large_sidebar(self):
         self.large_history()
@@ -259,11 +316,17 @@ class Suite(shared.Suite):
         self.preview_idle(terminal)
         terminal.send('UNSENT-ON-FAILURE\r')
         self.wait(lambda: bool(self.wire('gate')), 'explicit write reaches failing connection')
+        self.wait(lambda: self.user_bubbles(terminal, 'UNSENT-ON-FAILURE') == 1,
+                  'local bubble visible while failing connection is still gated')
+        assert self.session.read_bytes() == self.saved_bytes, 'local echo was written into native history'
         terminal.send('LATER-FAILURE-DRAFT')
         self.release()
         self.wait(lambda: '连接失败' in terminal.text, 'real backend failure is clearly reported')
         assert HISTORY in terminal.text, 'failure erased readable saved history'
         assert 'LATER-FAILURE-DRAFT' in terminal.editor, 'failure overwrote later draft'
+        assert 'UNSENT-ON-FAILURE' in terminal.editor, 'failure lost the original input'
+        assert self.user_bubbles(terminal, 'UNSENT-ON-FAILURE') == 0, 'failure retained an unconfirmed user bubble'
+        assert self.session.read_bytes() == self.saved_bytes, 'failed startup changed native history'
         assert not self.commands('prompt'), 'failed connection sent or retried deferred intent'
         assert not BAD_STATUS.search(terminal.text), 'failure incorrectly labelled stopped'
         self.checkpoint('backend failure retains readable native history and local draft, reports connection failure, never submits')
@@ -283,7 +346,7 @@ def main():
         if not args.binary:
             subprocess.run(['go', 'build', '-o', str(binary), './cmd/pi-goui'], cwd=ROOT, check=True)
         checks = []
-        for name in ('initial', 'replace', 'preserve', 'failure', 'large_initial', 'large_sidebar'):
+        for name in ('blank_echo', 'initial', 'replace', 'preserve', 'failure', 'large_initial', 'large_sidebar'):
             folder = root / name
             folder.mkdir()
             suite = Suite(folder, binary)

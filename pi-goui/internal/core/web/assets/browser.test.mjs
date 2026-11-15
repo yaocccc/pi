@@ -105,8 +105,14 @@ test('xterm: shared grid, activity, lifecycle, raw input, ANSI, reconnect and cl
     assert.equal(await evaluate(`transports.length`),0,'login must not automatically start or take over a TUI');
     assert.equal(await evaluate(`document.querySelector('#instance-list [data-desktop] strong').textContent`),'桌面共享实例');
     assert.equal(instances.size,1,'opening the instance list does not create an instance');
-    instances.set('desktop-later',{...desktop,id:'desktop-later',name:'Later desktop'});
+    desktop.title='会话独占锁异常恢复';
+    instances.set('desktop-later',{...desktop,id:'desktop-later',name:'Later desktop',title:'另一个会话 <img src=x onerror=alert(1)>'});
     await wait(`!!document.querySelector('#instance-list [data-instance-id="desktop-later"]')`,'automatically discovers a later desktop');
+    assert.equal(await evaluate(`document.querySelector('#instance-list [data-instance-id="main"] strong').textContent`),'桌面共享实例 · '+desktop.title);
+    assert.equal(await evaluate(`document.querySelector('#instance-list [data-instance-id="desktop-later"] strong').textContent`),'桌面共享实例 · '+instances.get('desktop-later').title);
+    assert.equal(await evaluate(`document.querySelectorAll('#instance-list img').length`),0,'titles are text, never markup');
+    desktop.title='切换后的会话';
+    await wait(`document.querySelector('#instance-list [data-instance-id="main"] strong').textContent==='桌面共享实例 · 切换后的会话'`,'focused session title refreshes without hiding the desktop label');
     assert.equal(await evaluate('transports.length'),0,'automatic discovery never takes control');
     instances.delete('desktop-later');
     await wait(`!document.querySelector('#instance-list [data-instance-id="desktop-later"]')`,'automatically removes a departed desktop');

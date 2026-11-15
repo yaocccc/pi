@@ -120,6 +120,11 @@ func (m *Model) receiveDocument(v documentResult) {
 }
 
 func (m *Model) publishDocument(t *tab, doc render.Document, lines []string) {
+	t.nativeDocument = doc
+	if t.promptEcho != nil {
+		doc = m.echoDocument(t, doc)
+		lines = nil
+	}
 	// Refreshes may insert rows above the viewport. Anchor the existing view
 	// to its stable message/tool ID instead of keeping only a raw row offset.
 	anchor, within := "", 0

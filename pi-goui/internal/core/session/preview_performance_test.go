@@ -57,6 +57,10 @@ func TestPrepareFileMatchesEnvelopePreview(t *testing.T) {
 			oldState, newState := base, base
 			oldState.ApplySnapshot(old)
 			newState.ApplySnapshot(got)
+			// Native previews now derive persisted usage; the old history-only
+			// envelope has no stats endpoint. History and live fields must still
+			// match exactly. Metadata totals are covered by preview_metadata_test.
+			oldState.Stats = newState.Stats
 			a, _ := json.Marshal(oldState)
 			b, _ := json.Marshal(newState)
 			if string(a) != string(b) {

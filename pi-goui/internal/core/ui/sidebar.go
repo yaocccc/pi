@@ -33,7 +33,7 @@ func (m *Model) sidebarContext() render.SidebarContext {
 		context.Git = m.gitInfo
 	}
 	key, _ := m.quotaIdentity()
-	if t := m.current(); t != nil && t.state.Model.Provider == "" {
+	if t := m.current(); t != nil && t.state.Model.Provider == "" && !t.resume.preview && !t.resume.authoritative {
 		key = m.quotaKey // Keep cached quota while a new session initializes.
 	}
 	if key != "" && key == m.quotaKey && m.quotaSnapshot.LoggedIn {

@@ -4,8 +4,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"pi-goui/internal/core/session"
 )
 
 func TestDeleteCommandConfirmsAndKeepsStableTarget(t *testing.T) {
@@ -49,7 +51,32 @@ func TestDeleteCommandConfirmsAndKeepsStableTarget(t *testing.T) {
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
+	cwd := m.tabDirectory(other)
+	list := []session.Summary{{Path: path}, {Path: otherPath}}
+	m.sidebarHistory.cwd = cwd
+	m.sidebarHistory.sessions = list
+	m.sidebarHistory.checked = time.Now()
+	m.sidebarHistory.pending = true
+	m.sidebarHistory.generation = 42
+	m.sidebarHistory.cache = map[string]sidebarHistoryCache{
+		cwd: {sessions: list, checked: time.Now()},
+	}
 	m.Update(result)
+	assertRecents := func() {
+		t.Helper()
+		if got := m.sidebarHistory.sessions; len(got) != 1 || got[0].Path != otherPath {
+			t.Fatalf("deleted session still in RECENTS: %+v", got)
+		}
+		if got := m.sidebarHistory.cache[cwd].sessions; len(got) != 1 || got[0].Path != otherPath {
+			t.Fatalf("deleted session still cached: %+v", got)
+		}
+	}
+	assertRecents()
+	if m.sidebarHistory.generation <= 42 || !m.sidebarHistory.pending {
+		t.Fatal("deletion did not immediately schedule a fresh scan")
+	}
+	m.Update(sidebarHistoryMsg{generation: 42, cwd: cwd, sessions: list})
+	assertRecents()
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("confirmed current-session history remains")
 	}

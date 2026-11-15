@@ -323,7 +323,9 @@ function renderInstances(instances) {
   for (const instance of instances) {
       const item = document.createElement('li'), button = document.createElement('button');
       const name = document.createElement('strong'), path = document.createElement('span');
-      name.textContent = instance.desktop ? '桌面共享实例' : (instance.name || '网页实例');
+      name.textContent = instance.desktop
+        ? '桌面共享实例' + (instance.title ? ' · ' + instance.title : '')
+        : (instance.title || instance.name || '网页实例');
       path.className = 'project-path'; path.textContent = instance.cwd || '尚未选择项目';
       button.type = 'button'; button.dataset.instanceId = instance.id;
       if (instance.desktop) button.setAttribute('data-desktop', '');

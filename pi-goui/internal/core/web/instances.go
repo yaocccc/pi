@@ -12,6 +12,7 @@ import (
 type instanceInfo struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
+	Title     string `json:"title,omitempty"`
 	Desktop   bool   `json:"desktop"`
 	Cwd       string `json:"cwd"`
 	ProjectID string `json:"projectId"`
@@ -26,16 +27,16 @@ func (s *Server) instanceSnapshot(id string) instanceInfo {
 	if cwd == "" {
 		cwd = s.cfg.Cwd
 	}
-	status := "idle"
+	status, title := "idle", ""
 	if s.terminal != nil {
 		s.terminal.mu.Lock()
-		status = "running"
+		status, title = "running", s.terminal.title
 		if s.terminal.exited {
 			status = "exited"
 		}
 		s.terminal.mu.Unlock()
 	}
-	return instanceInfo{ID: id, Name: filepath.Base(cwd), Desktop: s.cfg.SharedDesktop,
+	return instanceInfo{ID: id, Name: filepath.Base(cwd), Title: title, Desktop: s.cfg.SharedDesktop,
 		Cwd: cwd, ProjectID: s.projectID, Status: status}
 }
 

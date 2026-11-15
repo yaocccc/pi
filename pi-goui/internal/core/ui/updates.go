@@ -142,7 +142,7 @@ func (m *Model) receiveReleaseNotes(msg releaseNotesMsg) {
 }
 
 func (m *Model) showStartupInfo(t *tab) bool {
-	return t.newSession && len(t.state.Items) == 0
+	return t.newSession && len(t.state.Items) == 0 && t.promptEcho == nil
 }
 
 func (m *Model) startupDocument(t *tab) render.Document {

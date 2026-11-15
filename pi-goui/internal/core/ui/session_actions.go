@@ -325,8 +325,28 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 		}
 	}
 	m.patchSessionSelectors(a, target, true)
+	// Publish the durable deletion immediately and reject scans started before it.
+	h := &m.sidebarHistory
+	h.generation++
+	h.pending = false
+	h.checked = time.Time{}
+	remove := func(list []session.Summary) []session.Summary {
+		out := make([]session.Summary, 0, len(list))
+		for _, saved := range list {
+			if !sameSessionPath(saved.Path, a.path) {
+				out = append(out, saved)
+			}
+		}
+		return out
+	}
+	h.sessions = remove(h.sessions)
+	for cwd, cached := range h.cache {
+		cached.sessions = remove(cached.sessions)
+		cached.checked = time.Time{}
+		h.cache[cwd] = cached
+	}
 	if target == nil {
-		return nil
+		return m.requestSidebarHistory(time.Now())
 	}
 	// The command has already awaited Close, so removal never races its writer.
 	var fresh *tab
@@ -339,9 +359,9 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 		focus = m.restoreSessionSelector(chooser)
 	}
 	if fresh != nil {
-		return tea.Batch(closed, focus, m.start(fresh))
+		return tea.Batch(closed, focus, m.start(fresh), m.requestSidebarHistory(time.Now()))
 	}
-	return tea.Batch(closed, focus)
+	return tea.Batch(closed, focus, m.requestSidebarHistory(time.Now()))
 }
 
 func (m *Model) restoreSessionSelector(previous *dialog) tea.Cmd {

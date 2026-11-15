@@ -320,6 +320,36 @@ func TestTerminalProtocolRejectsCrossOriginAndInvalidMessages(t *testing.T) {
 	readUntil(t, c, "INPUT:6f6b")
 }
 
+func TestInstanceTracksTerminalTitle(t *testing.T) {
+	term := &terminal{parser: ansi.NewParser(), modes: make(map[int]bool)}
+	term.trackModes()
+	s := &Server{cfg: Config{Cwd: "/same/project", SharedDesktop: true}, terminal: term}
+	for _, tc := range []struct {
+		output, want string
+	}{
+		{"", ""},
+		{"\x1b]2;pi · 会话独占锁异常恢复\x07", "会话独占锁异常恢复"},
+		{"\x1b]0;pi . 另一个会话\x1b\\", "另一个会话"},
+		{"\x1b]1;ignored icon\x07\x1b]52;c;ignored clipboard\x07", "另一个会话"},
+		{"\x1b]2;custom title; details\x07", "custom title; details"},
+		{"\x1b]2;" + strings.Repeat("长", 3000) + "\x07", strings.Repeat("长", (4096-2)/3)},
+		{"\x1b]2;pi · \x07", ""},
+	} {
+		// Exercise OSC terminators and UTF-8 split across separate PTY reads.
+		for _, b := range []byte(tc.output) {
+			term.record([]byte{b})
+		}
+		info := s.instanceSnapshot("main")
+		if info.Title != tc.want || info.Cwd != "/same/project" || !info.Desktop {
+			t.Fatalf("unexpected instance metadata: title=%q cwd=%q desktop=%v", info.Title, info.Cwd, info.Desktop)
+		}
+		encoded, err := json.Marshal(info)
+		if err != nil || !json.Valid(encoded) {
+			t.Fatalf("invalid title JSON: %s (%v)", encoded, err)
+		}
+	}
+}
+
 func TestReplayBoundAndSlowClient(t *testing.T) {
 	term := &terminal{parser: ansi.NewParser(), modes: make(map[int]bool)}
 	term.trackModes()

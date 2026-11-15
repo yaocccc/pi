@@ -95,8 +95,9 @@ func TestDesktopDiscoveryBothStartOrdersAndProxyLifecycle(t *testing.T) {
 			local := privateDesktopDial(t, desktop, endpoint)
 			readUntil(t, local, "PID:")
 			original := desktop.terminal
+			original.record([]byte("\x1b]2;pi · Focused session\x07"))
 			list = instanceList(t, s)
-			if len(list) != 1 || list[0].Status != "running" || list[0].ProjectID != desktop.projectID {
+			if len(list) != 1 || list[0].Status != "running" || list[0].ProjectID != desktop.projectID || list[0].Title != "Focused session" {
 				t.Fatal(list)
 			}
 			// Listing never steals control or emits credentials/socket paths.

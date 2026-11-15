@@ -100,6 +100,9 @@ func (m *Model) applySingleEvent(t *tab, event rpc.Event) (cmds []tea.Cmd, rende
 		cmds = append(cmds, m.refresh(t))
 	}
 	t.invalidateStream()
+	if env.Type == "message_start" || env.Type == "message_end" {
+		renderNow = t.confirmPromptEcho()
+	}
 	if env.Type == "agent_start" {
 		t.status = ""
 		t.sending = false
@@ -110,6 +113,7 @@ func (m *Model) applySingleEvent(t *tab, event rpc.Event) (cmds []tea.Cmd, rende
 		}
 	}
 	if env.Type == "agent_settled" {
+		m.clearPromptEcho(t, t.promptEcho)
 		if wasWorking {
 			t.saveAssistantStats()
 		}
@@ -120,7 +124,7 @@ func (m *Model) applySingleEvent(t *tab, event rpc.Event) (cmds []tea.Cmd, rende
 	if t != m.current() && (env.Type == "message_end" || env.Type == "agent_settled") {
 		t.unread++
 	}
-	return cmds, false
+	return cmds, renderNow
 }
 
 func (m *Model) closeEventStream(t *tab, err error) tea.Cmd {
@@ -132,6 +136,9 @@ func (m *Model) closeEventStream(t *tab, err error) tea.Cmd {
 	}
 	if t.mutation != nil {
 		t.mutation.disconnected = true
+	}
+	if e := t.promptEcho; e != nil && e.dispatched {
+		m.restorePromptEcho(t, e)
 	}
 	t.revision++
 	t.state.Busy, t.state.Compacting = false, false

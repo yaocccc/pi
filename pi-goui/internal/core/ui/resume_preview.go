@@ -41,20 +41,25 @@ type resumePreviewMsg struct {
 	header     session.Header
 	prepared   *session.PreparedSnapshot
 	stamp      resumePreviewStamp
+	config     previewModelConfig
+	loadConfig func() previewModelConfig
 	err        error
 }
 
 func (m *Model) previewSession(t *tab) tea.Cmd {
-	if t.state.File == "" || t.client != nil || t.cycle.previewPending || t.cycle.phase == cycleClosing {
+	if t.client != nil || t.cycle.previewPending || t.cycle.phase == cycleClosing {
 		return nil
 	}
 	owner, client, file, revision := t, t.client, resumePreviewPath(t.state.File), t.revision
 	t.cycle.previewPending = true
-	v := resumePreviewMsg{owner: owner, client: client, file: file, revision: revision, generation: t.cycle.generation}
+	v := resumePreviewMsg{owner: owner, client: client, file: file, revision: revision, generation: t.cycle.generation, loadConfig: m.previewConfigReader(t)}
+	if file == "" {
+		return func() tea.Msg { return finishResumePreview(v) }
+	}
 	p := &m.resumePreload
 	if cached := p.cached; cached != nil && cached.file == file && cached.stamp.current(file) {
 		v.header, v.prepared, v.err, v.stamp = cached.header, cached.prepared, cached.err, cached.stamp
-		return func() tea.Msg { return v }
+		return func() tea.Msg { return finishResumePreview(v) }
 	}
 	if p.job != nil && p.job.file == file && p.job.stamp.current(file) {
 		for _, waiter := range p.waiters {
@@ -71,7 +76,7 @@ func (m *Model) previewSession(t *tab) tea.Cmd {
 		if v.err == nil {
 			v.header, v.prepared, v.err = preparation.PrepareFile(file)
 		}
-		return v
+		return finishResumePreview(v)
 	}
 }
 
@@ -93,7 +98,9 @@ func (m *Model) receiveResumePreview(v resumePreviewMsg) tea.Cmd {
 		}
 		return nil
 	}
+	previousModel := t.state.Model
 	t.state.ApplySnapshot(v.prepared)
+	v.config.apply(&t.state, previousModel)
 	t.state.Busy, t.state.Compacting = false, false
 	t.state.Steering, t.state.FollowUp = nil, nil
 	t.cycle.preview = v.stamp
@@ -108,7 +115,7 @@ func (m *Model) receiveResumePreview(v resumePreviewMsg) tea.Cmd {
 	// Treat the first layout like streaming work: keep typing responsive while
 	// Markdown/tool rendering runs, rather than doing it in this update.
 	t.streamDirty = true
-	return m.scheduleDocument(t)
+	return tea.Batch(m.scheduleDocument(t), m.pollQuota(time.Now()))
 }
 
 func (m *Model) deferResumeSubmission(t *tab, followUp bool) tea.Cmd {
@@ -116,7 +123,9 @@ func (m *Model) deferResumeSubmission(t *tab, followUp bool) tea.Cmd {
 		t.notify("上一条输入等待连接；当前草稿已保留")
 		return nil
 	}
-	t.resume.submit = &resumeSubmission{original: t.editor.Value(), images: append([]map[string]any(nil), t.images...), followUp: followUp}
+	pending := &resumeSubmission{original: t.editor.Value(), images: append([]map[string]any(nil), t.images...), followUp: followUp}
+	m.showPromptEcho(t, pending.original, pending.images, pending)
+	t.resume.submit = pending
 	t.setValue("")
 	t.clearImages()
 	t.historyIndex = -1
@@ -179,6 +188,9 @@ func (m *Model) restoreResumeSubmission(t *tab) {
 		return
 	}
 	t.resume.submit = nil
+	if t.promptEcho != nil && t.promptEcho.pending == pending {
+		m.clearPromptEcho(t, t.promptEcho)
+	}
 	m.restoreResumeDraft(t, pending)
 }
 

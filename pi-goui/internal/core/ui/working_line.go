@@ -47,16 +47,19 @@ func (m *Model) workingLine(t *tab) string {
 			line = m.paint(status, m.cfg.Theme.Muted)
 		}
 	} else if m.status(t) == "working" {
-		// Preparation is presentation-only: native events still own run metrics.
+		// Show the first-turn placeholder immediately for a submitted prompt;
+		// native events still own the actual counters, usage and timing.
 		if !t.working.Active {
-			line = render.AnimateWorkingLine("working", m.cfg.Theme, m.frame)
+			label := "working"
+			if t.resume.submit != nil || t.sending || t.awaitingStart {
+				label = "1 turns · 0s"
+			}
+			line = render.AnimateWorkingLine(label, m.cfg.Theme, m.frame)
 		}
 	} else if line == "" || t.dead || t.state.Compacting || t.sending || len(t.dialogs) > 0 {
 		status := m.status(t)
-		if status == "Ready" || status == "ready" || strings.EqualFold(status, "queued") {
+		if status == "Ready" || status == "ready" || strings.EqualFold(status, "queued") || strings.EqualFold(status, "idle") {
 			status = ""
-		} else if strings.EqualFold(status, "idle") {
-			status = "idle"
 		}
 		line = ""
 		if status != "" {

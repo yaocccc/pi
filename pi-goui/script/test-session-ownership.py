@@ -318,7 +318,8 @@ class Suite:
             terminal.idle()
         self.wait(lambda: identity(second) is None, 'second idle writer exits')
         assert a.working is None, 'previous owner restored stale completed working statistics after handoff'
-        assert re.search(r'\bidle\b', a.editor), 'previous owner did not restore idle status after handoff'
+        assert not re.search(r'\bidle\b', a.editor), 'idle appeared in the previous owner working message'
+        assert re.search(r'\bidle\b', a.text), 'previous owner sidebar lost its idle status'
         assert re.search(r'✓ \d+ turns', b.text), 'executing owner lost its own completion row'
         self.checkpoint('foreign writer handoff permanently clears the previous owner completion row without hiding the new owner result')
         assert 'draft-after-handoff' in a.editor

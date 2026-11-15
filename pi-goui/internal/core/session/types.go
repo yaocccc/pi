@@ -11,6 +11,8 @@ type ModelInfo struct {
 	ContextWindow int    `json:"contextWindow"`
 }
 type Stats struct {
+	UserMessages, AssistantMessages             int
+	ToolResults, ToolCalls, TotalMessages       int
 	Input, Output, CacheRead, CacheWrite, Total int
 	Cost                                        float64
 	HasCost                                     bool

@@ -144,6 +144,7 @@ type terminal struct {
 	modifyKeys   int
 	keypad       bool
 	parser       *ansi.Parser
+	title        string
 	exited       bool
 	exit         []byte
 	done         chan struct{}
@@ -179,8 +180,17 @@ func startTerminal(cfg Config, cols, rows int) (*terminal, error) {
 }
 
 func (t *terminal) trackModes() {
-	t.parser.SetDataSize(1) // No need to retain OSC/DCS payloads (including clipboard data).
-	t.parser.SetHandler(ansi.Handler{HandleCsi: func(cmd ansi.Cmd, params ansi.Params) {
+	t.parser.SetDataSize(4096) // Bound title parsing, including unrelated OSC/DCS payloads.
+	t.parser.SetHandler(ansi.Handler{HandleOsc: func(cmd int, data []byte) {
+		if cmd != 0 && cmd != 2 {
+			return // Only window titles, never icon names or clipboard contents.
+		}
+		_, title, ok := strings.Cut(string(data), ";")
+		if ok {
+			title = strings.TrimPrefix(strings.TrimPrefix(title, "pi ·"), "pi .")
+			t.title = strings.Join(strings.Fields(strings.ToValidUTF8(title, "")), " ")
+		}
+	}, HandleCsi: func(cmd ansi.Cmd, params ansi.Params) {
 		if cmd.Prefix() == '>' && cmd.Final() == 'm' {
 			resource, _, _ := params.Param(0, 0)
 			level, _, _ := params.Param(1, 0)

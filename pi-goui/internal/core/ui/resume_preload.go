@@ -136,7 +136,7 @@ func (m *Model) receiveResumePreload(v resumePreloadMsg) tea.Cmd {
 		}
 		waiter.header, waiter.prepared, waiter.err = v.entry.header, v.entry.prepared, v.entry.err
 		waiter.stamp = v.entry.stamp
-		cmds = append(cmds, func() tea.Msg { return waiter })
+		cmds = append(cmds, func() tea.Msg { return finishResumePreview(waiter) })
 	}
 	cmds = append(cmds, m.requestResumePreload(p.wanted))
 	return tea.Batch(cmds...)

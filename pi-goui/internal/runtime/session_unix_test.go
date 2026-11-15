@@ -55,6 +55,43 @@ func TestSessionProbeIsReadOnly(t *testing.T) {
 		t.Fatal("probe created session")
 	}
 }
+func TestSessionRuntimeFilesStayOutsideAgent(t *testing.T) {
+	agent, path := sessionFixture(t)
+	// Native configuration may be read-only; ownership needs no writable
+	// agent directory and must never recreate the retired agent/goui-rpc.
+	if err := os.Chmod(agent, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(agent, 0700) })
+	lease, err := AcquireSession(agent, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	want := filepath.Join(os.Getenv("HOME"), ".pi", "goui-locks")
+	if lease.root != want {
+		t.Fatalf("runtime registry %q, want %q", lease.root, want)
+	}
+	for _, stage := range []string{"held", "released"} {
+		if stage == "released" {
+			if err := lease.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		status, err := ProbeSession(agent, path)
+		if err != nil || status.Busy != (stage == "held") {
+			t.Fatalf("%s: unexpected ownership: %+v %v", stage, status, err)
+		}
+		entries, err := os.ReadDir(agent)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("%s: runtime wrote into agent directory: %v %v", stage, entries, err)
+		}
+		if _, err := os.Lstat(filepath.Join(agent, "goui-rpc")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s: retired agent runtime directory exists: %v", stage, err)
+		}
+	}
+}
+
 func TestSessionExclusiveAliasesAndReplacement(t *testing.T) {
 	for _, mode := range []string{"existing", "first-persistence", "replacement"} {
 		t.Run(mode, func(t *testing.T) {

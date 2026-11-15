@@ -50,6 +50,12 @@ type entry struct {
 	Summary, Name string
 	CustomType    string
 	Data          json.RawMessage
+	// Optional preview metadata stays raw so invalid metadata cannot prevent
+	// otherwise readable history from being rendered.
+	Provider      json.RawMessage `json:"provider,omitempty"`
+	ModelID       json.RawMessage `json:"modelId,omitempty"`
+	ThinkingLevel json.RawMessage `json:"thinkingLevel,omitempty"`
+	Usage         json.RawMessage `json:"usage,omitempty"`
 }
 
 func keyOf(m message) string {
@@ -146,9 +152,11 @@ func (s *State) LoadState(raw json.RawMessage) error {
 }
 func (s *State) LoadStats(raw json.RawMessage) error {
 	var v struct {
-		Tokens       struct{ Input, Output, CacheRead, CacheWrite, Total, TotalTokens int }
-		Cost         *float64
-		ContextUsage *struct {
+		UserMessages, AssistantMessages       int
+		ToolResults, ToolCalls, TotalMessages int
+		Tokens                                struct{ Input, Output, CacheRead, CacheWrite, Total, TotalTokens int }
+		Cost                                  *float64
+		ContextUsage                          *struct {
 			Tokens        *int
 			Percent       *float64
 			ContextWindow int
@@ -157,7 +165,10 @@ func (s *State) LoadStats(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return err
 	}
-	s.Stats = Stats{Input: v.Tokens.Input, Output: v.Tokens.Output, CacheRead: v.Tokens.CacheRead, CacheWrite: v.Tokens.CacheWrite, Total: v.Tokens.Total, ContextWindow: s.Model.ContextWindow}
+	s.Stats = Stats{
+		Input: v.Tokens.Input, Output: v.Tokens.Output, CacheRead: v.Tokens.CacheRead, CacheWrite: v.Tokens.CacheWrite, Total: v.Tokens.Total, ContextWindow: s.Model.ContextWindow,
+		UserMessages: v.UserMessages, AssistantMessages: v.AssistantMessages, ToolResults: v.ToolResults, ToolCalls: v.ToolCalls, TotalMessages: v.TotalMessages,
+	}
 	if s.Stats.Total == 0 {
 		s.Stats.Total = v.Tokens.TotalTokens
 	}

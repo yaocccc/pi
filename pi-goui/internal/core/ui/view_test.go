@@ -41,6 +41,9 @@ func TestNewSessionSidebarStatus(t *testing.T) {
 			if strings.Contains(text, "starting") || strings.Contains(text, "idle") == tc.working || strings.Contains(text, "working") != tc.working {
 				t.Fatalf("unexpected sidebar status (working=%v): %s", tc.working, text)
 			}
+			if !tc.working && ansi.Strip(m.workingLine(tab)) != "" {
+				t.Fatal("idle belongs in the sidebar, not the working message")
+			}
 			if tab.client != nil || tab.editor.Value() != tc.draft {
 				t.Fatal("rendering started a backend or changed the draft")
 			}

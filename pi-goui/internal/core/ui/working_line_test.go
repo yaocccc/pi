@@ -12,7 +12,10 @@ import (
 
 func TestWorkingLineStartsDuringSubmissionPreparation(t *testing.T) {
 	for name, prepare := range map[string]func(*tab){
-		"starting": func(t *tab) { t.cycle.phase = cycleStarting },
+		"starting": func(t *tab) {
+			t.cycle.phase = cycleStarting
+			t.resume.submit = &resumeSubmission{original: "held prompt"}
+		},
 		"loading": func(t *tab) {
 			t.cycle.phase = cycleActive
 			t.resume.pending = true
@@ -28,7 +31,7 @@ func TestWorkingLineStartsDuringSubmissionPreparation(t *testing.T) {
 			prepare(owner)
 			for _, present := range []bool{false, true} {
 				owner.working = workingState{Present: present, Started: time.Now().Add(-time.Second), Ended: time.Now()}
-				want := render.AnimateWorkingLine("working", m.cfg.Theme, m.frame)
+				want := render.AnimateWorkingLine("1 turns · 0s", m.cfg.Theme, m.frame)
 				if got := m.workingLine(owner); got != want {
 					t.Fatalf("preparation working line: got %q, want %q", got, want)
 				}
@@ -36,12 +39,38 @@ func TestWorkingLineStartsDuringSubmissionPreparation(t *testing.T) {
 					t.Fatal("presentation started native work or fabricated statistics")
 				}
 			}
-			owner.working = workingState{Active: true, Present: true, Started: time.Now()}
+			owner.working = workingState{Active: true, Present: true, Turn: 2, Started: time.Now()}
 			line := ansi.Strip(m.workingLine(owner))
-			if !strings.Contains(line, "turns") || strings.Contains(line, "Loading") {
+			if !strings.Contains(line, "2 turns") || strings.Contains(line, "Loading") {
 				t.Fatalf("native working metrics replaced by preparation status: %q", line)
 			}
 		})
+	}
+}
+
+func TestFirstTurnAppearsBeforeBackendStartup(t *testing.T) {
+	m := testModel(t, "")
+	owner := m.current()
+	owner.setValue("first prompt")
+	// Do not execute the command: the next frame must not wait for acquiring
+	// ownership, starting Pi or loading its authoritative state.
+	if cmd := m.submit(owner, false); cmd == nil {
+		t.Fatal("submission did not schedule backend startup")
+	}
+	if got := ansi.Strip(m.workingLine(owner)); got != "1 turns · 0s" {
+		t.Fatalf("submission did not immediately show the first turn: %q", got)
+	}
+	if owner.client != nil || owner.working.Present || owner.state.Busy {
+		t.Fatal("placeholder started native work or populated real statistics")
+	}
+}
+
+func TestNonPromptStartupDoesNotShowFirstTurn(t *testing.T) {
+	m := testModel(t, "")
+	owner := m.current()
+	owner.cycle.phase = cycleStarting
+	if got := ansi.Strip(m.workingLine(owner)); got != "working" {
+		t.Fatalf("non-prompt startup displayed a fabricated turn: %q", got)
 	}
 }
 
@@ -91,8 +120,8 @@ func TestWorkingLineShowsOtherOwnerWithWorkingStyle(t *testing.T) {
 	}
 	tab.cycle.presence.Busy = false
 	tab.working = workingState{}
-	if got := ansi.Strip(m.workingLine(tab)); got != "idle" {
-		t.Fatalf("released ownership did not restore idle: %q", got)
+	if got := ansi.Strip(m.workingLine(tab)); got != "" {
+		t.Fatalf("released ownership retained working message: %q", got)
 	}
 }
 
@@ -111,7 +140,7 @@ func TestWorkingLineDoesNotPresentUnknownOwnershipAsWorking(t *testing.T) {
 	}
 }
 
-func TestWorkingLineShowsIdleWithoutHidingMetrics(t *testing.T) {
+func TestWorkingLineHidesIdleWithoutHidingMetrics(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
 	now := time.Now()
@@ -123,9 +152,6 @@ func TestWorkingLineShowsIdleWithoutHidingMetrics(t *testing.T) {
 		tab.working = working
 		tab.status = ""
 		want := ansi.Strip(m.workingLine(tab))
-		if !working.Present {
-			want = "idle"
-		}
 		for _, status := range []string{"Idle", "idle", "IDLE"} {
 			tab.status = status
 			if got := ansi.Strip(m.workingLine(tab)); got != want {

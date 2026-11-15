@@ -18,6 +18,7 @@ type PreparedSnapshot struct {
 	path                        []entry
 	stateData, statsData        json.RawMessage
 	hasEntries, reset, branched bool
+	preview                     *previewMetadata
 }
 
 func detachedState(s State) State {
@@ -87,7 +88,7 @@ func (p SnapshotPreparation) PrepareFile(path string) (Header, *PreparedSnapshot
 	if err != nil {
 		return header, nil, err
 	}
-	out := &PreparedSnapshot{hasEntries: true}
+	out := &PreparedSnapshot{hasEntries: true, preview: preparePreviewMetadata(entries, parsed)}
 	previousLeaf := next.leaf
 	next.loadParsedEntries(parsed, &out.path)
 	out.branched = previousLeaf != "" && next.leaf != previousLeaf && !next.pathIDs[previousLeaf]
@@ -111,6 +112,15 @@ func (s *State) ApplySnapshot(p *PreparedSnapshot) {
 	}
 	if len(p.statsData) > 0 {
 		_ = next.LoadStats(p.statsData)
+	}
+	if p.preview != nil {
+		// Only PrepareFile supplies historical metadata. RPC snapshots retain
+		// get_state/get_session_stats authority, even with older model entries.
+		next.Model, next.Thinking, next.Stats = p.preview.model, p.preview.thinking, p.preview.stats
+		if tokens := next.Stats.ContextTokens; tokens != nil {
+			value := *tokens
+			next.Stats.ContextTokens = &value
+		}
 	}
 	if p.hasEntries {
 		history := detachedState(p.state)

@@ -206,6 +206,9 @@ func (m *Model) mouseRelease(v tea.Mouse) tea.Cmd {
 	}
 	for _, link := range t.doc.ImageLinks {
 		if row == link.Row && v.X >= link.Start && v.X < link.End {
+			if e := t.promptEcho; e != nil && e.item.ID == link.ItemID && link.ImageIndex >= 0 && link.ImageIndex < len(e.item.Images) {
+				return openImagePreview(m.imagePreviews, t.id, e.item.Images[link.ImageIndex])
+			}
 			for _, item := range t.state.Items {
 				if item.ID == link.ItemID && link.ImageIndex >= 0 && link.ImageIndex < len(item.Images) {
 					return openImagePreview(m.imagePreviews, t.id, item.Images[link.ImageIndex])

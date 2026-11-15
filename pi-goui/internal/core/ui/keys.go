@@ -441,6 +441,11 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 
 // Deferred local intent uses its captured draft, never another active editor.
 func (m *Model) sendPrompt(t *tab, original string, images []map[string]any, follow, clearEditor bool) tea.Cmd {
+	if t.state.Busy || t.state.Compacting || len(t.state.Steering) > 0 || len(t.state.FollowUp) > 0 {
+		m.clearPromptEcho(t, t.promptEcho)
+	}
+	m.showPromptEcho(t, original, images, nil)
+	echo := t.dispatchPromptEcho()
 	text, attached := referencedImages(strings.TrimSpace(original), images)
 	id, c, generation := t.id, t.client, t.cycle.generation
 	mergePending := t.state.Busy && !strings.HasPrefix(text, "/")
@@ -476,7 +481,7 @@ func (m *Model) sendPrompt(t *tab, original string, images []map[string]any, fol
 		}
 		// Unknown completion may omit the runtime recovery text. Keep the
 		// original local draft for manual recovery, never an automatic retry.
-		return replyMsg{id: id, client: c, generation: generation, op: "prompt", data: raw, err: err, text: original, images: images, draftRevision: draftRevision, deferred: !clearEditor}
+		return replyMsg{id: id, client: c, generation: generation, op: "prompt", data: raw, err: err, text: original, images: images, draftRevision: draftRevision, deferred: !clearEditor, echo: echo}
 	}
 }
 func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
