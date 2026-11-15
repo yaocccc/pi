@@ -27,6 +27,7 @@ func detachedState(s State) State {
 	s.toolIDs = slices.Clone(s.toolIDs)
 	s.aliases = maps.Clone(s.aliases)
 	s.pathIDs = maps.Clone(s.pathIDs)
+	s.metadataChanges = maps.Clone(s.metadataChanges)
 	s.Items = slices.Clone(s.Items)
 	s.Steering = slices.Clone(s.Steering)
 	s.FollowUp = slices.Clone(s.FollowUp)

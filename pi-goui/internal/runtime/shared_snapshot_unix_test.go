@@ -4,6 +4,8 @@ package runtime
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"os"
@@ -72,6 +74,112 @@ for line in sys.stdin:
 	}
 	if strings.Join(sequence, ",") != "before,snapshot,after" {
 		t.Fatal(sequence)
+	}
+}
+
+func TestSharedSnapshotFrameBudgetIncludesStateAndEnvelope(t *testing.T) {
+	// Real get_entries/get_state fields: each native response is under 64 MiB,
+	// but their merged history fence exceeds the old one-response allowance.
+	entries := snapshotJSON(map[string]any{"entries": []any{map[string]any{
+		"type": "message", "id": "large", "message": map[string]any{
+			"role": "assistant", "content": []any{map[string]any{"type": "text", "text": strings.Repeat("<", nativeFrameLimit-2048)}},
+		},
+	}}, "leafId": "large"})
+	state := snapshotJSON(map[string]any{"sessionId": "large", "sessionName": strings.Repeat("<", 4096), "isCompacting": false})
+	for _, data := range []json.RawMessage{entries, state} {
+		native := snapshotJSON(map[string]any{"type": "response", "id": "query", "command": "get_entries", "success": true, "data": data})
+		if len(native) >= nativeFrameLimit {
+			t.Fatalf("invalid native fixture: %d", len(native))
+		}
+	}
+	frame := historySnapshotFrame(^uint64(0), state, entries)
+	if len(frame) <= nativeFrameLimit+workingFrameAllowance || len(frame) >= sharedFrameLimit || !json.Valid(frame) {
+		t.Fatalf("bad merged frame size: %d", len(frame))
+	}
+	if overhead := len(frame) - len(state) - len(entries); overhead >= workingFrameAllowance {
+		t.Fatalf("snapshot envelope exceeded its allowance: %d", overhead)
+	}
+	// HTML characters must not be re-escaped: that can multiply either legal
+	// native response's size rather than merely add envelope overhead.
+	if bytes.Contains(frame, []byte(`\u003c`)) {
+		t.Fatal("native text expanded during framing")
+	}
+	before, after := json.RawMessage(`{"type":"message_update","delta":"before"}`), json.RawMessage(`{"type":"message_update","delta":"after"}`)
+	t.Run("client_transport", func(t *testing.T) {
+		client, conn := terminalTestClient(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		peer := &brokerPeer{conn: conn, ctx: ctx, cancel: cancel, done: make(chan struct{}), finishing: make(chan struct{}), out: make(chan json.RawMessage, 256)}
+		writerDone := deliveryWriter(peer)
+		t.Cleanup(func() { peer.stop(); <-writerDone })
+		for _, want := range []json.RawMessage{before, frame, after} {
+			peer.send(want)
+			got := <-client.Events()
+			if got.Err != nil || !bytes.Equal(got.Data, want) {
+				t.Fatalf("shared client rejected or reordered a legal frame: bytes=%d want=%d err=%v", len(got.Data), len(want), got.Err)
+			}
+		}
+	})
+	peer, _ := deliveryPeer(t)
+	for _, want := range []json.RawMessage{before, frame, after} {
+		peer.send(want)
+		select {
+		case <-peer.finishing:
+			t.Fatal("legal frame rejected by the actual peer send path")
+		default:
+		}
+		if got := <-peer.out; !bytes.Equal(got, want) {
+			t.Fatal("snapshot/delta FIFO order changed")
+		}
+		peer.advance()
+	}
+	peer.send(frame)
+	if peer.backlog.bytes != len(frame)+backlogEventOverhead {
+		t.Fatal("large frame escaped backlog accounting")
+	}
+	peer.send(after)
+	select {
+	case <-peer.finishing:
+	default:
+		t.Fatal("large singleton accepted a follower beyond the queue budget")
+	}
+	// A syntactically valid protocol frame at the exclusive new limit is still
+	// explicitly rejected, even by an otherwise empty peer.
+	over := bytes.Repeat([]byte{'x'}, sharedFrameLimit)
+	prefix := []byte(`{"type":"goui_history_snapshot","request":1,"state":{"sessionName":"`)
+	suffix := []byte(`"},"entries":{"entries":[]}}`)
+	copy(over, prefix)
+	copy(over[len(over)-len(suffix):], suffix)
+	if !json.Valid(over) {
+		t.Fatal("invalid over-limit fixture")
+	}
+	tooLarge, _ := deliveryPeer(t)
+	tooLarge.send(over)
+	select {
+	case <-tooLarge.finishing:
+	default:
+		t.Fatal("frame beyond the explicit snapshot budget was accepted")
+	}
+	if tooLarge.backlog.count != 0 || !bytes.Contains(tooLarge.terminal, []byte("frame_limit=")) {
+		t.Fatal("oversize frame lacked an explicit rejection diagnostic")
+	}
+}
+
+func TestSharedSnapshotRejectsUnboundedRequestEnvelope(t *testing.T) {
+	for name, request := range map[string]any{"missing": nil, "zero": 0, "negative": -1, "text": strings.Repeat("x", 2048), "object": map[string]any{"value": 1}} {
+		t.Run(name, func(t *testing.T) {
+			b, s, _ := deliveryBroker(t)
+			s.backend, s.inFlight = &Client{}, map[string]int{}
+			peer, _ := deliveryPeer(t)
+			peer.session, peer.id = s, "invalid-request"
+			b.command(peer, map[string]any{"type": "goui_get_snapshot", "id": "invalid", "request": request}, make(chan struct{}))
+			var response struct {
+				Success bool
+				Error   string
+			}
+			if err := json.Unmarshal(<-peer.out, &response); err != nil || response.Success || !strings.Contains(response.Error, "uint64 request") {
+				t.Fatalf("unbounded snapshot envelope accepted: %+v, %v", response, err)
+			}
+		})
 	}
 }
 

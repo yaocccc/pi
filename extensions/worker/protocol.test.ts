@@ -99,6 +99,49 @@ test("real UI snapshots preserve numeric protocol usage and detach sanitized use
 	} finally { await h.close(); }
 });
 
+test("registered Worker redacts token credentials while preserving numeric counters and independent snapshots", async () => {
+	const credentials = {
+		accessTokenValue: "fixture-login-7f3b9c2d5e8a",
+		tokenValue: "fixture-session-9b4e2d8c",
+		password: "fixture-password-short",
+		secret: "fixture-secret-short",
+		authorization: "fixture-authorization-short",
+		credentials: "fixture-credentials-short",
+		secretAccessKey: "fixture-access-key-short",
+	};
+	const credentialCounters = { contextTokens: "fixture-counter-credential", tokenCount: "fixture-count-credential" };
+	const findings = [{ ...credentials, contextTokens: 1200, tokenCount: 7 }, credentialCounters];
+	const usage = { input: 20, output: 10, cacheRead: 3, cacheWrite: 4, contextTokens: 1200, turns: 2 };
+	const original = { ...complete, findings, execution: { usage } };
+	const before = structuredClone(original);
+	const h = harness(async () => original);
+	try {
+		const response = await h.call({ tasks: [task] });
+		const expected = [
+			{ ...Object.fromEntries(Object.keys(credentials).map((key) => [key, "[已隐藏]"])), contextTokens: 1200, tokenCount: 7 },
+			{ contextTokens: "[已隐藏]", tokenCount: "[已隐藏]" },
+		];
+		assert.deepEqual(payload(response).result.results[0].findings, expected);
+		assert.deepEqual(response.details.tasks[0].result.findings, expected);
+		assert.deepEqual(response.details.payload.result.results[0].findings, expected);
+		assert.deepEqual(response.details.tasks[0].usage, usage);
+		assert.deepEqual(payload(response).result.results[0].execution.usage, { input: 20, output: 10, cacheRead: 3, cacheWrite: 4, turns: 2 });
+		for (const secret of [...Object.values(credentials), ...Object.values(credentialCounters)]) {
+			assert.equal(response.content[0].text.includes(secret), false);
+			assert.equal(JSON.stringify(response.details).includes(secret), false);
+		}
+		assert.deepEqual(original, before);
+		response.details.tasks[0].usage.contextTokens = -1;
+		response.details.tasks[0].result.findings[0].contextTokens = -1;
+		response.details.payload.result.results[0].findings[0].tokenCount = -1;
+		const next = await h.call({ batchId: response.details.batchId });
+		assert.deepEqual(next.details.tasks[0].usage, usage);
+		assert.deepEqual(next.details.tasks[0].result.findings, expected);
+		assert.deepEqual(next.details.payload.result.results[0].findings, expected);
+		assert.deepEqual(original, before);
+	} finally { await h.close(); }
+});
+
 test("title survives schema, execution and UI snapshots without replacing objective", async () => {
 	const titled = { ...task, title: "Inspect task cards" };
 	const h = harness(async (received) => {

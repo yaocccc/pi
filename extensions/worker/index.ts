@@ -79,7 +79,8 @@ export function batchUiSnapshot(batch: Batch): WorkerUiDetails {
 
 /** Keep IDs/control state outside result compression so truncation cannot strand a batch. */
 export function batchResponse(batch: Batch) {
-	const results = batch.tasks.map((task) => task.result ?? { status: task.state });
+	// The serialized payload is also exposed in UI details: never share runtime results.
+	const results = batch.tasks.map((task) => structuredClone(task.result ?? { status: task.state }));
 	const resultPayload = { status: results.every((item) => item.status === "completed") ? "completed" : "partial", results };
 	const envelope = {
 		batchId: batch.id,

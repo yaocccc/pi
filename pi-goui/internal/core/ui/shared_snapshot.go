@@ -10,7 +10,10 @@ import (
 
 // This event is published at get_entries' backend wire position. All preceding
 // deltas have been applied; later deltas stay in the bounded transport FIFO until
-// preparation commits. Revision and owner checks still guard the async result.
+// preparation commits. State was queried earlier: its event-derived fields
+// are merged against the pre-query metadata checkpoint, not accepted wholesale
+// merely because this fence has the current revision. Revision and owner checks
+// still guard the async result.
 func (m *Model) sharedHistorySnapshot(t *tab, event rpc.Event) tea.Cmd {
 	var envelope struct {
 		Type           string
@@ -35,7 +38,7 @@ func (m *Model) sharedHistorySnapshot(t *tab, event rpc.Event) tea.Cmd {
 			h, _ := session.ReadHeader(current.SessionFile, current.SessionID)
 			s.origin = &h
 		}
-		s.prepared, s.prepareErr = preparation.Prepare(s.state, s.entries, nil)
+		s.prepared, s.prepareErr = preparation.PrepareAfter(s.state, s.entries, nil, s.metadataRevision)
 		s.preparationDone = true
 		return s
 	}

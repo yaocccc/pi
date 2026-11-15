@@ -324,6 +324,7 @@ type replyMsg struct {
 }
 type snapshotMsg struct {
 	request                         uint64 // Nonzero for a shared, ordered history fence.
+	metadataRevision                uint64 // Event metadata checkpoint before get_state.
 	id                              int
 	revision                        uint64
 	state, entries, stats, commands json.RawMessage
@@ -403,7 +404,7 @@ func (m *Model) refresh(t *tab) tea.Cmd {
 	sourceID := t.state.ID
 	if c.Shared() {
 		t.snapshotRequest++
-		s := snapshotMsg{id: id, revision: revision, client: c, file: file, sourceID: sourceID, request: t.snapshotRequest}
+		s := snapshotMsg{id: id, revision: revision, client: c, file: file, sourceID: sourceID, request: t.snapshotRequest, metadataRevision: t.state.MetadataRevision()}
 		t.snapshotOwner = &s
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

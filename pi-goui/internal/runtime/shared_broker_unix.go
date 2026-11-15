@@ -801,8 +801,17 @@ func (b *sessionBroker) command(p *brokerPeer, command map[string]any, written c
 	var data json.RawMessage
 	var err error
 	if kind == "goui_get_snapshot" {
+		var request uint64
+		requestData, requestErr := json.Marshal(command["request"])
+		if requestErr == nil {
+			requestErr = json.Unmarshal(requestData, &request)
+		}
 		var state json.RawMessage
-		state, err = backend.call(ctx, map[string]any{"type": "get_state"}, release)
+		if requestErr != nil || request == 0 {
+			err = errors.New("goui_get_snapshot requires a nonzero uint64 request")
+		} else {
+			state, err = backend.call(ctx, map[string]any{"type": "get_state"}, release)
+		}
 		if err == nil {
 			_, err = backend.callOrdered(ctx, map[string]any{"type": "get_entries"}, release, func(r reply) {
 				if r.err != nil {
@@ -819,10 +828,10 @@ func (b *sessionBroker) command(p *brokerPeer, command map[string]any, written c
 						var fields map[string]json.RawMessage
 						if json.Unmarshal(state, &fields) == nil && fields != nil {
 							fields["isStreaming"], _ = json.Marshal(s.working.Active)
-							state, _ = json.Marshal(fields)
+							state = snapshotJSON(fields)
 						}
 					}
-					p.send(brokerJSON(map[string]any{"type": "goui_history_snapshot", "request": command["request"], "state": state, "entries": r.data}))
+					p.send(historySnapshotFrame(request, state, r.data))
 				}
 			})
 		}

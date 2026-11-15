@@ -3,8 +3,13 @@ import type { WorkerUiActivity, WorkerUiDetails, WorkerUsage } from "./types";
 
 export const UI_ACTIVITY_LIMIT = 20;
 export const UI_DETAIL_CAP = 160;
-// Keep broad credential protection; only bound token matching to avoid usage counters.
-export const UI_SENSITIVE_KEY = /(?:password|passwd|secret|api[-_]?key|private[-_]?key|wallet[-_]?key|mnemonic|authorization|cookie|credential|auth)|(?:^|[_-])token(?:$|[_-])|token$/i;
+export const UI_SENSITIVE_KEY = /password|passwd|secret|api[-_]?key|private[-_]?key|wallet[-_]?key|mnemonic|authorization|cookie|credential|auth|token/i;
+
+function isSensitiveUiField(key: string, value: unknown): boolean {
+	// Only explicit numeric counters are exempt; similarly named strings may be credentials.
+	if ((key === "contextTokens" || key === "tokenCount") && typeof value === "number" && Number.isFinite(value) && value >= 0) return false;
+	return UI_SENSITIVE_KEY.test(key);
+}
 
 export function sanitizeUiText(value: string): string {
 	const stripped = value
@@ -45,7 +50,7 @@ export function sanitizeUiDetails(details: WorkerUiDetails): WorkerUiDetails {
 }
 
 export function sanitizeStructuredValue(value: unknown, key = "", depth = 0): unknown {
-	if (UI_SENSITIVE_KEY.test(key)) return "[已隐藏]";
+	if (isSensitiveUiField(key, value)) return "[已隐藏]";
 	if (typeof value === "string") return truncateUtf8Text(sanitizeUiText(value), 16 * 1024);
 	if (value === null || typeof value !== "object") return value;
 	if (depth >= 12) return "[内容层级过深]";
@@ -191,7 +196,7 @@ export function compactUiValue(value: unknown, maxLength = UI_DETAIL_CAP): strin
 	if (typeof value === "string") return uiSnippet(value, maxLength) || undefined;
 	if (typeof value === "number" || typeof value === "boolean") return String(value);
 	try {
-		return uiSnippet(JSON.stringify(value, (key, nested) => UI_SENSITIVE_KEY.test(key) ? "[已隐藏]" : nested), maxLength) || undefined;
+		return uiSnippet(JSON.stringify(value, (key, nested) => isSensitiveUiField(key, nested) ? "[已隐藏]" : nested), maxLength) || undefined;
 	} catch {
 		return "[无法显示]";
 	}
@@ -202,7 +207,7 @@ export function summarizeToolArgs(args: unknown): string | undefined {
 	const record = args as Record<string, unknown>;
 	const preferred = ["command", "path", "pattern", "query", "url", "task", "offset", "limit"];
 	const keys = [...preferred.filter((key) => key in record), ...Object.keys(record).filter((key) => !preferred.includes(key) && !["content", "oldText", "newText", "edits"].includes(key))].slice(0, 3);
-	const text = keys.map((key) => `${key}=${UI_SENSITIVE_KEY.test(key) ? "[已隐藏]" : compactUiValue(record[key], 80) ?? ""}`).join(" · ");
+	const text = keys.map((key) => `${key}=${isSensitiveUiField(key, record[key]) ? "[已隐藏]" : compactUiValue(record[key], 80) ?? ""}`).join(" · ");
 	return text ? uiSnippet(text, 140) : undefined;
 }
 

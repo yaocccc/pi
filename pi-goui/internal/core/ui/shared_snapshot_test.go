@@ -64,6 +64,47 @@ func TestSharedSnapshotFencePreparesWhileDeltasWait(t *testing.T) {
 	}
 }
 
+func TestSharedSnapshotKeepsCompactionAndThinkingEventsBeforeFence(t *testing.T) {
+	m, owner, _ := orderedSnapshotFixture(t)
+	owner.working.Active = false
+	if err := owner.state.LoadState(json.RawMessage(`{"sessionId":"late","isCompacting":true,"thinkingLevel":"low"}`)); err != nil {
+		t.Fatal(err)
+	}
+	owner.snapshotOwner.sourceID = owner.state.ID
+	owner.snapshotOwner.metadataRevision = owner.state.MetadataRevision()
+	// get_state has already returned the old metadata. Both event updates and
+	// the coalesced refresh precede get_entries' ordered history fence.
+	batch := []rpc.Event{
+		{Data: json.RawMessage(`{"type":"compaction_end"}`)},
+		{Data: json.RawMessage(`{"type":"thinking_level_changed","level":"high"}`)},
+		{Data: json.RawMessage(`{"type":"goui_session_changed"}`)},
+		{Data: json.RawMessage(`{"type":"goui_history_snapshot","request":1,"state":{"sessionId":"late","isCompacting":true,"thinkingLevel":"low"},"entries":{"entries":[]}}`)},
+	}
+	cmds, _ := m.applyEventBatch(owner, batch)
+	if !owner.snapshotPaused || !owner.refreshAgain || owner.state.Compacting {
+		t.Fatal("fixture did not reach the ordered compaction fence")
+	}
+	prepared := cmds[len(cmds)-1]().(snapshotMsg)
+	if prepared.prepareErr != nil {
+		t.Fatal(prepared.prepareErr)
+	}
+	_, continuation := m.Update(prepared)
+	if owner.state.Compacting || owner.state.Thinking != "high" || owner.ownRunActive() {
+		t.Fatalf("old state overwrote events: compacting=%v thinking=%s active=%v", owner.state.Compacting, owner.state.Thinking, owner.ownRunActive())
+	}
+	if owner.resume.pending || !owner.resume.authoritative || !owner.refreshing || owner.refreshAgain {
+		t.Fatalf("initialization/follow-up refresh stalled: resume=%+v refreshing=%v again=%v", owner.resume, owner.refreshing, owner.refreshAgain)
+	}
+	// The follow-up query uses the existing offline RPC fixture. It is the last
+	// command; do not run the unrelated event-stream reader or timers.
+	commands := continuation().(tea.BatchMsg)
+	followup := commands[len(commands)-1]().(snapshotMsg)
+	m.Update(followup)
+	if owner.refreshing || owner.refreshAgain || owner.state.Compacting || !owner.resume.authoritative {
+		t.Fatal("follow-up refresh did not complete")
+	}
+}
+
 func TestSharedSnapshotFailureDoesNotRetryEveryDelta(t *testing.T) {
 	m, owner, _ := orderedSnapshotFixture(t)
 	failed := *owner.snapshotOwner

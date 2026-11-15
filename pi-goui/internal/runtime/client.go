@@ -412,9 +412,9 @@ func (c *Client) readLoop() {
 	scanner := bufio.NewScanner(c.stdout)
 	limit := nativeFrameLimit
 	if c.shared != nil {
-		// The native backend retains its original limit. A shared frame can
-		// additionally carry the executor's small, bounded progress projection.
-		limit += workingFrameAllowance
+		// Match the broker's bounded state+entries snapshot envelope; native
+		// backend responses retain their smaller per-response limit.
+		limit = sharedFrameLimit
 	}
 	scanner.Buffer(make([]byte, 64*1024), limit)
 	for scanner.Scan() {
