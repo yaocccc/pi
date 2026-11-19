@@ -10,11 +10,15 @@ import (
 )
 
 // Adapter contributes host-facing interfaces; private forms/replay remain here.
-type Adapter struct{}
+type Adapter struct{ mode *instanceMode }
 
-func (Adapter) Capabilities() extension.Capabilities {
+func NewAdapter(agentDir string) Adapter {
+	return Adapter{mode: newInstanceMode(agentDir)}
+}
+
+func (a Adapter) Capabilities() extension.Capabilities {
 	return extension.Capabilities{
-		NewSession:       func() extension.Session { return &Session{} },
+		NewSession:       func() extension.Session { return &Session{Codex: CodexState{instance: a.mode}} },
 		SessionMessageID: SessionMessageID,
 		NewUsage:         func() extension.Usage { return &Usage{} },
 		CheckRelease:     checkRelease,
@@ -54,10 +58,11 @@ func (s *Session) Request(id int, client extension.Client, dead bool, choice str
 	return s.Codex.Request(id, client, dead, choice, now)
 }
 func (s *Session) Control(c extension.ControlContext) extension.ControlView {
-	if !s.Codex.State.Available() {
+	state := s.Codex.displayState()
+	if !state.Available() {
 		return nil
 	}
-	return CodexView{State: s.Codex.State, Blocked: c.Blocked, PointerKnown: c.PointerKnown, Hover: c.Hover, SidebarWidth: c.SidebarWidth, MainWidth: c.MainWidth, Width: c.Width, Height: c.Height, ModeRow: c.ModeRow, PointerX: c.PointerX, PointerY: c.PointerY, Theme: c.Theme}
+	return CodexView{State: state, Blocked: c.Blocked, PointerKnown: c.PointerKnown, Hover: c.Hover, SidebarWidth: c.SidebarWidth, MainWidth: c.MainWidth, Width: c.Width, Height: c.Height, ModeRow: c.ModeRow, PointerX: c.PointerX, PointerY: c.PointerY, Theme: c.Theme}
 }
 func (s *Session) Event(message string, notify func(string)) bool {
 	return s.Codex.Event(message, notify)

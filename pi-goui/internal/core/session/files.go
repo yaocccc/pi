@@ -103,9 +103,10 @@ func readPreviewEntries(path string) (Header, []entry, string, error) {
 	}
 	defer f.Close()
 	var entries []entry
+	var raw []byte
 	leaf := ""
 	for line := 2; ; line++ {
-		raw, err := readRecord(r)
+		raw, err = readRecordInto(r, raw[:0])
 		if len(bytes.TrimSpace(raw)) > 0 {
 			var e entry
 			parseErr := json.Unmarshal(raw, &e)
@@ -182,7 +183,12 @@ func readEntries(source io.Reader, path string) (json.RawMessage, error) {
 	}{entries, leaf})
 }
 func readRecord(r *bufio.Reader) ([]byte, error) {
-	var out []byte
+	return readRecordInto(r, nil)
+}
+
+// Preview and summary scans decode each record immediately. RawMessage.UnmarshalJSON
+// owns its bytes, so these scans can reuse a line buffer even for large tool results.
+func readRecordInto(r *bufio.Reader, out []byte) ([]byte, error) {
 	for {
 		part, err := r.ReadSlice('\n')
 		if len(out)+len(part) > 64*1024*1024 {
@@ -254,7 +260,7 @@ func listSessions(dir, cwd string) ([]Summary, error) {
 		normalizeOrigin(&header)
 		v := Summary{ID: header.ID, Path: path, Cwd: header.Cwd, Modified: opened.ModTime().UnixMilli(), ParentSession: header.ParentSession, Fork: header.Fork}
 		for !errors.Is(err, io.EOF) {
-			raw, err = readRecord(r)
+			raw, err = readRecordInto(r, raw[:0])
 			if err != nil && !errors.Is(err, io.EOF) {
 				return err
 			}

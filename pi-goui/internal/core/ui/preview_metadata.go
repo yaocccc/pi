@@ -20,17 +20,19 @@ type previewModelConfig struct {
 		ModelThinkingLevels  map[string]string
 	}
 	providers map[string]previewProvider
+	catalog   *footerCatalog
 	valid     bool
 }
 
 type previewProvider struct {
 	BaseURL        string `json:"baseUrl"`
-	Models         []session.ModelInfo
-	ModelOverrides map[string]session.ModelInfo
+	Models         []catalogModel
+	ModelOverrides map[string]catalogModel
 }
 
 func (m *Model) previewConfigReader(t *tab) func() previewModelConfig {
 	agentDir, cwd := m.cfg.AgentDir, m.tabDirectory(t)
+	needCatalog := t.footerCatalog == nil
 	return func() previewModelConfig {
 		var cfg previewModelConfig
 		for _, path := range []string{filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json")} {
@@ -58,6 +60,9 @@ func (m *Model) previewConfigReader(t *tab) func() previewModelConfig {
 		cfg.valid = errors.Is(err, os.ErrNotExist) || (err == nil && strings.TrimSpace(string(raw)) != "null" && json.Unmarshal(raw, &registry) == nil)
 		if cfg.valid {
 			cfg.providers = registry.Providers
+		}
+		if needCatalog {
+			cfg.catalog = readFooterCatalog(agentDir, cfg.providers)
 		}
 		return cfg
 	}
@@ -101,11 +106,11 @@ func (c previewModelConfig) apply(s *session.State, previous session.ModelInfo) 
 		}
 		for _, info := range provider.Models {
 			if info.ID == model.ID {
-				merge(info)
+				merge(info.ModelInfo)
 				break
 			}
 		}
-		merge(provider.ModelOverrides[model.ID])
+		merge(provider.ModelOverrides[model.ID].ModelInfo)
 	}
 	s.Model = model
 	s.Stats.ContextWindow = model.ContextWindow

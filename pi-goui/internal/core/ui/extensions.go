@@ -14,7 +14,7 @@ type extensionRuntime = extension.Runtime
 
 func (m *Model) initExtensions(t *tab) {
 	if m.extensions == nil {
-		m.extensions = extension.New(extensions.New())
+		m.extensions = extension.New(extensions.New(m.cfg.AgentDir))
 	}
 	t.state.SetExtensionProjection(m.extensions.NewProjection())
 	t.extensions = m.extensions.NewSessions()
@@ -53,16 +53,17 @@ func (m *Model) extensionControlView() extension.Control {
 	if t == nil {
 		return extension.Sessions(nil).Control(extension.ControlContext{})
 	}
-	return t.extensions.Control(extension.ControlContext{Blocked: t.dead || t.readOnly() || t.cycle.phase == cycleClosing || m.inspectorOpen() || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "", PointerKnown: m.sidebarHistory.pointerKnown, Hover: m.extensionControls.Hover, SidebarWidth: m.sidebarWidth(), MainWidth: m.mainWidth(), Width: m.width, Height: m.height, ModeRow: m.sidebarLayout().ModeRow, PointerX: m.sidebarHistory.pointerX, PointerY: m.sidebarHistory.pointerY, Theme: m.cfg.Theme})
+	// Render and hit-test extension controls on the sidebar canvas itself.
+	return t.extensions.Control(extension.ControlContext{Blocked: t.dead || t.readOnly() || t.cycle.phase == cycleClosing || m.sidebarWidth() == 0 || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "", PointerKnown: m.sidebarHistory.pointerKnown, Hover: m.extensionControls.Hover, SidebarWidth: m.sidebarWidth(), Width: m.sidebarWidth(), Height: m.height, ModeRow: m.sidebarLayout().ModeRow, PointerX: m.sidebarHistory.pointerX - m.sideX(), PointerY: m.sidebarHistory.pointerY, Theme: m.cfg.Theme})
 }
 func (m *Model) extensionPopupGeometry() (hitRect, footerPopupRect, bool) {
 	t, b, ok := m.extensionControlView().Geometry()
-	return hitRect{x: t.X, y: t.Y, width: t.Width}, footerPopupRect{x: b.X, y: b.Y, width: b.Width, height: b.Height}, ok
+	return hitRect{x: m.sideX() + t.X, y: t.Y, width: t.Width}, footerPopupRect{x: m.sideX() + b.X, y: b.Y, width: b.Width, height: b.Height}, ok
 }
 func (m *Model) extensionPopupVisible() bool { return m.extensionControlView().Visible() }
 func (m *Model) extensionClickCommand(x, y int) (tea.Cmd, bool) {
 	control := m.extensionControlView()
-	handled, choice := control.Click(x, y)
+	handled, choice := control.Click(x-m.sideX(), y)
 	if choice != "" {
 		m.extensionControls.Hover = false
 	}
@@ -84,10 +85,8 @@ func (m *Model) overlayExtensions(view string) string {
 }
 
 func (m *Model) openExtensionInspector(t *tab, itemID, key string) tea.Cmd {
-	for _, item := range t.state.Items {
-		if item.ID != itemID {
-			continue
-		}
+	if idx, ok := t.toolIndex(itemID); ok {
+		item := t.state.Items[idx]
 		if m.inspector.tabID == t.id && m.inspector.itemID == itemID && m.inspector.content != nil && m.inspector.content.Matches(item, key) {
 			return m.pollExtensionInspectors(time.Now())
 		}
@@ -241,11 +240,24 @@ func (m *Model) extensionMessage(msg tea.Msg) (tea.Cmd, bool) {
 	}
 	if id, ok := m.extensions.SessionMessageID(msg); ok {
 		if t := m.byID(id); t != nil {
+			if owner, ok := msg.(interface{ Backend() extension.Client }); ok && (t.client == nil || t.client != owner.Backend() || t.cycle.phase == cycleClosing) {
+				return nil, true
+			}
 			t.extensions.Update(msg, t.state, t.dead, t.notify)
+			return m.syncInstanceBackends(), true
 		}
 		return nil, true
 	}
 	return nil, false
+}
+func (m *Model) syncInstanceBackends() tea.Cmd {
+	var cmds []tea.Cmd
+	for _, t := range m.tabs {
+		if t.client != nil && !t.dead && t.cycle.phase == cycleActive && t.cycle.primed && !t.cycle.priming && t.extensions.Prepare(t.client) != nil {
+			cmds = append(cmds, m.primeCycle(t))
+		}
+	}
+	return tea.Batch(cmds...)
 }
 func (m *Model) pollExtensions(now time.Time) tea.Cmd {
 	var cmd tea.Cmd

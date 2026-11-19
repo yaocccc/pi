@@ -12,10 +12,17 @@ type panelResizeState struct {
 
 func (m *Model) panelResizeTarget(x, y int) bool {
 	t := m.current()
-	if t == nil || len(t.dialogs) > 0 || m.inspectorFullscreen() || m.sidebarWidth() == 0 || y < 0 || y >= m.height {
+	if t == nil || len(t.dialogs) > 0 || m.inspectorFullscreen() || y < 0 || y >= m.height {
 		return false
 	}
-	return x == m.mainWidth()
+	if m.detailWidth() > 0 && x == m.mainWidth() {
+		return true
+	}
+	sideEdge := m.sideX()
+	if m.cfg.SidebarPosition == "left" {
+		sideEdge = -1
+	}
+	return m.sidebarWidth() > 0 && x == sideEdge
 }
 
 func (m *Model) beginPanelResize(v tea.Mouse) bool {
@@ -28,7 +35,7 @@ func (m *Model) beginPanelResize(v tea.Mouse) bool {
 		m.inspectorRows()
 	}
 	m.panelResize.dragging = true
-	m.panelResize.detail = m.inspectorOpen()
+	m.panelResize.detail = m.detailWidth() > 0 && v.X == m.mainWidth()
 	m.panelResize.tab = m.current()
 	m.current().selection = transcriptSelection{}
 	m.inspector.selection = transcriptSelection{}
@@ -44,12 +51,15 @@ func (m *Model) movePanelResize(v tea.Mouse) bool {
 		m.finishPanelResize()
 		return true
 	}
-	minimum := 24
+	main, detail, sidebar := m.paneWidths()
+	minimum, current, width := 24, sidebar, m.width-v.X
 	if m.panelResize.detail {
-		minimum = 20
+		minimum, current, width = 20, detail, main+detail-v.X
+	} else if m.cfg.SidebarPosition == "left" {
+		width = m.mainScreenX() + v.X + 1
 	}
-	width := min(max(minimum, m.width-v.X), max(minimum, m.width-40))
-	if width == m.sidebarWidth() {
+	width = min(max(minimum, width), main+current-40)
+	if width == current {
 		return true
 	}
 	if m.panelResize.detail {
@@ -63,7 +73,7 @@ func (m *Model) movePanelResize(v tea.Mouse) bool {
 func (m *Model) panelResizeValid() bool {
 	t := m.current()
 	return t != nil && t == m.panelResize.tab && len(t.dialogs) == 0 &&
-		m.inspectorOpen() == m.panelResize.detail && m.sidebarWidth() > 0 && !m.inspectorFullscreen()
+		((m.panelResize.detail && m.detailWidth() > 0) || (!m.panelResize.detail && m.sidebarWidth() > 0))
 }
 
 func (m *Model) finishPanelResize() {

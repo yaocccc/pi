@@ -20,6 +20,54 @@ func assertForkNotWritten(t *testing.T, m *Model, source *tab) {
 	}
 }
 
+func TestForkFromResumedHistoryWithoutBackend(t *testing.T) {
+	for _, mode := range []string{"cold", "preloaded"} {
+		t.Run(mode, func(t *testing.T) {
+			m := testModel(t, "")
+			file := previewHistory(t)
+			if mode == "preloaded" {
+				warmResume(t, m, file)
+			}
+			for _, msg := range resumeCommandMessages(m.openRecent(file)) {
+				if v, ok := msg.(resumePreviewMsg); ok {
+					m.receiveResumePreview(v)
+				}
+			}
+			source := m.current()
+			if source.client != nil || !source.resume.preview || len(source.state.Items) != 1 {
+				t.Fatal("expected a saved message in a local-only tab")
+			}
+			before, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.reply(source, m.readHistory(source, "get_fork_messages")().(replyMsg))
+			cmd := m.confirmDialog(source, source.dialogs[0])
+			if cmd == nil {
+				t.Fatal("could not fork a selected message from saved history")
+			}
+			snap := cmd().(forkSnapshotMsg)
+			write := m.forkSnapshot(snap)
+			if write == nil {
+				t.Fatalf("rejected saved source: %v", snap.err)
+			}
+			created := write().(forkCreatedMsg)
+			if created.err != nil {
+				t.Fatal(created.err)
+			}
+			m.forkCreated(created)
+			branch := m.current()
+			if branch == source || branch.origin.Fork == nil || branch.origin.Fork.SourceID != "saved" || branch.origin.Fork.UserEntryID != "u1" || branch.origin.ParentSession != file {
+				t.Fatal("fork did not open at the selected source message")
+			}
+			after, err := os.ReadFile(file)
+			if err != nil || string(after) != string(before) || source.client != nil || branch.client != nil {
+				t.Fatal("local fork changed the source file or started a backend")
+			}
+		})
+	}
+}
+
 func TestForkDirectRejectsChangedSource(t *testing.T) {
 	for _, scenario := range []string{"revision", "busy", "dead", "client", "identity", "path", "empty", "mutation", "reserved", "no-session", "rpc-error", "invalid-boundary"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -175,7 +223,7 @@ func TestForkEmptyChoicesAndFullTextFilter(t *testing.T) {
 		t.Fatal("empty choices requested a fork")
 	}
 	text := strings.Repeat("long question ", 12) + "unique-tail"
-	d.options = []option{forkChoice(source, "old", text)}
+	d.options = []option{forkChoices(source.state.Items)["old"].choice("old", text)}
 	d.editor.SetValue("unique-tail")
 	if len(m.filtered(d)) != 1 {
 		t.Fatal("truncated presentation broke full-text filtering")
@@ -185,7 +233,7 @@ func TestForkEmptyChoicesAndFullTextFilter(t *testing.T) {
 
 func TestForkDirectNarrowAndCandidateDetails(t *testing.T) {
 	m, source, _, snapshot := uiForkFixture(t)
-	o := forkChoice(source, "old", "first")
+	o := forkChoices(source.state.Items)["old"].choice("old", "first")
 	if !strings.Contains(o.Label, "第 1 轮") || !strings.Contains(o.Detail, "earlier answer") {
 		t.Fatalf("missing choice context: %+v", o)
 	}

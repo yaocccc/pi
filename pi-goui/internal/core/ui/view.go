@@ -17,25 +17,56 @@ import (
 // Transcript content starts at row zero; there is no duplicate session header.
 const transcriptTop = 0
 
-func (m *Model) sidebarWidth() int {
-	if m.inspectorOpen() {
-		if m.width < 60 {
-			return 0
+// The sidebar keeps its preferred edge; split details always sit immediately
+// to the right of the transcript. On compact screens give details priority.
+func (m *Model) paneWidths() (main, detail, sidebar int) {
+	open := m.inspectorOpen()
+	split := open && m.width >= 60
+	if m.height >= 20 && m.width >= 96 && (!open || m.width >= 144) {
+		sidebar = m.panelResize.sidebar
+		if sidebar == 0 {
+			sidebar = 32
 		}
-		if m.panelResize.inspector > 0 {
-			return min(m.panelResize.inspector, m.width-40)
+		reserved := 40
+		if split {
+			reserved += 20
 		}
-		return min(60, m.width/3)
+		sidebar = min(sidebar, m.width-reserved)
 	}
-	if m.width < 96 || m.height < 20 {
-		return 0
+	if split {
+		detail = m.panelResize.inspector
+		if detail == 0 {
+			detail = min(60, m.width/3)
+		}
+		detail = min(detail, m.width-sidebar-40)
 	}
-	if m.panelResize.sidebar > 0 {
-		return min(m.panelResize.sidebar, m.width-40)
-	}
-	return 32
+	return max(1, m.width-sidebar-detail), detail, sidebar
 }
-func (m *Model) mainWidth() int { return max(1, m.width-m.sidebarWidth()) }
+
+func (m *Model) sidebarWidth() int { _, _, width := m.paneWidths(); return width }
+func (m *Model) mainWidth() int    { width, _, _ := m.paneWidths(); return width }
+func (m *Model) detailWidth() int  { _, width, _ := m.paneWidths(); return width }
+
+// UI hit tests and pane overlays use coordinates relative to the main pane.
+// Only terminal input, the hardware cursor and the final composite use screen X.
+func (m *Model) mainScreenX() int {
+	if m.cfg.SidebarPosition == "left" {
+		return m.sidebarWidth()
+	}
+	return 0
+}
+
+func (m *Model) sideX() int {
+	if m.cfg.SidebarPosition == "left" {
+		return -m.sidebarWidth()
+	}
+	return m.width - m.sidebarWidth()
+}
+
+func (m *Model) sideContainsX(x, inset int) bool {
+	left, width := m.sideX(), m.sidebarWidth()
+	return x >= left+inset && x < left+width-inset
+}
 func (m *Model) resizeEditor(t *tab) {
 	// The outer frame consumes two border cells and one padding cell per side.
 	// Let Bubbles count its actual soft-wrapped rows and clamp its viewport after
@@ -90,7 +121,7 @@ func (m *Model) transcriptHeightFor(t *tab, completionCount int) int {
 	if m.searching != "" {
 		n++
 	}
-	return max(1, m.height-m.chatTop(t)-1-m.editorFrameHeight(t)-extra-n)
+	return max(1, m.height-transcriptTop-1-m.editorFrameHeight(t)-extra-n)
 }
 func (m *Model) hint(action string) string {
 	keys := m.cfg.Keys.Keys(action)
@@ -160,11 +191,7 @@ func (m *Model) View() tea.View {
 		if len(t.state.Items) == 0 && t.promptEcho == nil && !m.showStartupInfo(t) {
 			text = m.welcomeView()
 		}
-		var rows []string
-		if m.chatTop(t) > 0 {
-			rows = append(rows, fitLine(m.paint(m.originTitle(t), theme.Muted), w))
-		}
-		rows = append(rows, m.transcriptViewport(t, text, len(lines), height))
+		rows := []string{m.transcriptViewport(t, text, len(lines), height)}
 		if m.searching != "" {
 			rows = append(rows, m.paint(fitLine(" Find: "+m.search+"▏  · Enter next / Esc close", w), theme.Accent))
 		}
@@ -194,13 +221,12 @@ func (m *Model) View() tea.View {
 	main = m.overlayFooterHover(t, main)
 	main = m.overlayToast(t, main, time.Now())
 	main = m.overlayPopup(t, main)
+	if m.detailWidth() > 0 {
+		main = joinPaneRows(main, m.inspectorView())
+	}
 	if sw := m.sidebarWidth(); sw > 0 {
-		var context render.SidebarContext
-		var layout render.SidebarLayout
-		if !m.inspectorOpen() {
-			context = m.sidebarContext()
-			layout = render.SidebarGeometry(m.height, context)
-		}
+		context := m.sidebarContext()
+		layout := render.SidebarGeometry(m.height, context)
 		hovered := m.sidebarSessionHoverIndex(layout)
 		start := min(m.sidebarOffset, len(m.tabs))
 		end := min(len(m.tabs), start+layout.Capacity)
@@ -209,7 +235,7 @@ func (m *Model) View() tea.View {
 			status := "idle"
 			if other.resume.failed {
 				status = "连接失败"
-			} else if other.resumingHistory() {
+			} else if other.resumingHistory() && other.unread == 0 {
 				status = "idle"
 			} else if other.dead {
 				status = "stopped"
@@ -217,9 +243,7 @@ func (m *Model) View() tea.View {
 				status = "input"
 			} else if other.cycle.phase == cycleStarting || other.resume.submit != nil || other.state.Busy || other.state.Compacting || other.sending || other.awaitingStart {
 				status = "working"
-			} else if other.client == nil {
-				status = "idle"
-			} else if n := len(other.state.Items); n > 0 && other.state.Items[n-1].Role == "assistant" && other.state.Items[n-1].Error {
+			} else if n := len(other.state.Items); other.client != nil && n > 0 && other.state.Items[n-1].Role == "assistant" && other.state.Items[n-1].Error {
 				status = "error"
 			} else if other.unread > 0 {
 				status = "done"
@@ -229,22 +253,14 @@ func (m *Model) View() tea.View {
 			}
 			rows = append(rows, render.SessionRow{ID: fmt.Sprint(i + m.sidebarOffset + 1), Name: session.DisplayName(other.state), Status: status, Active: other == t, Hovered: i+m.sidebarOffset == hovered})
 		}
-		side := ""
-		if m.inspectorOpen() {
-			side = m.inspectorView()
+		side := m.overlayExtensions(render.Sidebar(t.state, rows, theme, sw, m.height, context))
+		if m.cfg.SidebarPosition == "left" {
+			main = joinPaneRows(side, main)
 		} else {
-			side = render.Sidebar(t.state, rows, theme, sw, m.height, context)
+			main = joinPaneRows(main, side)
 		}
-		mainLines, sideLines := strings.Split(main, "\n"), strings.Split(side, "\n")
-		for i := range mainLines {
-			mainLines[i] += sideLines[i]
-		}
-		main = strings.Join(mainLines, "\n")
-	}
-	if !m.inspectorOpen() {
 		main = m.overlaySidebarHistoryTooltip(t, main)
 	}
-	main = m.overlayExtensions(main)
 	view := tea.NewView(main)
 	view.Cursor = m.inputCursor(t)
 	view.AltScreen = true
@@ -256,6 +272,14 @@ func (m *Model) View() tea.View {
 	// Bubble Tea negotiates CSI-u/Kitty disambiguation (Shift+Enter, Ctrl+Shift+P).
 	view.KeyboardEnhancements.ReportEventTypes = false
 	return view
+}
+
+func joinPaneRows(left, right string) string {
+	rows, other := strings.Split(left, "\n"), strings.Split(right, "\n")
+	for i := range rows {
+		rows[i] += other[i]
+	}
+	return strings.Join(rows, "\n")
 }
 
 // inputCursor uses the same cell offsets and clipping as the rendered input.
@@ -296,6 +320,7 @@ func (m *Model) inputCursor(t *tab) *tea.Cursor {
 	if c.X < 0 || c.X >= m.mainWidth() || c.Y < 0 || c.Y >= m.height {
 		return nil
 	}
+	c.X += m.mainScreenX()
 	return c
 }
 
@@ -319,17 +344,17 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 	if m.inspectorClick(v) {
 		return nil
 	}
-	if !m.inspectorOpen() && m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
+	if m.sideContainsX(v.X, 0) {
 		layout := m.sidebarLayout()
-		if v.Y == layout.DirectoryRow && v.X >= m.mainWidth()+2 && v.X < m.width-2 {
+		if v.Y == layout.DirectoryRow && m.sideContainsX(v.X, 2) {
 			return m.openCwd(t)
 		}
 		historyIndex := v.Y - layout.HistoryStart
-		if historyIndex >= 0 && historyIndex < layout.HistoryCount*render.SidebarHistoryRows && v.Y < m.height-1 && v.X >= m.mainWidth()+2 && v.X < m.width-2 {
+		if historyIndex >= 0 && historyIndex < layout.HistoryCount*render.SidebarHistoryRows && v.Y < m.height-1 && m.sideContainsX(v.X, 2) {
 			return m.openRecent(m.sidebarHistoryAt(layout.HistoryOffset + historyIndex/render.SidebarHistoryRows).Path)
 		}
 		newStart, newWidth := render.SidebarNewButton(max(0, m.sidebarWidth()-4))
-		newX := m.mainWidth() + 2 + newStart
+		newX := m.sideX() + 2 + newStart
 		if v.Y == layout.NewRow && v.Y < m.height-1 && newWidth > 0 && v.X >= newX && v.X < newX+newWidth {
 			return m.open("")
 		}
@@ -337,7 +362,7 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 		idx := row/render.SidebarSessionRows + m.sidebarOffset
 		if row >= 0 && row < layout.Capacity*render.SidebarSessionRows && idx < len(m.tabs) {
 			start, length := render.SidebarSessionCloseButton(max(0, m.sidebarWidth()-4))
-			closeX := m.mainWidth() + 2 + start
+			closeX := m.sideX() + 2 + start
 			if len(t.dialogs) == 0 && row%render.SidebarSessionRows == 0 && length > 0 && v.X >= closeX && v.X < closeX+length {
 				target := m.tabs[idx]
 				if target.state.Busy || target.state.Compacting || target.sending || target.awaitingStart {
@@ -378,9 +403,6 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 		t.selection.dragging = false
 		return nil
 	}
-	if m.originHit(v.X, v.Y) {
-		return m.requestOrigin(t)
-	}
 	if _, rect, visible := m.latestButton(t); visible && rect.contains(v.X, v.Y) {
 		t.selection = transcriptSelection{}
 		t.noteScroll()
@@ -391,13 +413,11 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 	if id, rect, ok := m.forkTarget(v.X, v.Y); ok && rect.contains(v.X, v.Y) {
 		return m.requestFork(t, id)
 	}
-	if id, rect, ok := m.toolInspectTarget(v.X, v.Y); ok && rect.contains(v.X, v.Y) {
-		for _, block := range t.doc.Blocks {
-			if block.ID == id && block.InspectorParent != "" && block.InspectorTask != "" {
-				return m.openExtensionInspector(t, block.InspectorParent, block.InspectorTask)
-			}
+	if block, rect, ok := m.toolInspectBlock(v.X, v.Y); ok && rect.contains(v.X, v.Y) {
+		if block.InspectorTask != "" {
+			return m.openExtensionInspector(t, block.InspectorParent, block.InspectorTask)
 		}
-		m.openInspector(id)
+		m.openInspector(block.ID)
 		return nil
 	}
 	m.beginSelection(t, v)

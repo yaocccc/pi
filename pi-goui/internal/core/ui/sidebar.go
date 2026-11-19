@@ -11,7 +11,7 @@ import (
 
 func (m *Model) sidebarContext() render.SidebarContext {
 	directory := m.tabDirectory(m.current())
-	context := render.SidebarContext{Directory: directory, Quota: &render.SidebarQuota{Now: time.Now()}, TodoFrame: m.frame}
+	context := render.SidebarContext{Directory: directory, OpenSessions: len(m.tabs), Quota: &render.SidebarQuota{Now: time.Now()}, TodoFrame: m.frame}
 	m.extendSidebar(&context)
 	if m.sidebarHistory.cwd == directory {
 		context.HistoryOffset = m.sidebarHistory.offset
@@ -41,7 +41,7 @@ func (m *Model) sidebarContext() render.SidebarContext {
 		context.Quota = &render.SidebarQuota{RemainingPercent: s.RemainingPercent, ResetAt: s.ResetAt, Credits: s.Credits, UnlimitedCredits: s.UnlimitedCredits, Now: time.Now()}
 	}
 	h := m.sidebarHistory
-	if h.pointerKnown && m.sidebarWidth() > 0 && h.pointerX >= m.mainWidth()+2 && h.pointerX < m.width-2 && h.pointerY < m.height-1 {
+	if h.pointerKnown && m.sidebarWidth() > 0 && m.sideContainsX(h.pointerX, 2) && h.pointerY < m.height-1 {
 		layout := render.SidebarGeometry(m.height, context)
 		row := h.pointerY - layout.HistoryStart
 		if row >= 0 && row < layout.HistoryCount*render.SidebarHistoryRows {
@@ -91,7 +91,7 @@ func (m *Model) sidebarHistoryAt(index int) session.Summary {
 func (m *Model) sidebarSessionHoverIndex(layout render.SidebarLayout) int {
 	t := m.current()
 	h := m.sidebarHistory
-	if t == nil || len(t.dialogs) > 0 || m.inspectorOpen() || !h.pointerKnown || m.sidebarWidth() == 0 || h.pointerX < m.mainWidth()+2 || h.pointerX >= m.width-2 || m.extensionPopupVisible() {
+	if t == nil || len(t.dialogs) > 0 || !h.pointerKnown || m.sidebarWidth() == 0 || !m.sideContainsX(h.pointerX, 2) || m.extensionPopupVisible() {
 		return -1
 	}
 	row := h.pointerY - layout.SessionsStart

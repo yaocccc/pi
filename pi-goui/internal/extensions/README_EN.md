@@ -59,7 +59,7 @@ A missing bridge returns `ErrExtensionUnavailable`; never send an unknown slash 
 | Adapter | Required boundary |
 | --- | --- |
 | Questionnaire | Standard `extension_ui_request/response`, owned by dialog ID. Cancellation is `cancelled:true`, never invented answers or default consent; the backend validates answers authoritatively. |
-| Codex levels | Only `codex-fast.get/set`; use backend `level/levels` and update after confirmation. Hide controls without the bridge/capability; do not read settings or infer levels from model names. |
+| Codex levels | Each TUI snapshots the public agent `codex-fast.json` startup default once. `codex-fast.get/apply/set` discover the capability, restore writer memory and explicitly save, respectively. Hide controls when the bridge/capability is absent; never infer a tier. |
 | Worker | Only `worker.transcript`, with `descriptor:{version,id}` and optional opaque `cursor`; consume records and `reset/more/partial`. The backend validates paths, file identity, offsets, limits and cursor lifetime. |
 | Worker presentation | Use stable `phaseCode`, not translated status text. Replay reconstructs presentation, never task execution. Activity is not a full transcript; missing end records are not success. Unavailable records fall back to existing results; preserve and label partial records. Prepare full history and event batches on exclusively owned background Replay/projection copies, committing only to the original viewer, descriptor and job generation. Malformed headers/resets retain the previous transcript; later completion cannot hide the error. |
 

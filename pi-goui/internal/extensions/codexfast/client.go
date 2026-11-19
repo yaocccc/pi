@@ -1,5 +1,5 @@
 // Package codexfast adapts the optional third-party Codex Fast capability.
-// It has no knowledge of an agent directory, configuration file, or Pi internals.
+// RPC writes and transient restores remain owned by the backend.
 package codexfast
 
 import (
@@ -42,6 +42,13 @@ func request(ctx context.Context, c Caller, method string, params any) (State, e
 	return state, nil
 }
 func Get(ctx context.Context, c Caller) (State, error) { return request(ctx, c, "codex-fast.get", nil) }
+func Apply(ctx context.Context, c Caller, level string) (State, error) {
+	s, err := request(ctx, c, "codex-fast.apply", map[string]string{"level": level})
+	if err == nil && s.Level != level {
+		return State{}, fmt.Errorf("Codex mode restore returned %q; expected %q", s.Level, level)
+	}
+	return s, err
+}
 func Set(ctx context.Context, c Caller, level string) (State, error) {
 	return request(ctx, c, "codex-fast.set", map[string]string{"level": level})
 }

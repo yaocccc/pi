@@ -53,7 +53,7 @@ func BenchmarkPanelResize(b *testing.B) {
 					m := resizeBenchmarkModel(b, kind, count)
 					press := func() { m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: m.mainWidth(), Y: 2}) }
 					move := func(width int) {
-						m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: m.width - width, Y: 2})
+						m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - width, Y: 2})
 						m.View()
 					}
 					if phase == "motion-view" {
@@ -70,13 +70,20 @@ func BenchmarkPanelResize(b *testing.B) {
 						for step := 0; step < 10; step++ {
 							move(45 + step*3)
 						}
-						m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: m.width - 72, Y: 2})
+						m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - 72, Y: 2})
 						m.View()
 					}
 				})
 			}
 		}
 	}
+}
+
+func resizeRightEdge(m *Model) int {
+	if m.panelResize.detail {
+		return m.width - m.sidebarWidth()
+	}
+	return m.width
 }
 
 func dragPanel(t *testing.T, m *Model, width int) {
@@ -89,8 +96,8 @@ func dragPanel(t *testing.T, m *Model, width int) {
 	if !m.panelResize.dragging {
 		t.Fatal("resize not started")
 	}
-	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: m.width - width, Y: 2})
-	if cmd := m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: m.width - width, Y: 2}); cmd != nil {
+	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: resizeRightEdge(m) - width, Y: 2})
+	if cmd := m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: resizeRightEdge(m) - width, Y: 2}); cmd != nil {
 		t.Fatal("resize copied text")
 	}
 	if m.panelResize.dragging || m.current().selection.dragging {
@@ -105,11 +112,11 @@ func TestPanelResizeIndependentRuntimePreferences(t *testing.T) {
 		t.Fatal("sidebar width")
 	}
 	m.openInspector("write-1")
-	if m.sidebarWidth() != min(60, m.width/3) {
+	if m.detailWidth() != min(60, m.width/3) {
 		t.Fatal("inspector inherited sidebar width")
 	}
 	dragPanel(t, m, 80)
-	if m.sidebarWidth() != 80 {
+	if m.detailWidth() != 72 {
 		t.Fatal("inspector width")
 	}
 	m.closeInspector()
@@ -117,15 +124,15 @@ func TestPanelResizeIndependentRuntimePreferences(t *testing.T) {
 		t.Fatal("sidebar preference lost")
 	}
 	m.openInspector("write-1")
-	if m.sidebarWidth() != 80 {
+	if m.detailWidth() != 72 {
 		t.Fatal("inspector preference lost")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 70, Height: 40})
-	if m.sidebarWidth() != 30 {
+	if m.detailWidth() != 30 {
 		t.Fatal("main viewport not protected")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
-	if m.sidebarWidth() != 80 {
+	if m.detailWidth() != 72 {
 		t.Fatal("resize overwrote preference")
 	}
 	dragPanel(t, m, 999)
@@ -133,7 +140,7 @@ func TestPanelResizeIndependentRuntimePreferences(t *testing.T) {
 		t.Fatal("maximum width")
 	}
 	dragPanel(t, m, 1)
-	if m.sidebarWidth() != 20 {
+	if m.detailWidth() != 20 {
 		t.Fatal("minimum width")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 40})
@@ -145,7 +152,7 @@ func TestPanelResizeIndependentRuntimePreferences(t *testing.T) {
 		t.Fatal("preference persisted")
 	}
 	fresh.openInspector("write-1")
-	if fresh.sidebarWidth() != 53 {
+	if fresh.detailWidth() != 53 {
 		t.Fatal("detail preference persisted")
 	}
 }
@@ -168,7 +175,7 @@ func TestPanelResizeFreezesFullRenderingUntilRelease(t *testing.T) {
 			tab.state.Items[0].Arguments = args
 			tab.dirty = true
 			for _, width := range []int{30, 80, 45, 90, 60} {
-				m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: m.width - width, Y: 2})
+				m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - width, Y: 2})
 				for _, line := range strings.Split(m.View().Content, "\n") {
 					if ansi.StringWidth(line) > m.width {
 						t.Fatal("preview overflow")
@@ -182,7 +189,7 @@ func TestPanelResizeFreezesFullRenderingUntilRelease(t *testing.T) {
 				}
 			}
 			m.inspector.offset = 999999
-			m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: m.width - 60, Y: 2})
+			m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - 60, Y: 2})
 			m.View()
 			if m.panelResize.dragging || tab.editor.Area.Width() == editorWidth {
 				t.Fatal("release did not reflow editor")
@@ -218,14 +225,14 @@ func TestPanelResizeCancellationReflows(t *testing.T) {
 			m.openInspector("write-1")
 			m.View()
 			m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: m.mainWidth(), Y: 2})
-			m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: m.width - 80, Y: 2})
+			m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - 80, Y: 2})
 			switch reason {
 			case "blur":
 				m.Update(tea.BlurMsg{})
 			case "resize":
 				m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 			case "lost-button":
-				m.Update(tea.MouseMotionMsg{Button: tea.MouseNone, X: m.width - 80, Y: 2})
+				m.Update(tea.MouseMotionMsg{Button: tea.MouseNone, X: resizeRightEdge(m) - 80, Y: 2})
 			case "close":
 				m.closeInspector()
 			case "switch":
@@ -233,13 +240,13 @@ func TestPanelResizeCancellationReflows(t *testing.T) {
 				m.activate(1)
 			case "removed":
 				m.current().state.Items = nil
-				m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: m.width - 80, Y: 2})
+				m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - 80, Y: 2})
 			}
 			if m.panelResize.dragging {
 				t.Fatal("stuck drag")
 			}
 			m.View()
-			if m.inspectorOpen() && m.inspector.cache.width != m.sidebarWidth()-2*m.inspectorInset() {
+			if m.inspectorOpen() && m.inspector.cache.width != m.detailWidth()-2*m.inspectorInset() {
 				t.Fatal("cancel left stale wrapping")
 			}
 		})
@@ -255,12 +262,12 @@ func TestPanelResizeBackgroundEditorDefersUntilActivation(t *testing.T) {
 	m.openInspector("write-1")
 	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: m.mainWidth(), Y: 2})
 	for _, width := range []int{50, 70, 90} {
-		m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: m.width - width, Y: 2})
+		m.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - width, Y: 2})
 		if other.editor.Area.Width() != oldWidth {
 			t.Fatal("motion resized background editor")
 		}
 	}
-	m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: m.width - 90, Y: 2})
+	m.Update(tea.MouseReleaseMsg{Button: tea.MouseLeft, X: resizeRightEdge(m) - 90, Y: 2})
 	if first.dirty || !other.dirty {
 		t.Fatal("release dirty flags incorrect")
 	}

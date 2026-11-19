@@ -59,13 +59,13 @@ func (s *State) parsedSnapshot(raw json.RawMessage) (*snapshotCache, error) {
 // Native files already contain decoded entries. Sharing branch validation and
 // message preparation avoids manufacturing and reparsing an RPC envelope.
 func (s *State) snapshotFromEntries(entries []entry, leaf string) (*snapshotCache, error) {
-	index := make(map[string]entry, len(entries))
-	for _, e := range entries {
+	index := make(map[string]int, len(entries))
+	for i, e := range entries {
 		if e.ID != "" {
 			if _, exists := index[e.ID]; exists {
 				return nil, fmt.Errorf("duplicate session entry %s", e.ID)
 			}
-			index[e.ID] = e
+			index[e.ID] = i
 		}
 	}
 	c := &snapshotCache{id: s.ID, file: s.File, leaf: leaf, pathIDs: make(map[string]bool), messages: make(map[string]cachedMessage)}
@@ -74,10 +74,11 @@ func (s *State) snapshotFromEntries(entries []entry, leaf string) (*snapshotCach
 			return nil, fmt.Errorf("cycle in session branch at %s", id)
 		}
 		c.pathIDs[id] = true
-		e, ok := index[id]
+		i, ok := index[id]
 		if !ok {
 			return nil, fmt.Errorf("missing session entry %s", id)
 		}
+		e := entries[i]
 		if e.Type == "message" {
 			var m message
 			if err := json.Unmarshal(e.Message, &m); err != nil {

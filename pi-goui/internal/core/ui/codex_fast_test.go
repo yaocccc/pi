@@ -4,6 +4,7 @@ import (
 	"pi-goui/internal/extensions/hostui"
 
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -91,11 +92,19 @@ func codexState(level string) codexfast.State {
 }
 func loadCodexState(t *testing.T, m *Model) {
 	t.Helper()
-	cmd := m.pollExtensions(time.Now())
-	if cmd == nil {
-		t.Fatal("missing state request")
+	tab := m.current()
+	if cmd := m.pollExtensions(time.Now()); cmd != nil {
+		t.Fatal("managed writer polled Mode before preparation")
 	}
-	m.Update(cmd())
+	prepare := tab.extensions.Prepare(tab.client)
+	if prepare == nil {
+		t.Fatal("missing writer preparation")
+	}
+	commit, err := prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit()
 }
 
 func TestCodexFastAbsentAndIndependentUserDirectory(t *testing.T) {
@@ -103,7 +112,7 @@ func TestCodexFastAbsentAndIndependentUserDirectory(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			m := testModel(t, "")
 			m.cfg.AgentDir = t.TempDir()
-			// Existing unrelated user's configuration must never be read or modified.
+			// Replacing the file after Model construction must not change its snapshot.
 			path := filepath.Join(m.cfg.AgentDir, "codex-fast.json")
 			const untouched = "not JSON; frontend must not parse this"
 			if err := os.WriteFile(path, []byte(untouched), 0600); err != nil {
@@ -111,7 +120,7 @@ func TestCodexFastAbsentAndIndependentUserDirectory(t *testing.T) {
 			}
 			client, wire := codexClient(t, mode)
 			m.current().client = client
-			if m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != "" || m.sidebarLayout().ModeRow < 0 || m.sidebarContext().Mode != "—" {
+			if m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != "" || m.sidebarLayout().ModeRow < 0 || m.sidebarContext().Mode != "normal x1" {
 				t.Fatal("missing default mode before discovery")
 			}
 			loadCodexState(t, m)
@@ -206,7 +215,7 @@ func TestCodexFastPopupSelectionWaitsForBackend(t *testing.T) {
 		t.Fatal("frontend persisted extension config")
 	}
 }
-func TestCodexFastFailureAndPerTabState(t *testing.T) {
+func TestCodexFastFailedSaveAndSharedTabDisplay(t *testing.T) {
 	m := testModel(t, "")
 	client, _ := codexClient(t, "readonly")
 	first := m.current()
@@ -226,7 +235,10 @@ func TestCodexFastFailureAndPerTabState(t *testing.T) {
 	request := first.extensions[0].(*hostui.Session).Request(first.id, working, false, "ultrafast", time.Now())
 	m.Update(request())
 	if m.current() == first || m.current().extensions[0].(*hostui.Session).Codex.Mode(m.current().dead) != "" || first.extensions[0].(*hostui.Session).Codex.State.Level != "ultrafast" {
-		t.Fatal("response applied to wrong tab")
+		t.Fatal("response applied to wrong writer")
+	}
+	if got := m.sidebarContext().Mode; got != "ultrafast x8" {
+		t.Fatalf("cold tab did not display the instance's saved mode: %q", got)
 	}
 }
 

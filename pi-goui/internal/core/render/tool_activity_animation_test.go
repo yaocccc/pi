@@ -114,7 +114,7 @@ func TestActiveCallsMarkerUsesToolRunningColor(t *testing.T) {
 }
 
 func TestWorkingGradientMatchesInputPalette(t *testing.T) {
-	for _, preset := range []string{"", "catppuccin", "tokyo-night", "nord", "rose-pine"} {
+	for _, preset := range []string{"", "gradient-lavender", "gradient-indigo", "gradient-frost", "gradient-lilac"} {
 		theme := testTheme()
 		theme.FramePreset = preset
 		const text = "2 turns · ↑35k ↓1k · 28s"

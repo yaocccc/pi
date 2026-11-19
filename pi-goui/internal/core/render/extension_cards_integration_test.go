@@ -119,7 +119,7 @@ func TestRunningWorkerStaysInCallsGroup(t *testing.T) {
 
 func TestExtensionCardThemeGeometry(t *testing.T) {
 	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"mode":"scout","status":"completed","objective":"Read directory only","result":{"summary":["Directory checked","No changes"]}},{"index":1,"mode":"scout","status":"completed","objective":"Check status","result":{"summary":["Clean"]}}]}`)}
-	for _, preset := range []string{"", "catppuccin", "tokyo-night", "nord", "rose-pine"} {
+	for _, preset := range []string{"", "gradient-lavender", "gradient-indigo", "gradient-frost", "gradient-lilac"} {
 		theme := testTheme()
 		theme.FramePreset = preset
 		for _, width := range []int{80, 160} {

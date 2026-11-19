@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -61,22 +62,47 @@ type entry struct {
 func keyOf(m message) string {
 	// Several queued messages can share Date.now(). Include canonical content,
 	// not just the timestamp, so distinct messages never overwrite each other.
-	m.Content, _ = json.Marshal(m.contentBlocks())
-	b, _ := json.Marshal(messageJSON(m))
+	// Encode the canonical blocks directly in the original wire-field order.
+	// Marshaling them to RawMessage first would compact and copy the same
+	// multi-MB tool/image content again in the outer Marshal.
+	b, err := json.Marshal(struct {
+		Role       string    `json:"role"`
+		CustomType string    `json:"customType,omitempty"`
+		Content    []content `json:"content"`
+		messageJSON
+	}{m.Role, m.CustomType, m.contentBlocks(), messageJSON(m)})
+	if err != nil {
+		// A partial block may contain invalid raw arguments. The original
+		// two-step encoder then hashed a null content field, not an empty key.
+		m.Content, _ = json.Marshal(m.contentBlocks())
+		b, _ = json.Marshal(messageJSON(m))
+	}
 	return fmt.Sprintf("%s:%x", m.Role, sha256.Sum256(b))
 }
 func blocks(raw json.RawMessage) []content {
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return []content{{Type: "text", Text: text}}
+	// Structured content is the common case. Trying the legacy string shape
+	// first validates and walks the entire array just to get a type error.
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && (trimmed[0] == '"' || trimmed[0] == 'n') {
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			return []content{{Type: "text", Text: text}}
+		}
 	}
 	var out []content
 	_ = json.Unmarshal(raw, &out)
 	return out
 }
 func textOf(raw json.RawMessage) string {
+	return blockText(blocks(raw))
+}
+
+func blockText(content []content) string {
+	if len(content) == 1 && content[0].Type == "text" {
+		return content[0].Text
+	}
 	var b strings.Builder
-	for _, c := range blocks(raw) {
+	for _, c := range content {
 		switch c.Type {
 		case "text":
 			if b.Len() > 0 {

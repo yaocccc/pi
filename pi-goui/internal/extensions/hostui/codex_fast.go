@@ -54,20 +54,27 @@ func (h DialogHost) OpenCodexFastSettings(d *Dialog, payload string) bool {
 }
 
 type CodexState struct {
-	State   codexfast.State
-	Checked time.Time
-	Pending bool
-	Version uint64
-	client  extension.Client
+	instance    *instanceMode
+	prepared    extension.Client
+	applied     uint64
+	unavailable bool
+	State       codexfast.State
+	Checked     time.Time
+	Pending     bool
+	Version     uint64
+	client      extension.Client
 }
 type CodexResult struct {
-	ID      int
-	Version uint64
-	State   codexfast.State
-	Setting bool
-	Err     error
-	client  extension.Client
+	instanceRevision uint64
+	ID               int
+	Version          uint64
+	State            codexfast.State
+	Setting          bool
+	Err              error
+	client           extension.Client
 }
+
+func (r CodexResult) Backend() extension.Client { return r.client }
 
 func (c *CodexState) Mode(dead bool) string {
 	if !dead && c.State.Available() {
@@ -76,7 +83,9 @@ func (c *CodexState) Mode(dead bool) string {
 	return ""
 }
 func (c *CodexState) Request(id int, client extension.Client, dead bool, level string, now time.Time) tea.Cmd {
-	if client == nil || dead {
+	// Managed writers discover and restore their mode during Prepare. A second
+	// polling get could otherwise occupy Pending and swallow the first save.
+	if client == nil || dead || (level == "" && c.instance != nil) {
 		return nil
 	}
 	if reflect.ValueOf(c.client) != reflect.ValueOf(client) {
@@ -92,6 +101,10 @@ func (c *CodexState) Request(id int, client extension.Client, dead bool, level s
 	c.Checked = now
 	c.Pending = true
 	version := c.Version
+	var revision uint64
+	if c.instance != nil {
+		revision = c.instance.revision
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -102,7 +115,7 @@ func (c *CodexState) Request(id int, client extension.Client, dead bool, level s
 		} else {
 			state, err = codexfast.Set(ctx, client, level)
 		}
-		return CodexResult{ID: id, Version: version, State: state, Setting: level != "", Err: err, client: client}
+		return CodexResult{ID: id, instanceRevision: revision, Version: version, State: state, Setting: level != "", Err: err, client: client}
 	}
 }
 func (c *CodexState) Apply(v CodexResult, dead bool, notify func(string)) {
@@ -113,14 +126,25 @@ func (c *CodexState) Apply(v CodexResult, dead bool, notify func(string)) {
 	if dead {
 		return
 	}
+	if v.Version != c.Version {
+		return
+	}
 	if errors.Is(v.Err, rpc.ErrExtensionUnavailable) {
 		c.State = codexfast.State{}
+		c.unavailable = true
+		if v.Setting {
+			notify("Cannot save Codex mode: capability unavailable")
+		}
 	} else if v.Err != nil {
 		if v.Setting {
 			notify("Save Codex mode failed: " + v.Err.Error())
 		}
-	} else if v.Version == c.Version {
+	} else {
 		c.State = v.State
+		c.unavailable = false
+		if v.Setting && (c.instance == nil || v.instanceRevision == c.instance.revision) {
+			c.saved(v.State.Level)
+		}
 	}
 }
 func (c *CodexState) Event(message string, notify func(string)) bool {
@@ -136,6 +160,7 @@ func (c *CodexState) Event(message string, notify func(string)) bool {
 			for _, level := range c.State.Levels {
 				if level == data.Level {
 					c.State.Level = level
+					c.saved(level)
 					c.Version++
 					break
 				}

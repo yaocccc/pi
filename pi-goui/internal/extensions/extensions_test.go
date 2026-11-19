@@ -11,7 +11,7 @@ import (
 )
 
 func TestInstalledExtensionsExposeOnlyFreshInterfaceList(t *testing.T) {
-	var factory func() []extension.Extension = New
+	var factory func(...string) []extension.Extension = New
 	first, second := factory(), factory()
 	if len(first) != 3 || len(second) != 3 {
 		t.Fatal("missing fixed capability implementations")

@@ -92,7 +92,7 @@ func TestSidebarTodoScrollAndSessionIsolation(t *testing.T) {
 	}
 	first.state.PlanRevision = 1
 	m.sidebarHistory.cwd = m.tabDirectory(first)
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 20; i++ {
 		m.sidebarHistory.sessions = append(m.sidebarHistory.sessions, session.Summary{Name: fmt.Sprint(i)})
 	}
 	before := m.sidebarLayout()

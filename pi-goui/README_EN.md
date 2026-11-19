@@ -117,6 +117,7 @@ Opening a session also restores its active-branch model and thinking level plus 
 | `/model`, `/thinking` | Select a model or reasoning level |
 | `/fork`, `/origin`, `/tree` | Fork, inspect the source, or browse the session tree read-only |
 | `/attach` | Attach an image |
+| `/setting` | Choose a theme, move the sidebar, or resume the current directory’s latest session on startup. Defaults: right sidebar and a new session. Changes are saved to `goui.json` in the agent directory. |
 | `/theme`, `/reload` | Select a frontend theme or reload frontend configuration |
 | `/hotkeys` | Show effective bindings and their contexts |
 | `/close`, `/delete`, `/quit` | Close the current session, permanently delete after confirmation, or exit all sessions |
@@ -126,7 +127,8 @@ Opening a session also restores its active-branch model and thinking level plus 
 - Click tools to expand previews; “查看 ↗” opens full details with independent scrolling, selection/copy and resizing. `Esc` closes details. Preview truncation never changes saved records; estimated tokens are not billing usage.
 - In the session picker, `Ctrl+R` renames and `Ctrl+D` requests confirmed deletion. Hover a user-message header and click “从此轮fork” to create a separate session directly while preserving the original tab/task; `/tree` does not edit the tree.
 - Configuration comes from agent `keybindings.json` / `settings.json` and project `.pi/settings.json`. Overrides replace default bindings; an empty array disables an action. Enhanced chords depend on terminal support.
-- `/theme` previews themes; Enter saves and Esc restores. Preferences live in agent `goui.json`, not native Pi theme settings. Missing theme files use embedded defaults; `/reload` does not reload backend extensions.
+- Click an HTTP(S) link in a message to open the default browser on the machine running `pi-goui`. Click an existing file to edit it with `$VISUAL` or `$EDITOR` (e.g. `export VISUAL=nvim`). Relative paths resolve from the tab directory. Hover shows a pointer; dragging still selects text to copy.
+- Theme names follow `gradient-<color>` or `solid-<color>` in `/theme`. The default is `gradient-classic`. For example, `claude` is now `gradient-clay`, `codex` is `gradient-mint`, and `github` is `gradient-azure`. Previous names still work in commands and saved preferences. Choose `random` to draw from all built-in themes at each startup. The draw may repeat; `/reload` keeps it. Use `/theme` to preview; Enter saves and Esc restores. Preferences live in agent `goui.json`, not native Pi theme settings. Missing theme files use embedded defaults; `/reload` does not reload backend extensions.
 
 This frontend does not promise native TUI feature parity. Use `pi` for authentication, full scoped-model management and native settings editing.
 
@@ -134,7 +136,7 @@ This frontend does not promise native TUI feature parity. Use `pi` for authentic
 
 Without third-party extensions, native Pi tools, codemode and generic results still work. Existing adapters support questionnaires, Worker, Codex levels and SoL-Pi/Web results. Follow each backend extension's own installation guide; Go does not load TypeScript directly.
 
-Worker transcripts are fetched read-only through a backend capability; closing the inspector does not stop tasks. Unavailable records fall back to existing task results; partial records remain visible and marked incomplete. Codex controls appear only when the bridge and capability are available. See the [extension guide](internal/extensions/README_EN.md).
+Worker transcripts are fetched read-only through a backend capability; closing the inspector does not stop tasks. Unavailable records fall back to existing task results; partial records remain visible and marked incomplete. Mode belongs to the running Go UI, not a session. Even cold tabs display the startup default captured by this TUI. A backend-confirmed change updates all its tabs and the default for future instances, without affecting other running TUIs. Restarted Pi writers restore this TUI's level without saving it; confirmed absence of the bridge or capability disables the control. See the [extension guide](internal/extensions/README_EN.md).
 
 ## Updates and compatibility
 

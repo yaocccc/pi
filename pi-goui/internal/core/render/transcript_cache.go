@@ -9,8 +9,9 @@ import (
 	"pi-goui/internal/core/session"
 )
 
-// TranscriptCache belongs to one tab and has a single owner: the UI goroutine
-// or its in-flight layout job, never both concurrently. It retains
+// TranscriptCache belongs to one tab. Its published sections (including their
+// documents, keys and Markdown rows) are immutable: a value copy may seed a
+// concurrent layout job. Transcript only updates the receiving cache. It retains
 // only the latest document's sections, not every version of streaming output.
 // Completed bubbles reuse their layout; a changing assistant bubble additionally
 // reuses Markdown for its unchanged messages before recomputing its frame.
@@ -23,6 +24,7 @@ type TranscriptCache struct {
 type cachedSection struct {
 	items    []transcriptItemKey
 	doc      Document
+	lines    int
 	markdown map[markdownKey][]string
 }
 
@@ -42,17 +44,52 @@ type transcriptItemKey struct {
 	estimatedTokens, messageIndex, imageCount                      int
 	compaction                                                     session.CompactionMetrics
 	hasCompaction                                                  bool
+	assistantStats                                                 string
+	activityStart                                                  bool
 }
 
-func itemKeys(items []session.Item) []transcriptItemKey {
-	keys := make([]transcriptItemKey, len(items))
+// String conversion in the equality check does not allocate. Do not recopy
+// multi-MB tool JSON merely because a different section unfolded.
+func rawKey(raw []byte, previous string) string {
+	if string(raw) == previous {
+		return previous
+	}
+	return string(raw)
+}
+
+func itemKeys(items []session.Item, opts Options, old []transcriptItemKey) ([]transcriptItemKey, bool) {
+	var next []transcriptItemKey
+	if len(old) != len(items) {
+		next = make([]transcriptItemKey, len(items))
+	}
+	activeID, hasActivity := strings.CutPrefix(opts.activityGroup, "tool-group:")
 	for i, it := range items {
-		keys[i] = transcriptItemKey{it.ID, it.Role, it.Text, it.Thinking, it.ToolID, it.ToolName, string(it.Arguments), string(it.Details), it.Running, it.Error, it.HasResult, it.EstimatedTokens, it.MessageIndex, len(it.Images), session.CompactionMetrics{}, it.Compaction != nil}
+		var prev transcriptItemKey
+		if i < len(old) {
+			prev = old[i]
+		}
+		key := transcriptItemKey{
+			id: it.ID, role: it.Role, text: it.Text, thinking: it.Thinking, toolID: it.ToolID, toolName: it.ToolName,
+			arguments: rawKey(it.Arguments, prev.arguments), details: rawKey(it.Details, prev.details), running: it.Running, failed: it.Error, hasResult: it.HasResult,
+			estimatedTokens: it.EstimatedTokens, messageIndex: it.MessageIndex, imageCount: len(it.Images), hasCompaction: it.Compaction != nil,
+			// Both are local to a bubble: do not flush history when the latest
+			// tool's live preview or a completed turn's stats change.
+			assistantStats: opts.AssistantStats[it.ID], activityStart: hasActivity && it.ID == activeID && (it.Role == "tool" || it.Role == "toolResult"),
+		}
 		if it.Compaction != nil {
-			keys[i].compaction = *it.Compaction
+			key.compaction = *it.Compaction
+		}
+		if next == nil && key != prev {
+			next = slices.Clone(old)
+		}
+		if next != nil {
+			next[i] = key
 		}
 	}
-	return keys
+	if next == nil {
+		return old, false
+	}
+	return next, true
 }
 
 func visibleItems(items []session.Item, opts Options) []session.Item {
@@ -81,28 +118,53 @@ func assistantItem(item session.Item) bool {
 	return item.Role == "assistant" || item.Role == "tool" || item.Role == "toolResult" || item.Role == "thinking"
 }
 
+// A fold override addresses a rendered block, including tool-group headers and
+// nested extension blocks. Hidden children pick up their current overrides when
+// a parent opens. Compare presence too: an explicit false can suppress a live
+// preview's per-child default. Both maps are immutable during this layout.
+func sectionFoldsChanged(blocks []Block, before, after map[string]bool) bool {
+	for _, b := range blocks {
+		old, had := before[b.ID]
+		next, has := after[b.ID]
+		if old != next || had != has {
+			return true
+		}
+	}
+	return false
+}
+
 // Transcript is output-equivalent to the uncached Transcript function. Width,
-// theme and presentation changes invalidate the cache, including in-place edits
-// to Expanded. MessageCount is metadata and does not invalidate bubble layouts.
+// theme and global presentation changes invalidate the cache. Per-ID fold
+// changes invalidate only their section. MessageCount is metadata.
 func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, opts Options) Document {
 	if opts.Width <= 0 {
 		*c = TranscriptCache{}
 		return Document{}
 	}
 	opts.activityGroup = toolActivityGroup(items, opts)
-	if c.opts.Tools != opts.Tools || c.opts.activityGroup != opts.activityGroup || c.theme != theme || c.opts.Width != opts.Width || c.opts.AssistantTitle != opts.AssistantTitle || c.opts.ShowThinking != opts.ShowThinking || c.opts.ExpandTools != opts.ExpandTools || !maps.Equal(c.opts.Expanded, opts.Expanded) || !maps.Equal(c.opts.AssistantStats, opts.AssistantStats) {
+	previousFolds := c.opts.Expanded
+	foldsChanged := !maps.Equal(previousFolds, opts.Expanded)
+	if c.opts.Tools != opts.Tools || c.theme != theme || c.opts.Width != opts.Width || c.opts.AssistantTitle != opts.AssistantTitle || c.opts.ShowThinking != opts.ShowThinking || c.opts.ExpandTools != opts.ExpandTools {
 		c.sections = nil
 	}
 	c.theme, c.opts = theme, opts
-	c.opts.Expanded = maps.Clone(opts.Expanded)
-	c.opts.AssistantStats = maps.Clone(opts.AssistantStats)
+	if foldsChanged {
+		c.opts.Expanded = maps.Clone(opts.Expanded)
+	} else {
+		c.opts.Expanded = previousFolds
+	}
+	c.opts.AssistantStats = nil // Immutable values are snapshotted in the item keys.
 	count := opts.MessageCount
 	for _, it := range items {
 		count = max(count, it.MessageIndex)
 	}
 	items = visibleItems(items, opts)
+	var cold map[markdownKey]*coldMarkdown
+	if len(c.sections) == 0 && len(items) >= 128 {
+		cold = prepareColdMarkdown(items, opts.Width, theme)
+	}
 	next := make([]cachedSection, 0, len(c.sections))
-	textBytes := 0
+	textBytes, blockCount, spanCount := 0, 0, 0
 	for start := 0; start < len(items); {
 		end := start + 1
 		if assistantItem(items[start]) {
@@ -110,12 +172,12 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 				end++
 			}
 		}
-		keys := itemKeys(items[start:end])
 		var section cachedSection
 		if len(next) < len(c.sections) {
 			section = c.sections[len(next)]
 		}
-		if !slices.Equal(section.items, keys) {
+		keys, itemsChanged := itemKeys(items[start:end], opts, section.items)
+		if itemsChanged || (foldsChanged && sectionFoldsChanged(section.doc.Blocks, previousFolds, opts.Expanded)) {
 			used := make(map[markdownKey][]string)
 			cachedMarkdown := func(body string, width int, theme config.Theme) []string {
 				key := markdownKey{body, width}
@@ -124,22 +186,30 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 					rows, ok = section.markdown[key]
 				}
 				if !ok {
-					rows = markdown(body, width, theme)
+					if prepared := cold[key]; prepared != nil {
+						rows = prepared.rows
+					} else {
+						rows = markdown(body, width, theme)
+					}
 				}
 				used[key] = rows
 				return rows
 			}
 			section.doc = transcript(items[start:end], theme, opts, cachedMarkdown)
+			section.lines = strings.Count(section.doc.Text, "\n") + 1
 			section.items, section.markdown = keys, used
 		}
 		next = append(next, section)
 		textBytes += len(section.doc.Text) + 1
+		blockCount += len(section.doc.Blocks)
+		spanCount += len(section.doc.Content)
 		start = end
 	}
 	var text strings.Builder
 	text.Grow(textBytes)
-	var blocks []Block
-	var content []ContentSpan
+	blocks := slices.Grow([]Block(nil), blockCount)
+	content := slices.Grow([]ContentSpan(nil), spanCount)
+	var targets []messageTarget
 	var imageLinks []ImageLink
 	var activityRows []int
 	lines := 0
@@ -150,6 +220,7 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 			}
 			text.WriteString(section.doc.Text)
 			content = append(content, section.doc.Content...)
+			targets = appendMessageTargets(targets, section.doc.messageTargets, lines, 0)
 			for _, row := range section.doc.ActivityRows {
 				activityRows = append(activityRows, row+lines)
 			}
@@ -162,9 +233,9 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 				block.End += lines
 				blocks = append(blocks, block)
 			}
-			lines += strings.Count(section.doc.Text, "\n") + 1
+			lines += section.lines
 		}
 	}
 	c.sections = next
-	return Document{ActivityRows: activityRows, Text: text.String(), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: count}
+	return Document{messageTargets: targets, ActivityRows: activityRows, Text: text.String(), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: count}
 }

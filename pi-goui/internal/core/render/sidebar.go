@@ -45,6 +45,7 @@ type SidebarContext struct {
 	Git            *GitStatus
 	Mode           string
 	Quota          *SidebarQuota
+	OpenSessions   int // Total open cards, including any outside the scroll window.
 	History        []string
 	HistoryHovered []bool
 	HistoryOffset  int
@@ -85,8 +86,13 @@ func SidebarGeometry(height int, context SidebarContext) SidebarLayout {
 		todoRow = height - 1 - todoHeight
 	}
 	historyRow := 7 + extra
-	// Keep only complete history entries and room for New session and one open-session card.
-	historyCount := min(5, len(context.History), max(0, (height-historyRow-todoHeight-8)/SidebarHistoryRows))
+	// Recents and open cards share the rows left after the fixed controls and TODOs.
+	// Keep the compact layout (up to five recents and at least one card), then
+	// grow recents to at most ten using rows the other open cards don't need.
+	listRows := height - (SidebarSessionStart + extra) - todoHeight - 1 // bottom border
+	compact := min(5, (listRows-SidebarSessionRows)/SidebarHistoryRows)
+	spare := (listRows - max(1, context.OpenSessions)*SidebarSessionRows) / SidebarHistoryRows
+	historyCount := min(10, len(context.History), max(0, compact, spare))
 	extra += historyCount * SidebarHistoryRows
 	newRow := SidebarNewRow + extra
 	start := SidebarSessionStart + extra
@@ -264,6 +270,7 @@ func Sidebar(state session.State, sessions []SessionRow, theme config.Theme, wid
 	if ctx.Directory == "" {
 		ctx.Directory = state.Cwd
 	}
+	ctx.OpenSessions = max(ctx.OpenSessions, len(sessions))
 	inner := max(0, width-4)
 	border := func(left, right string) string {
 		if width == 1 {

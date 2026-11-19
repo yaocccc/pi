@@ -61,7 +61,7 @@ func (m *Model) inputFooter(t *tab) editorFooter {
 	model = strings.Join(strings.Fields(render.Clean(model)), " ")
 	thinking := strings.Join(strings.Fields(render.Clean(t.state.Thinking)), " ")
 	if thinking == "" {
-		thinking = "off"
+		thinking = "thinking" // Unknown until preview metadata or Pi supplies a level.
 	}
 	budget := max(1, width-min(24, width/2)-1)
 	branch := ""

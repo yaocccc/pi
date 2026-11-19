@@ -190,7 +190,7 @@ func TestLegacyDeleteBindingMigration(t *testing.T) {
 func TestFrontendThemes(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", dir)
-	for _, name := range ThemeNames() {
+	for _, name := range append(ThemeNames(), "random") {
 		want, err := LoadTheme(dir, name)
 		if err != nil {
 			t.Fatal(err)

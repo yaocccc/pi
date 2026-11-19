@@ -45,9 +45,9 @@ func (m *Model) documentOptions(t *tab) render.Options {
 	return opts
 }
 
-// Each tab has at most one in-flight layout. The job owns its cache until its
-// result is delivered; synchronous layout can only use the tab's separate cache.
-// Inputs are display copies, not references to mutable session/UI state.
+// Each tab has at most one in-flight layout. The job has a private cache value
+// seeded with immutable sections. A fold on the UI goroutine can still reuse
+// those sections while the job computes replacement ones. Mutable inputs are copied.
 type documentJob struct {
 	id                   int
 	client               *rpc.Client
@@ -94,7 +94,6 @@ func (m *Model) scheduleDocument(t *tab) tea.Cmd {
 	}
 	job := &documentJob{id: t.id, client: t.client, file: t.state.File, sessionID: t.state.ID,
 		generation: t.layoutGeneration, revision: t.revision, items: items, theme: m.cfg.Theme, opts: opts, cache: t.renderCache}
-	t.renderCache = render.TranscriptCache{}
 	t.documentJob = job
 	return job.render
 }

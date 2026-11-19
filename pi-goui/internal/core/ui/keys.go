@@ -19,7 +19,7 @@ var localCommands = []command{
 	{"model", "Select model"}, {"thinking", "Set thinking level"}, {"name", "Rename this session"},
 	{"origin", "View the source session and fork turn"},
 	{"tree", "Browse full saved tree"}, {"fork", "Branch from a user message"}, {"compact", "Compact model context; keep visible history"},
-	{"theme", "Choose frontend color theme"}, {"hotkeys", "Effective native keybindings"}, {"reload", "Reload frontend keybindings, theme and settings"},
+	{"setting", "Configure theme, sidebar and startup session"}, {"theme", "Choose frontend color theme"}, {"hotkeys", "Effective native keybindings"}, {"reload", "Reload frontend keybindings, theme and settings"},
 	{"copy", "Copy last assistant response"}, {"export", "Export conversation as HTML"}, {"attach", "Attach an image by path"}, {"detach", "Remove pending image attachments"},
 	{"delete", "Delete this session permanently (confirm first)"},
 	{"close", "Close this session"}, {"quit", "Exit; stop all open sessions"},
@@ -436,6 +436,10 @@ func (m *Model) submitChecked(t *tab, follow, checked bool) tea.Cmd {
 	if t.resume.pending {
 		return m.deferResumeSubmission(t, follow)
 	}
+	if t.cycle.primed && (t.cycle.priming || t.extensions.Prepare(t.client) != nil) {
+		m.deferResumeSubmission(t, follow)
+		return m.primeCycle(t)
+	}
 	return m.sendPrompt(t, original, t.images, follow, true)
 }
 
@@ -567,6 +571,8 @@ func (m *Model) slash(t *tab, text string) (tea.Cmd, bool) {
 		return m.requestCloseSession(t, true), true
 	case "quit", "exit":
 		return tea.Quit, true
+	case "setting":
+		return m.showSettings(t, 0), true
 	case "theme":
 		return m.chooseTheme(t, arg), true
 	case "settings", "scoped-models", "login", "logout", "share", "changelog":

@@ -82,7 +82,7 @@ func TestSidebarToolbarNewHitbox(t *testing.T) {
 
 func TestSidebarHistoryHoverFollowsPointer(t *testing.T) {
 	m := testModel(t, "")
-	m.width, m.height = 120, 40
+	m.width, m.height = 120, 24 // Eight entries overflow this compact sidebar.
 	m.sidebarHistory.cwd = m.tabDirectory(m.current())
 	m.current().state.File = "/saved/current.jsonl"
 	for i := 0; i < 8; i++ {
@@ -166,9 +166,44 @@ func TestSidebarHistoryScrollingAndRefresh(t *testing.T) {
 	}
 }
 
+func TestSidebarRecentsGrowIntoSpareRowsOnResize(t *testing.T) {
+	m := testModel(t, "")
+	m.addTab("")
+	m.sidebarHistory.cwd = m.tabDirectory(m.current())
+	for i := range 30 {
+		m.sidebarHistory.sessions = append(m.sidebarHistory.sessions, session.Summary{Name: fmt.Sprint(i)})
+	}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	short := m.sidebarLayout()
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: m.sideX() + 3, Y: short.HistoryStart})
+	if short.HistoryCount <= 0 || short.HistoryCount > 5 || m.sidebarHistory.offset != 3 {
+		t.Fatalf("compact list should still scroll: %+v, offset %d", short, m.sidebarHistory.offset)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 42})
+	tall := m.sidebarLayout()
+	if tall.HistoryCount != 10 || tall.Capacity < len(m.tabs) {
+		t.Fatalf("spare rows should go to recents without hiding open tabs: %+v", tall)
+	}
+	last := tall.HistoryStart + (tall.HistoryCount-1)*render.SidebarHistoryRows
+	m.Update(tea.MouseMotionMsg{X: m.sideX() + 3, Y: last})
+	if hover := m.sidebarContext().HistoryHovered; len(hover) != 30 || !hover[tall.HistoryOffset+tall.HistoryCount-1] {
+		t.Fatal("hover missed the last expanded history row")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 80})
+	if l := m.sidebarLayout(); l.HistoryCount != 10 || l.HistoryOffset != tall.HistoryOffset {
+		t.Fatalf("taller sidebar should retain the ten-row viewport and scroll position: %+v", l)
+	}
+	for range 10 {
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: m.sideX() + 3, Y: last})
+	}
+	if l := m.sidebarLayout(); l.HistoryOffset+l.HistoryCount != 30 {
+		t.Fatalf("last recent should remain reachable: %+v", l)
+	}
+}
+
 func TestSidebarHistoryClickPreservesWorkAndReusesOpenTab(t *testing.T) {
 	m := testModel(t, "")
-	m.width, m.height = 120, 36
+	m.width, m.height = 120, 24
 	path := actionFile(t, "saved")
 	m.sidebarHistory = sidebarHistoryState{cwd: m.tabDirectory(m.current()), offset: 1, sessions: []session.Summary{{Name: "offscreen"}, {Path: path, Name: "Saved"}, {}, {}, {}, {}}}
 	current := m.current()

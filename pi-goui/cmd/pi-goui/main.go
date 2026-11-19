@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/cmd/internal/startup"
 	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/core/ui"
@@ -58,9 +59,13 @@ func run() error {
 		return fmt.Errorf("shared TUI child cannot start another host")
 	}
 	var sharedFlag string
+	var continueSet bool
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "listen" || f.Name == "token" {
 			sharedFlag = f.Name
+		}
+		if f.Name == "continue" || f.Name == "c" {
+			continueSet = true
 		}
 	})
 	if sharedFlag != "" {
@@ -98,14 +103,12 @@ func run() error {
 	if opts.NoSession && (cont || opts.SessionFile != "") {
 		return fmt.Errorf("--no-session cannot be combined with --continue or --session")
 	}
-	if cont && opts.SessionFile == "" {
-		list, e := session.List(cfg.AgentDir, opts.Cwd)
-		if e != nil {
-			return e
-		}
-		if len(list) > 0 {
-			opts.SessionFile = list[0].Path
-		}
+	// Let shared terminal children apply the preference when they actually start,
+	// using their chosen directory. An explicit --continue still belongs to the root.
+	resume := !check && !opts.NoSession && (cont || (!continueSet && !sharing && cfg.ResumeLastSession))
+	opts.SessionFile, err = startup.SessionFile(cfg.AgentDir, opts.Cwd, opts.SessionFile, resume)
+	if err != nil {
+		return err
 	}
 	if opts.SessionFile != "" {
 		opts.SessionFile, err = filepath.Abs(opts.SessionFile)
@@ -147,7 +150,7 @@ func run() error {
 		return nil
 	}
 	if sharing {
-		return runShared(opts, cfg.AgentDir)
+		return runShared(opts, cfg.AgentDir, continueSet && !cont)
 	}
 	model := ui.New(opts, cfg)
 	defer model.Close()

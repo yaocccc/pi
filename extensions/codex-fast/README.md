@@ -51,7 +51,7 @@ Pi 1.5.2 提供 SDK、`pi-tui`、`typebox`，这两个目录运行不需要复�
 - `setLevel(unknown)` 校验并原子保存，返回独立状态；无效档位抛出 `invalid-level`，保存失败不更新已提交内存状态。
 - 成功保存发布 `codex-fast:changed` 的 `{level}` 事实。外部文件变化在下一次读取/请求时加载，不视为服务保存事件。
 
-可选 pi-ui 提供 `/codex-fast`、原生菜单与 Go RPC 兼容。通用扩展 RPC 方法 `codex-fast.get` / `codex-fast.set` 分别读取能力状态和提交档位；Go 前端不读写此配置。缺少适配器不影响能力请求处理，缺少能力时前端应隐藏入口。服务在使用时发现，以容忍安装顺序。
+可选 pi-ui 提供 `/codex-fast`、原生菜单与 Go RPC 兼容。通用扩展 RPC 方法 `codex-fast.get` / `codex-fast.set` 分别读取能力状态和提交档位；同一 Go UI 的所有标签共享实例档位：启动时仅读一次公开的 `codex-fast.json` 默认值（缺文件为 normal，支持旧布尔格式），不监听、不写入。新建或重启的 Pi 在执行前通过 `codex-fast.apply {level}` 恢复该实例档位，仅更新内存，返回 `{level,levels}`，不保存、不发送已保存通知。`set` 才更新以后实例的默认值。缺少适配器不影响能力请求处理，缺少能力时前端应隐藏入口。服务在使用时发现，以容忍安装顺序。
 
 ## 第三方 UI 快速接入（独立指南）
 

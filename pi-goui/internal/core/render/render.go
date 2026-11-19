@@ -39,12 +39,13 @@ type ContentSpan struct {
 }
 
 type Document struct {
-	ActivityRows []int // Heading rows animated by the UI without rebuilding the transcript.
-	ImageLinks   []ImageLink
-	Content      []ContentSpan
-	Text         string
-	Blocks       []Block
-	MessageCount int
+	messageTargets []messageTarget
+	ActivityRows   []int // Heading rows animated by the UI without rebuilding the transcript.
+	ImageLinks     []ImageLink
+	Content        []ContentSpan
+	Text           string
+	Blocks         []Block
+	MessageCount   int
 }
 
 // Start is inclusive and End exclusive, in zero-based terminal lines of Text.
@@ -89,11 +90,7 @@ func lines(s string) []string {
 }
 func wrap(s string, width int) []string { return lines(ansi.Hardwrap(s, max(1, width), true)) }
 
-func markdown(text string, width int, theme config.Theme) []string {
-	text = Clean(text)
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
+func newMarkdownRenderer(width int, theme config.Theme) (*glamour.TermRenderer, error) {
 	style := styles.DarkStyleConfig
 	zero := uint(0)
 	style.Document.Margin = &zero
@@ -112,17 +109,39 @@ func markdown(text string, width int, theme config.Theme) []string {
 	style.Heading.Color, style.Link.Color, style.LinkText.Color = &theme.Accent, &theme.Muted, &theme.Accent
 	style.H1.BackgroundColor, style.H1.Color = nil, &theme.Accent
 	style.Code.BackgroundColor, style.Code.Color = nil, &theme.Accent
-	renderer, err := glamour.NewTermRenderer(glamour.WithStyles(style), glamour.WithWordWrap(max(1, width)), glamour.WithTableWrap(true))
-	if err != nil {
-		return visualWrap(text, width)
+	return glamour.NewTermRenderer(glamour.WithStyles(style), glamour.WithWordWrap(max(1, width)), glamour.WithTableWrap(true))
+}
+
+type markdownRenderer struct {
+	width int
+	theme config.Theme
+	term  *glamour.TermRenderer
+}
+
+func markdown(text string, width int, theme config.Theme) []string {
+	r := markdownRenderer{width: width, theme: theme}
+	return r.render(text)
+}
+
+func (r *markdownRenderer) render(text string) []string {
+	text = Clean(text)
+	if strings.TrimSpace(text) == "" {
+		return nil
 	}
-	rendered, err := renderer.Render(text)
+	if r.term == nil {
+		r.term, _ = newMarkdownRenderer(r.width, r.theme)
+		if r.term == nil {
+			return visualWrap(text, r.width)
+		}
+	}
+	rendered, err := r.term.Render(text)
 	if err != nil {
-		return visualWrap(text, width)
+		r.term = nil // Don't reuse partially rendered parser state.
+		return visualWrap(text, r.width)
 	}
 	// A second, ANSI-aware hard wrap handles unbroken code, URLs, wide tables,
 	// and graphemes that the Markdown renderer cannot soft-wrap.
-	return visualWrap(strings.Trim(rendered, "\n"), width)
+	return visualWrap(strings.Trim(rendered, "\n"), r.width)
 }
 
 // compactBubble removes only end-of-row layout padding (not leading/code
@@ -252,6 +271,13 @@ func systemSynopsis(text string) string {
 	return oneLine(text)
 }
 
+func userBubbleWidth(width int) int {
+	if width >= 20 {
+		return width * 4 / 5
+	}
+	return width
+}
+
 // Transcript displays every visible record. Adjacent assistant text and tools
 // share one left-aligned bubble; user messages are right-aligned and narrower.
 // Hidden thinking and collapsed tool output remain untouched in the input data.
@@ -275,6 +301,7 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 	}
 	items = visibleItems(items, opts)
 	var out []string
+	var targets []messageTarget
 	var imageLinks []ImageLink
 	var activityRows []int
 	var blocks []Block
@@ -305,6 +332,7 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			start := i
 			inner := max(1, width-4)
 			var body []string
+			var bodyTargets []messageTarget
 			var group []Block
 			activityRow := -1
 			afterToolGroup := false
@@ -393,7 +421,13 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 						if len(rows) > 0 && it.Text != "" {
 							rows = append(rows, "")
 						}
-						rows = append(rows, renderMarkdown(it.Text, inner, theme)...)
+						md, links := messageRows(it.Text, renderMarkdown(it.Text, inner, theme))
+						offset := len(body) + len(rows)
+						if afterToolGroup {
+							offset++
+						}
+						bodyTargets = appendMessageTargets(bodyTargets, links, offset, 0)
+						rows = append(rows, md...)
 					}
 					if it.Error {
 						rows = append(rows, paint("Response ended with an error", theme.Error))
@@ -413,7 +447,9 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 				group = append(group, Block{ID: it.ID, Role: it.Role, MessageIndex: it.MessageIndex, Start: start, End: len(body), Foldable: tool, Expanded: tool && isExpanded(it.ID, opts)})
 			}
 			if len(body) > 0 {
+				row, cell := len(out), 0
 				if width >= 8 {
+					row, cell = row+1, 2
 					var bubbleWidth int
 					title := assistantTitle
 					for n := i - 1; n >= start; n-- {
@@ -435,25 +471,26 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 				if activityRow >= 0 {
 					activityRows = append(activityRows, len(out)+activityRow)
 				}
+				targets = appendMessageTargets(targets, bodyTargets, row, cell)
 				appendSection(body, group)
 			}
 			continue
 		}
 		i++
 		if item.Role == "user" {
-			bubbleWidth := width
-			if width >= 20 {
-				bubbleWidth = width * 4 / 5
-			}
-			body := renderMarkdown(item.Text, max(1, bubbleWidth-4), theme)
+			bubbleWidth := userBubbleWidth(width)
+			body, bodyTargets := messageRows(item.Text, renderMarkdown(item.Text, max(1, bubbleWidth-4), theme))
 			if len(body) == 0 {
 				continue
 			}
+			row, cell := len(out), 0
 			if width >= 8 {
 				title := "你"
 				body, bubbleWidth = compactBubble(body, title, bubbleWidth)
 				body, sectionContent = frameContent(body, title, bubbleWidth, "user", true, width, theme)
+				row, cell = row+1, width-bubbleWidth+2
 			}
+			targets = appendMessageTargets(targets, bodyTargets, row, cell)
 			var links []ImageLink
 			body, links = imageRows(body, item.ID, len(item.Images), len(out))
 			imageLinks = append(imageLinks, links...)
@@ -479,5 +516,5 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			appendSection(body, []Block{{ID: item.ID, Role: item.Role, MessageIndex: item.MessageIndex, Start: 0, End: len(body)}})
 		}
 	}
-	return Document{ActivityRows: activityRows, Text: strings.Join(out, "\n"), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: messageCount}
+	return Document{messageTargets: targets, ActivityRows: activityRows, Text: strings.Join(out, "\n"), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: messageCount}
 }

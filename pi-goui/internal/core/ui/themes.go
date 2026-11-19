@@ -8,15 +8,17 @@ import (
 )
 
 func (m *Model) chooseTheme(t *tab, name string) tea.Cmd {
-	name = strings.ToLower(strings.TrimSpace(name))
+	name = config.CanonicalThemeName(strings.ToLower(strings.TrimSpace(name)))
 	if name == "" {
 		d := m.newDialog("theme", "Theme", "↑/↓ preview · Enter save · Esc cancel")
 		before := m.cfg.Theme
 		d.themeBefore = &before
-		for _, name := range config.ThemeNames() {
+		for _, name := range append(config.ThemeNames(), "random") {
 			detail := ""
-			if name == "pi" {
+			if name == config.DefaultThemeName {
 				detail = "Native pi palette"
+			} else if name == "random" {
+				detail = "Pick a theme at each startup"
 			}
 			if name == m.cfg.ThemeName {
 				detail += " · current"

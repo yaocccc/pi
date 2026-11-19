@@ -1,11 +1,13 @@
 package config
 
 type Config struct {
-	AgentDir  string
-	Keys      Bindings
-	Theme     Theme
-	ThemeName string
-	Settings  map[string]any
+	AgentDir          string
+	Keys              Bindings
+	Theme             Theme
+	ThemeName         string
+	SidebarPosition   string
+	ResumeLastSession bool
+	Settings          map[string]any
 }
 type Bindings struct{ bindings map[string][]string }
 type Theme struct {

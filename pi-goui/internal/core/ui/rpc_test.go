@@ -51,6 +51,8 @@ func TestUIRPCProcess(t *testing.T) {
 			data = map[string]any{"commands": []any{}}
 		case "get_available_models":
 			data = map[string]any{"models": []any{map[string]any{"id": "one", "provider": "fake"}, map[string]any{"id": "two", "provider": "fake"}}}
+		case "get_available_thinking_levels":
+			data = map[string]any{"levels": []string{"low", "high"}}
 		case "prompt":
 			data = map[string]any{"disposition": "accepted"}
 			if req["message"] == "extension handles this" {

@@ -98,7 +98,7 @@ func TestResumeThreadsOpenChildPreservesDiskParent(t *testing.T) {
 
 func TestRecentsThreadPaintScrollTooltipAndClick(t *testing.T) {
 	m := testModel(t, "")
-	m.width, m.height = 120, 40
+	m.width, m.height = 120, 24
 	parent := m.current()
 	parent.state.ID = "parent"
 	parent.state.File = actionFile(t, "parent")

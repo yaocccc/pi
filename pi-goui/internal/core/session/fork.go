@@ -2,18 +2,20 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"time"
 )
 
 // Fork is a separately persisted native v3 session, never a mutation of its
-// source. Entries is ready for a fresh UI projection.
+// source. Entries is omitted when only the durable file was requested.
 type Fork struct {
 	ID, Path, Name, Cwd string
 	Entries             json.RawMessage
@@ -73,11 +75,18 @@ func (c ForkCheckpoint) ResolveUserID(selected string, snapshot json.RawMessage)
 	}
 	for i, expected := range c.records[:index+1] {
 		actual := current.records[i]
-		if expected.msg.partial || expected.summary != actual.summary || forkMessageKey(expected.msg) != forkMessageKey(actual.msg) || (expected.entryID != "" && expected.entryID != actual.entryID) {
+		if expected.msg.partial || expected.summary != actual.summary || !sameForkMessage(expected.msg, actual.msg) || (expected.entryID != "" && expected.entryID != actual.entryID) {
 			return "", stale
 		}
 	}
 	return current.records[index].entryID, nil
+}
+
+// Identical decoded messages are the usual case for persisted prefixes.
+// Compare their actual fields (not possibly stale keys); only canonicalize
+// both bodies when different representations might still be equivalent.
+func sameForkMessage(a, b message) bool {
+	return reflect.DeepEqual(a, b) || forkMessageKey(a) == forkMessageKey(b)
 }
 
 func forkMessageKey(m message) string {
@@ -111,7 +120,7 @@ func (c ForkCheckpoint) Matches(p ForkPreview) bool {
 	}
 	for i, expected := range p.history {
 		actual := c.records[i]
-		if actual.msg.partial || actual.id == c.active || actual.summary != expected.summary || forkMessageKey(actual.msg) != forkMessageKey(expected.msg) {
+		if actual.msg.partial || actual.id == c.active || actual.summary != expected.summary || !sameForkMessage(actual.msg, expected.msg) {
 			return false
 		}
 		// A persisted record may have a live alias, but its native entry must
@@ -254,11 +263,45 @@ func PreviewFork(selected string, snapshot json.RawMessage) (ForkPreview, error)
 	return out, nil
 }
 
+// ForkPlan owns the validated prefix. No writable raw messages or metadata
+// from its review are accepted as persistence input. The parser owns its bytes
+// (including when the caller reuses its RPC buffer after PrepareFork returns).
+type ForkPlan struct {
+	selected string
+	preview  ForkPreview
+}
+
+func PrepareFork(selected string, snapshot json.RawMessage) (*ForkPlan, error) {
+	preview, err := PreviewFork(selected, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &ForkPlan{selected, preview}, nil
+}
+
+// Review exposes checkpoint/turn metadata, not the writable prefix bytes.
+func (p *ForkPlan) Review() ForkPreview {
+	v := p.preview
+	v.Prefix = nil
+	return v
+}
+
 // CreateFork copies the active branch through the selected user entry's reply,
 // stopping before the next user message. The snapshot comes from get_entries,
 // not the file's last leaf (which may differ after in-memory tree navigation).
 func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawMessage) (Fork, error) {
+	p, err := PrepareFork(selected, snapshot)
+	if err != nil {
+		return Fork{}, err
+	}
+	return p.create(source, sourceID, cwd, name, true)
+}
+
+func (p *ForkPlan) create(source, sourceID, cwd, name string, includeEntries bool) (Fork, error) {
 	var out Fork
+	if p == nil || p.selected == "" || len(p.preview.Prefix) == 0 {
+		return out, errors.New("missing validated fork plan")
+	}
 	if _, err := regularSessionPath(source); err != nil {
 		return out, err
 	}
@@ -278,10 +321,7 @@ func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawM
 	if json.Unmarshal(header, &original) != nil || original.Type != "session" || original.Version != 3 || original.ID != sourceID {
 		return out, errors.New("fork source identity changed or is not a native v3 session")
 	}
-	preview, err := PreviewFork(selected, snapshot)
-	if err != nil {
-		return out, err
-	}
+	preview := &p.preview
 	var uuid [16]byte
 	if _, err := rand.Read(uuid[:]); err != nil {
 		return out, err
@@ -291,22 +331,26 @@ func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawM
 	out.Cwd, out.Name = cwd, name
 	now := time.Now().UTC()
 	out.Path = filepath.Join(filepath.Dir(source), now.Format("2006-01-02T15-04-05-000Z")+"_"+out.ID+".jsonl")
-	provenance := &ForkProvenance{Version: 1, SourceID: sourceID, UserEntryID: selected, CutoffEntryID: preview.LeafID, Turn: preview.Turn}
+	provenance := &ForkProvenance{Version: 1, SourceID: sourceID, UserEntryID: p.selected, CutoffEntryID: preview.LeafID, Turn: preview.Turn}
 	out.Origin = Header{Type: "session", ID: out.ID, Cwd: cwd, ParentSession: source, Fork: provenance}
 	header, err = json.Marshal(map[string]any{"type": "session", "version": 3, "id": out.ID, "timestamp": now.Format(time.RFC3339Nano), "cwd": cwd, "parentSession": source, "piGouiFork": provenance})
 	if err != nil {
 		return out, err
 	}
-	prefix := append([]json.RawMessage(nil), preview.Prefix...)
-	parent := &preview.LeafID
+	parent := preview.LeafID
 	// A final native session_info overrides inherited names without modifying
 	// copied entries, labels, compaction references or extension metadata.
 	nameID := "fork-" + out.ID
 	nameEntry, _ := json.Marshal(map[string]any{"type": "session_info", "id": nameID, "parentId": parent, "timestamp": now.Format(time.RFC3339Nano), "name": name})
-	prefix = append(prefix, nameEntry)
-	out.Entries, err = json.Marshal(map[string]any{"entries": prefix, "leafId": nameID})
-	if err != nil {
-		return out, err
+	// Each record was already validated by PreviewFork. Build the RPC view
+	// directly rather than remarshal the entire history. nameID is generated
+	// exclusively from the UUID above and contains no JSON metacharacters.
+	if includeEntries {
+		size := len(nameEntry) + len(nameID) + 32
+		for _, r := range preview.Prefix {
+			size += len(r) + 1
+		}
+		out.Entries = append(make([]byte, 0, size), `{"entries":[`...)
 	}
 	file, err := os.OpenFile(out.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -320,10 +364,42 @@ func CreateFork(source, sourceID, cwd, name, selected string, snapshot json.RawM
 		}
 	}()
 	writer := bufio.NewWriter(file)
-	for _, record := range append([]json.RawMessage{header}, prefix...) {
-		if _, err = writer.Write(append(append([]byte(nil), record...), '\n')); err != nil {
+	writeLine := func(line []byte) error {
+		if _, err := writer.Write(line); err != nil {
+			return err
+		}
+		return writer.WriteByte('\n')
+	}
+	if err = writeLine(header); err != nil {
+		return out, err
+	}
+	var compact bytes.Buffer
+	for _, r := range preview.Prefix {
+		// A pretty-printed RPC response may contain multiline records. Native
+		// JSONL requires one physical line, but common records need no copying.
+		if bytes.IndexAny(r, "\r\n") >= 0 {
+			compact.Reset()
+			if err = json.Compact(&compact, r); err != nil {
+				return out, err
+			}
+			r = compact.Bytes()
+		}
+		if err = writeLine(r); err != nil {
 			return out, err
 		}
+		if includeEntries {
+			out.Entries = append(out.Entries, r...)
+			out.Entries = append(out.Entries, ',')
+		}
+	}
+	if err = writeLine(nameEntry); err != nil {
+		return out, err
+	}
+	if includeEntries {
+		out.Entries = append(out.Entries, nameEntry...)
+		out.Entries = append(out.Entries, `],"leafId":"`...)
+		out.Entries = append(out.Entries, nameID...)
+		out.Entries = append(out.Entries, '"', '}')
 	}
 	if err = writer.Flush(); err != nil {
 		return out, err

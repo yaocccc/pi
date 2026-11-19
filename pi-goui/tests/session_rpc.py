@@ -16,6 +16,9 @@ BUSY = False
 PENDING = None
 CURRENT = None
 KEEP_ALIVE = False
+# Opt-in synthetic extension for the instance Mode scenario only.
+MODE_PATH = ROOT / 'agent' / 'codex-fast.json'
+MODE = json.loads(MODE_PATH.read_text())['level'] if MODE_PATH.exists() else None
 MODEL = {'id': 'session-fixture', 'name': 'Session fixture', 'provider': 'test', 'contextWindow': 200000}
 ENTRIES = [json.loads(s) for s in SESSION.read_text().splitlines() if s.strip()] if SESSION.exists() else []
 ENTRIES = [e for e in ENTRIES if e.get('type') != 'session']
@@ -135,13 +138,29 @@ try:
             elif typ == 'get_available_models':
                 data = {'models': [MODEL]}
             elif typ == 'get_commands':
-                data = {'commands': []}
+                data = {'commands': [{'name': 'pi-ui-rpc', 'source': 'extension'}] if MODE else []}
+            elif MODE and typ == 'prompt' and req['message'].startswith('/pi-ui-rpc '):
+                call = json.loads(req['message'].split(' ', 1)[1])
+                method = call['method']
+                if method == 'session.activity':
+                    result = {'version': 1, 'idle': not BUSY, 'reasons': ['busy'] if BUSY else []}
+                else:
+                    assert method in ('codex-fast.get', 'codex-fast.apply', 'codex-fast.set'), method
+                    if method != 'codex-fast.get':
+                        MODE = call['params']['level']
+                        if method == 'codex-fast.set':
+                            MODE_PATH.write_text(json.dumps({'level': MODE}))
+                    result = {'level': MODE, 'levels': ['normal', 'fast', 'ultrafast']}
+                emit({'type': 'extension_ui_request', 'method': 'notify',
+                      'message': 'pi-ui:rpc:v1:' + json.dumps({'id': call['id'], 'result': result})})
             elif typ == 'extension_ui_response':
                 continue
             elif typ == 'prompt':
                 assert PENDING is None, 'test sent overlapping prompts'
                 BUSY = True
                 PENDING = req
+                if MODE:
+                    log('mode_at_prompt', level=MODE)
                 emit({'type': 'agent_start'})
                 msg = message('user', req['message'])
                 append_message(msg)

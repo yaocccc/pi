@@ -29,7 +29,7 @@ func TestForkPublishesRecentsBeforeRPCAndRejectsOldScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.forkCreated(prepareForkMessage(t, source.id, fork)) // Never execute RPC startup.
+	m.forkCreated(prepareForkMessage(t, m, source.id, fork)) // Never execute RPC startup.
 	assertVisible := func() {
 		t.Helper()
 		for _, row := range m.sidebarSummaries() {

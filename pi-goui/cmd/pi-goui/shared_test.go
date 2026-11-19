@@ -22,7 +22,7 @@ func TestSharedConfigIsolationAndProjects(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "old-agent")
 	opts := ui.Options{Bin: exe, Cwd: t.TempDir(), SessionFile: filepath.Join(t.TempDir(), "saved.jsonl"), PiArgs: []string{"--models", "test/*"}}
 	agent := t.TempDir()
-	cfg, err := sharedConfig(opts, agent, "web-secret-not-for-child")
+	cfg, err := sharedConfig(opts, agent, "web-secret-not-for-child", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +58,26 @@ func TestSharedConfigIsolationAndProjects(t *testing.T) {
 		}
 	}
 }
+func TestSharedContinueOptOutIsScopedToRoot(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ui.Options{Bin: exe, Cwd: t.TempDir()}
+	cfg, err := sharedConfig(opts, t.TempDir(), "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cfg.Command, "\n"), "--continue=false") {
+		t.Fatal("root child lost the explicit continue opt-out")
+	}
+	for _, args := range [][]string{cfg.CommandForDirectory(t.TempDir()), cfg.NewInstanceCommandForDirectory(opts.Cwd)} {
+		if strings.Contains(strings.Join(args, "\n"), "--continue=") {
+			t.Fatal("unrelated child inherited the root's continue opt-out")
+		}
+	}
+}
+
 func TestSharedClientFollowsCurrentProject(t *testing.T) {
 	var selected []sharedProject
 	active := sharedProject{Cwd: "/browser-project", ProjectID: "browser-id"}

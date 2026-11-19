@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -92,16 +93,79 @@ func TestFooterHoverClickSelection(t *testing.T) {
 }
 
 func TestIdleFooterHoverIsLocalAndExplicitClickStartsOperation(t *testing.T) {
+	for _, kind := range []string{"model", "thinking"} {
+		t.Run(kind, func(t *testing.T) {
+			m := testModel(t, "")
+			m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+			owner := m.current()
+			footer := m.inputFooter(owner)
+			rect, op := footer.model, "get_available_models"
+			if kind == "thinking" {
+				rect, op = footer.thinking, "get_available_thinking_levels"
+			}
+			m.Update(tea.MouseMotionMsg{X: rect.x, Y: rect.y})
+			box, _, _ := m.footerPopup(owner, kind)
+			m.Update(tea.MouseMotionMsg{X: box.x + 1, Y: box.y + 1})
+			view := ansi.Strip(m.View().Content)
+			if !strings.Contains(view, "Click label to open") || strings.Contains(view, "Loading…") || len(owner.footerHover.options) != 0 {
+				t.Fatal("new, disconnected tab should offer to open a menu, not invent or load options")
+			}
+			if owner.cycle.phase != cycleIdle || owner.cycle.intent != nil || owner.client != nil || owner.cycle.inflight != 0 {
+				t.Fatal("footer hover started Pi")
+			}
+			_, cmd := m.Update(tea.MouseClickMsg{X: rect.x, Y: rect.y, Button: tea.MouseLeft})
+			if cmd == nil || owner.cycle.phase != cycleStarting || owner.cycle.intent == nil || owner.client != nil {
+				t.Fatal("explicit idle selection did not capture its operation")
+			}
+			owner.client, _ = fakeClient(t)
+			reply := commandResult(owner.cycle.intent.run()).(replyMsg)
+			if reply.op != op || reply.err != nil {
+				t.Fatalf("click requested %s instead of %s: %v", reply.op, op, reply.err)
+			}
+			m.Update(reply)
+			if len(owner.dialogs) != 1 || owner.dialogs[0].kind != kind || len(owner.dialogs[0].options) != 2 {
+				t.Fatal("explicit click should open the requested menu with options from Pi")
+			}
+		})
+	}
+}
+
+func TestFooterLookupSwitchAndRetry(t *testing.T) {
 	m := testModel(t, "")
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
-	owner := m.current()
-	rect := m.inputFooter(owner).model
-	m.Update(tea.MouseMotionMsg{X: rect.x, Y: rect.y})
-	if owner.cycle.phase != cycleIdle || owner.cycle.intent != nil || owner.client != nil {
-		t.Fatal("footer hover started Pi")
+	tab := m.current()
+	tab.client, _ = fakeClient(t)
+	footer := m.inputFooter(tab)
+	m.Update(tea.MouseMotionMsg{X: footer.model.x, Y: footer.model.y})
+	m.Update(tea.MouseMotionMsg{X: footer.thinking.x, Y: footer.thinking.y})
+	if tab.cycle.inflight != 1 || !strings.Contains(ansi.Strip(m.View().Content), "Loading…") {
+		t.Fatal("loading must correspond to one pending lookup")
 	}
-	cmd, handled := m.clickFooterPopup(owner, rect.x, rect.y)
-	if !handled || cmd == nil || owner.cycle.phase != cycleStarting || owner.cycle.intent == nil || owner.client != nil {
-		t.Fatal("explicit idle model selection did not capture its operation")
+	reply := footerReplyMsg{kind: "model", reply: replyMsg{id: tab.id, client: tab.client, err: errors.New("offline")}}
+	cmd := m.footerReply(reply)
+	if cmd == nil || !tab.footerHover.loading || tab.footerHover.kind != "thinking" || tab.cycle.inflight != 1 {
+		t.Fatal("failed model lookup did not service current thinking control")
+	}
+	reply = cmd().(footerReplyMsg)
+	reply.reply.data = json.RawMessage(`{`)
+	if m.footerReply(reply) != nil || m.hoverFooter() != nil || tab.cycle.inflight != 0 || !strings.Contains(ansi.Strip(m.View().Content), "Re-hover to retry") {
+		t.Fatal("invalid payload should offer a retry without repeatedly fetching during hover")
+	}
+	m.Update(tea.MouseMotionMsg{X: 0, Y: 0})
+	m.Update(tea.MouseMotionMsg{X: footer.thinking.x, Y: footer.thinking.y})
+	if !tab.footerHover.loading || tab.cycle.inflight != 1 {
+		t.Fatal("returning to the control did not retry the failed lookup")
+	}
+	reply.reply.data = json.RawMessage(`{"levels":["high"]}`)
+	if m.footerReply(reply) != nil || tab.cycle.inflight != 0 || len(tab.footerHover.options) != 1 || tab.footerHover.options[0].Value != "high" {
+		t.Fatal("retry did not display backend options")
+	}
+
+	// An idle handoff must not present the previous backend's options,
+	// including when an old reply arrives while the pointer is stationary.
+	m.cycleClosed(cycleClosedMsg{id: tab.id, client: tab.client, generation: tab.cycle.generation})
+	m.footerReply(reply)
+	if tab.footerHover.loading || len(tab.footerHover.options) != 0 || !strings.Contains(ansi.Strip(m.View().Content), "Click label to open") {
+		t.Fatal("backend handoff leaked stale options or left a spinner")
 	}
 }

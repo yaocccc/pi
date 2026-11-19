@@ -34,11 +34,11 @@ func TestSidebarHistoryViewport(t *testing.T) {
 	}
 	ctx := SidebarContext{History: []string{"first", "second", "third", "fourth", "fifth", "sixth long session name"}, HistoryOffset: 99, HistoryHovered: []bool{false, false, false, false, false, true}}
 	for _, width := range []int{1, 4, 12, 32} {
-		layout := SidebarGeometry(36, ctx)
+		layout := SidebarGeometry(20, ctx)
 		if layout.HistoryOffset != 1 || layout.HistoryCount != 5 {
 			t.Fatal("offset not clamped")
 		}
-		raw := Sidebar(session.State{}, nil, theme, width, 36, ctx)
+		raw := Sidebar(session.State{}, nil, theme, width, 20, ctx)
 		rows := strings.Split(ansi.Strip(raw), "\n")
 		for _, row := range rows {
 			if ansi.StringWidth(row) != width {
@@ -77,11 +77,11 @@ func TestSidebarHistoryGeometry(t *testing.T) {
 					t.Fatalf("bad width: %q", row)
 				}
 			}
-			if height == 38 && layout.HistoryCount != 5 {
-				t.Fatal("expected five recent sessions")
+			if height == 38 && layout.HistoryCount != len(ctx.History) {
+				t.Fatal("tall sidebar did not show the complete recent list")
 			}
-			if strings.Contains(strings.Join(rows, "\n"), "sixth") {
-				t.Fatal("sixth history row rendered")
+			if strings.Contains(strings.Join(rows, "\n"), "sixth") != (layout.HistoryCount == len(ctx.History)) {
+				t.Fatal("sixth history row disagrees with viewport")
 			}
 			if layout.NewRow < height-1 {
 				if !strings.Contains(rows[layout.HistoryRow], "RECENTS") || !strings.Contains(rows[layout.NewRow], "+ New") {

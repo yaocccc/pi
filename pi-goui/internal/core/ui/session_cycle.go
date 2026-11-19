@@ -75,6 +75,8 @@ type cycleClosedMsg struct {
 }
 
 type cyclePrimedMsg struct {
+	commit     func()
+	refresh    bool
 	id         int
 	client     *rpc.Client
 	generation uint64
@@ -84,25 +86,29 @@ type cyclePrimedMsg struct {
 // Register the extension's idle barrier before the first operation can start
 // a run. A later agent_settled alone cannot prove deferred work has finished.
 func (m *Model) primeCycle(t *tab) tea.Cmd {
-	if m.opts.NoSession {
+	if t.cycle.priming || t.client == nil {
+		return nil
+	}
+	prepare := t.extensions.Prepare(t.client)
+	if (m.opts.NoSession || t.cycle.primed) && prepare == nil {
 		t.cycle.primed = true
 		t.resume.pending = false
 		return m.runCycleIntent(t)
 	}
-	if t.cycle.primed {
-		t.resume.pending = false
-		return m.runCycleIntent(t)
-	}
-	if t.cycle.priming || t.client == nil {
-		return nil
-	}
 	t.cycle.priming = true
 	v := cyclePrimedMsg{id: t.id, client: t.client, generation: t.cycle.generation}
 	extensions := m.extensions
+	v.refresh = t.cycle.primed
+	checkRelease := !m.opts.NoSession && !v.refresh
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, v.err = extensions.CheckRelease(ctx, v.client)
+		if checkRelease {
+			_, v.err = extensions.CheckRelease(ctx, v.client)
+		}
+		if v.err == nil && prepare != nil {
+			v.commit, v.err = prepare(ctx)
+		}
 		return v
 	}
 }
@@ -116,9 +122,18 @@ func (m *Model) cyclePrimed(v cyclePrimedMsg) tea.Cmd {
 	if v.err != nil {
 		m.restoreCycleIntent(t)
 		t.notify("Cannot initialize session activity: " + v.err.Error() + " · draft retained")
+		if v.refresh {
+			return nil
+		}
 		return m.closeCycle(t)
 	}
+	if v.commit != nil {
+		v.commit()
+	}
 	t.cycle.primed = true
+	if t.extensions.Prepare(t.client) != nil {
+		return m.primeCycle(t)
+	}
 	t.resume.pending = false
 	return m.runCycleIntent(t)
 }
@@ -402,6 +417,9 @@ func (m *Model) cycleClosed(v cycleClosedMsg) tea.Cmd {
 		return nil
 	}
 	t.client = nil
+	// Menu options and outstanding footer requests belong to the old backend.
+	t.footerHover = footerHoverState{}
+	t.footerCatalog = nil
 	t.cycle.phase = cycleIdle
 	t.cycle.inflight, t.cycle.checking = 0, false
 	t.cycle.probed = time.Time{}

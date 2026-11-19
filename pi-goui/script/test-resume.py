@@ -3,8 +3,8 @@
 
 python3 script/test-resume.py [--binary PATH] [--keep]
 Temporary build, HOME/agent/cwd, native history and gated fake RPC are isolated.
-Includes a roughly 16 MiB native history: cold first paint and prewarmed sidebar
-click are timed without the helpers' usual 150 ms input/100 ms polling delays.
+Times cold first paint, a prewarmed sidebar click and a direct click on a
+1200-turn history without the helpers' usual 150 ms input/100 ms polling delays.
 No real Pi, credentials, model calls or production resources are used.
 """
 import argparse
@@ -287,10 +287,7 @@ class Suite(shared.Suite):
         self.first_send(terminal)
         self.checkpoint('large native history: cold first paint and immediate user echo before backend readiness, confirmed once')
 
-    def run_large_sidebar(self):
-        self.large_history()
-        terminal = self.blank_ready('large-sidebar')
-
+    def sidebar_target(self, terminal):
         def target():
             for row, line in enumerate(terminal.text.splitlines()):
                 column = line.rfind('Resume acceptance')
@@ -299,7 +296,51 @@ class Suite(shared.Suite):
             return None
 
         self.wait(lambda: target() is not None, 'large history sidebar row')
-        x, y = target()
+        return target()
+
+    def run_many_turn_sidebar(self):
+        # Unlike the prewarmed case below, click directly: measure parsing and
+        # layout as well as delivery of the latest visible message to the PTY.
+        records = self.session.read_text().splitlines()[:-1]
+        parent = 'old-user'
+        payload = 'synthetic read output. ' * 1024
+        with self.session.open('w') as f:
+            f.write('\n'.join(records) + '\n')
+
+            def emit(key, message):
+                nonlocal parent
+                f.write(json.dumps({'type': 'message', 'id': key, 'parentId': parent,
+                                    'message': message}, separators=(',', ':')) + '\n')
+                parent = key
+
+            for i in range(1200):
+                emit(f'u{i}', self.message('user', f'Review **module {i}** in `module_{i}.go`.'))
+                reply = self.message('assistant', f'## Review {i}\n\n- Checking the [source](https://example.invalid/{i}).')
+                reply['content'].append({'type': 'toolCall', 'name': 'read', 'id': f't{i}', 'arguments': {'path': f'module_{i}.go'}})
+                emit(f'a{i}', reply)
+                emit(f'r{i}', {'role': 'toolResult', 'toolCallId': f't{i}', 'toolName': 'read',
+                               'content': [{'type': 'text', 'text': payload}]})
+            emit('end', self.message('assistant', HISTORY))
+        self.saved_bytes = self.session.read_bytes()
+        # Recents automatically preloads the first row even without a hover.
+        # Put a different session first so the target really is cold on click.
+        decoy = self.session.with_name('newer.jsonl')
+        header = {**json.loads(records[0]), 'id': 'newer'}
+        decoy.write_text(json.dumps(header) + '\n')
+        stamp = self.session.stat().st_mtime + 1
+        os.utime(decoy, (stamp, stamp))
+        terminal = self.blank_ready('many-turn-sidebar')
+        x, y = self.sidebar_target(terminal)
+        started = time.monotonic()
+        os.write(terminal.master, ('\x1b[<0;%d;%dM\x1b[<0;%d;%dm' % (x, y, x, y)).encode())
+        self.first_paint(terminal, started, 8.0)
+        assert not self.wire('start'), 'opening saved history started Pi'
+        self.checkpoint('cold sidebar click paints latest of 1200 complete tool turns without hover or backend')
+
+    def run_large_sidebar(self):
+        self.large_history()
+        terminal = self.blank_ready('large-sidebar')
+        x, y = self.sidebar_target(terminal)
         os.write(terminal.master, ('\x1b[<35;%d;%dM' % (x, y)).encode())
         self.pump(1.0)  # Explicit prewarm interval; excluded from click-to-paint timing.
         assert not self.wire('start'), 'speculative preview started a Pi backend'
@@ -346,7 +387,7 @@ def main():
         if not args.binary:
             subprocess.run(['go', 'build', '-o', str(binary), './cmd/pi-goui'], cwd=ROOT, check=True)
         checks = []
-        for name in ('blank_echo', 'initial', 'replace', 'preserve', 'failure', 'large_initial', 'large_sidebar'):
+        for name in ('blank_echo', 'initial', 'replace', 'preserve', 'failure', 'large_initial', 'large_sidebar', 'many_turn_sidebar'):
             folder = root / name
             folder.mkdir()
             suite = Suite(folder, binary)

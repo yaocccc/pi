@@ -50,11 +50,9 @@ func prepareSnapshotMessage(tab *tab, message snapshotMsg) snapshotMsg {
 	return message
 }
 
-func prepareForkMessage(t testing.TB, id int, fork session.Fork) forkCreatedMsg {
+func prepareForkMessage(t testing.TB, m *Model, id int, fork session.Fork) forkCreatedMsg {
 	t.Helper()
-	state, _ := json.Marshal(map[string]any{"sessionId": fork.ID, "sessionFile": fork.Path, "sessionName": fork.Name, "cwd": fork.Cwd})
-	var base session.State
-	prepared, err := base.SnapshotPreparation().Prepare(state, fork.Entries, nil)
+	prepared, err := m.forkLayoutReader(fork.Cwd)(fork)
 	if err != nil {
 		t.Fatal(err)
 	}

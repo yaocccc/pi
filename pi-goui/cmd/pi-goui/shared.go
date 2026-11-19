@@ -23,11 +23,11 @@ import (
 
 // The foreground desktop process owns the host. All browser and desktop
 // connections share its original TUI and Pi RPCs without taking each other over.
-func runShared(opts ui.Options, agentDir string) (retErr error) {
+func runShared(opts ui.Options, agentDir string, skipAutoResume bool) (retErr error) {
 	if err := web.CheckAttachTerminal(os.Stdin, os.Stdout); err != nil {
 		return err
 	}
-	cfg, err := sharedConfig(opts, agentDir, "")
+	cfg, err := sharedConfig(opts, agentDir, "", skipAutoResume)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func runShared(opts ui.Options, agentDir string) (retErr error) {
 	}
 }
 
-func sharedConfig(opts ui.Options, agentDir, token string) (web.Config, error) {
+func sharedConfig(opts ui.Options, agentDir, token string, skipAutoResume bool) (web.Config, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return web.Config{}, err
@@ -119,8 +119,12 @@ func sharedConfig(opts ui.Options, agentDir, token string) (web.Config, error) {
 	piArgs := append([]string(nil), opts.PiArgs...)
 	makeCommand := func(cwd string, resume bool) []string {
 		args := []string{exe, "--internal-shared-tui", "--pi", bin, "--cwd", cwd}
-		if resume && opts.SessionFile != "" && cwd == opts.Cwd {
-			args = append(args, "--session", opts.SessionFile)
+		if resume && cwd == opts.Cwd {
+			if opts.SessionFile != "" {
+				args = append(args, "--session", opts.SessionFile)
+			} else if skipAutoResume {
+				args = append(args, "--continue=false")
+			}
 		}
 		if opts.NoSession {
 			args = append(args, "--no-session")

@@ -20,6 +20,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"pi-goui/cmd/internal/startup"
 	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/core/ui"
@@ -214,6 +215,12 @@ func runTerminal(args []string) error {
 		}
 	}
 	cfg, err := config.Load(o.RPC.Cwd)
+	if err != nil {
+		return err
+	}
+	// Resolve the session in the PTY child for its selected project, not in
+	// the server which may be started long before the project is chosen.
+	o.RPC.SessionFile, err = startup.SessionFile(cfg.AgentDir, o.RPC.Cwd, o.RPC.SessionFile, cfg.ResumeLastSession && !o.RPC.NoSession && !o.Check)
 	if err != nil {
 		return err
 	}

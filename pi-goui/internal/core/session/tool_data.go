@@ -95,9 +95,10 @@ func argumentChars(raw json.RawMessage) int {
 	}
 	return jsJSONLength(v)
 }
-func resultChars(raw json.RawMessage) int {
+func toolResultContent(raw json.RawMessage) (string, int) {
+	content := blocks(raw)
 	n := 0
-	for _, b := range blocks(raw) {
+	for _, b := range content {
 		switch b.Type {
 		case "text":
 			n += utf16Length(b.Text)
@@ -105,7 +106,7 @@ func resultChars(raw json.RawMessage) int {
 			n += 4800
 		}
 	}
-	return n
+	return blockText(content), n
 }
 func estimateItem(t *Item) {
 	if !t.argumentCharsKnown {
@@ -157,8 +158,7 @@ func (t *Item) setResult(content, details json.RawMessage, isError *bool) {
 	t.HasResult = true
 	if len(content) > 0 {
 		t.contentKnown = true
-		t.Text = textOf(content)
-		t.resultChars = resultChars(content)
+		t.Text, t.resultChars = toolResultContent(content)
 	}
 	if len(details) > 0 {
 		t.Details = details

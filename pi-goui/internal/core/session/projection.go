@@ -46,7 +46,8 @@ func (r *record) project() *recordProjection {
 		return p
 	}
 	if m.Role == "toolResult" {
-		addTool(Item{ID: "tool:" + m.ToolCallID, Role: "tool", ToolID: m.ToolCallID, ToolName: m.ToolName, Text: textOf(m.Content), Details: m.Details, HasResult: true, Running: m.partial, final: !m.partial, resultChars: resultChars(m.Content), contentKnown: len(m.Content) > 0, Error: m.IsError != nil && *m.IsError, errorKnown: m.IsError != nil}, false)
+		text, chars := toolResultContent(m.Content)
+		addTool(Item{ID: "tool:" + m.ToolCallID, Role: "tool", ToolID: m.ToolCallID, ToolName: m.ToolName, Text: text, Details: m.Details, HasResult: true, Running: m.partial, final: !m.partial, resultChars: chars, contentKnown: len(m.Content) > 0, Error: m.IsError != nil && *m.IsError, errorKnown: m.IsError != nil}, false)
 		return p
 	}
 	if m.Role == "bashExecution" {

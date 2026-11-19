@@ -160,13 +160,13 @@ func (m *Model) resumePreloadCandidate() string {
 		}
 		return options[d.selected].Value
 	}
-	if m.inspectorOpen() || m.extensionPopupVisible() || m.sidebarWidth() == 0 || m.sidebarHistory.cwd != m.tabDirectory(t) {
+	if m.extensionPopupVisible() || m.sidebarWidth() == 0 || m.sidebarHistory.cwd != m.tabDirectory(t) {
 		return ""
 	}
 	layout := m.sidebarLayout()
 	index := layout.HistoryOffset
 	h := m.sidebarHistory
-	if h.pointerKnown && h.pointerX >= m.mainWidth()+2 && h.pointerX < m.width-2 {
+	if h.pointerKnown && m.sideContainsX(h.pointerX, 2) {
 		row := h.pointerY - layout.HistoryStart
 		if row >= 0 && row < layout.HistoryCount*render.SidebarHistoryRows {
 			index += row / render.SidebarHistoryRows

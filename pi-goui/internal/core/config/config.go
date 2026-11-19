@@ -189,7 +189,7 @@ func mergeLevel(dst, src map[string]any, settingsRoot bool) {
 	}
 }
 func Load(cwd string) (Config, error) {
-	c := Config{AgentDir: AgentDir(), Keys: DefaultBindings(), Settings: map[string]any{}, ThemeName: "pi"}
+	c := Config{AgentDir: AgentDir(), Keys: DefaultBindings(), Settings: map[string]any{}, ThemeName: DefaultThemeName, SidebarPosition: "right"}
 	var errs []error
 	for _, p := range []string{filepath.Join(c.AgentDir, "settings.json"), filepath.Join(cwd, ".pi", "settings.json")} {
 		var s map[string]any
@@ -235,15 +235,26 @@ func Load(cwd string) (Config, error) {
 		errs = append(errs, e)
 	}
 	var frontend struct {
-		Theme string `json:"theme"`
+		Theme             string `json:"theme"`
+		SidebarPosition   string `json:"sidebarPosition"`
+		ResumeLastSession bool   `json:"resumeLastSession"`
 	}
+	frontend.SidebarPosition = c.SidebarPosition
 	if err := readJSON(filepath.Join(c.AgentDir, "goui.json"), &frontend); err != nil {
 		errs = append(errs, err)
-	} else if frontend.Theme != "" && frontend.Theme != "pi" {
-		if theme, err := LoadTheme(c.AgentDir, frontend.Theme); err != nil {
-			errs = append(errs, err)
+	} else {
+		if err := validateSidebarPosition(frontend.SidebarPosition); err != nil {
+			errs = append(errs, fmt.Errorf("goui.json: %w", err))
 		} else {
-			c.Theme, c.ThemeName = theme, frontend.Theme
+			c.SidebarPosition = frontend.SidebarPosition
+		}
+		c.ResumeLastSession = frontend.ResumeLastSession
+		if name := CanonicalThemeName(frontend.Theme); name != "" && name != DefaultThemeName {
+			if theme, err := LoadTheme(c.AgentDir, name); err != nil {
+				errs = append(errs, err)
+			} else {
+				c.Theme, c.ThemeName = theme, name
+			}
 		}
 	}
 	return c, errors.Join(errs...)

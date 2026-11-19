@@ -2,6 +2,6 @@
   "enabled": true,
   "notify": true,
   "cooldownSeconds": 600,
-  "model": "openai-codex/gpt-6-luna",
-  "reasoning": "minimal"
+  "model": "openai-codex/gpt-6.1-terra",
+  "reasoning": "low"
 }

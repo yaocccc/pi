@@ -92,15 +92,28 @@ func (m *Model) receiveResumePreview(v resumePreviewMsg) tea.Cmd {
 	if v.err == nil && v.stamp.info != nil && !v.stamp.current(v.file) {
 		return nil // The next presence poll retries a concurrently appended file.
 	}
-	if v.err != nil {
-		if !t.resume.failed && !t.readOnly() && !t.emptyNewHistory(v.err) {
+	if v.err != nil && !t.emptyNewHistory(v.err) {
+		if !t.resume.failed && !t.readOnly() {
 			t.status = "暂时无法读取会话历史：" + v.err.Error()
 		}
 		return nil
 	}
 	previousModel := t.state.Model
 	t.state.ApplySnapshot(v.prepared)
+	// A resumed tab can fork directly from disk, before its first get_state.
+	// Use the accepted native header for identity, not as backend authority.
+	if v.err == nil && t.client == nil && t.state.ID == "" {
+		t.state.ID = v.header.ID
+	}
 	v.config.apply(&t.state, previousModel)
+	if v.config.catalog != nil {
+		t.footerCatalog = v.config.catalog
+	}
+	var hover tea.Cmd
+	if t == m.current() && t.client == nil && t.footerHover.active != "" {
+		t.footerHover = footerHoverState{active: t.footerHover.active}
+		hover = m.hoverFooter()
+	}
 	t.state.Busy, t.state.Compacting = false, false
 	t.state.Steering, t.state.FollowUp = nil, nil
 	t.cycle.preview = v.stamp
@@ -115,7 +128,7 @@ func (m *Model) receiveResumePreview(v resumePreviewMsg) tea.Cmd {
 	// Treat the first layout like streaming work: keep typing responsive while
 	// Markdown/tool rendering runs, rather than doing it in this update.
 	t.streamDirty = true
-	return tea.Batch(m.scheduleDocument(t), m.pollQuota(time.Now()))
+	return tea.Batch(m.scheduleDocument(t), m.pollQuota(time.Now()), hover)
 }
 
 func (m *Model) deferResumeSubmission(t *tab, followUp bool) tea.Cmd {
@@ -158,6 +171,10 @@ func (m *Model) flushResumeSubmission(t *tab) tea.Cmd {
 }
 
 func (m *Model) sendResumeSubmission(t *tab, pending *resumeSubmission) tea.Cmd {
+	if t.cycle.primed && (t.cycle.priming || t.extensions.Prepare(t.client) != nil) {
+		pending.checking = false
+		return m.primeCycle(t)
+	}
 	// Clear before returning the command: duplicate snapshots cannot submit twice.
 	t.resume.submit = nil
 	return m.sendPrompt(t, pending.original, pending.images, pending.followUp, false)

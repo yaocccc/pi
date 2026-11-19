@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ type toolInspector struct {
 	content      inspectorContent
 	tabID        int
 	itemID       string
+	sourceIndex  int
+	layoutSeen   bool
 	offset       int
 	followPaused bool
 	cache        inspectorKey
@@ -34,6 +37,22 @@ type inspectorKey struct {
 	version                   uint64
 }
 
+// ID is the identity; cached positions are hints and may change after history reload.
+func (t *tab) toolIndex(id string) (int, bool) {
+	items := t.state.Items
+	if i, ok := t.inspectIDs[id]; ok && i < len(items) && items[i].ID == id {
+		return i, items[i].Role == "tool" || items[i].Role == "toolResult"
+	}
+	t.inspectIDs = make(map[string]int)
+	for i := range items {
+		if items[i].Role == "tool" || items[i].Role == "toolResult" {
+			t.inspectIDs[items[i].ID] = i
+		}
+	}
+	i, ok := t.inspectIDs[id]
+	return i, ok
+}
+
 func (m *Model) inspectedTool() (session.Item, bool) { return m.inspectorItem(&m.inspector) }
 func (m *Model) inspectorItem(page *toolInspector) (session.Item, bool) {
 	t := m.current()
@@ -47,15 +66,31 @@ func (m *Model) inspectorItem(page *toolInspector) (session.Item, bool) {
 		}
 		items = page.parent.view().Items
 	}
-	for _, it := range items {
-		if it.ID == page.itemID && (it.Role == "tool" || it.Role == "toolResult") {
-			if page.content != nil {
-				return page.content.Resolve(it)
+	i := page.sourceIndex
+	if i >= len(items) || items[i].ID != page.itemID {
+		if page.parent == nil {
+			var ok bool
+			i, ok = t.toolIndex(page.itemID)
+			if !ok {
+				return session.Item{}, false
 			}
-			return it, true
+		} else {
+			for i = 0; i < len(items) && items[i].ID != page.itemID; i++ {
+			}
+			if i == len(items) {
+				return session.Item{}, false
+			}
 		}
+		page.sourceIndex = i
 	}
-	return session.Item{}, false
+	it := items[i]
+	if it.Role != "tool" && it.Role != "toolResult" {
+		return session.Item{}, false
+	}
+	if page.content != nil {
+		return page.content.Resolve(it)
+	}
+	return it, true
 }
 func (m *Model) inspectorOpen() bool       { _, ok := m.inspectedTool(); return ok }
 func (m *Model) inspectorFullscreen() bool { return m.inspectorOpen() && m.width < 60 }
@@ -63,7 +98,7 @@ func (m *Model) inspectorBounds() (x, width int) {
 	if m.inspectorFullscreen() {
 		return 0, max(1, m.width)
 	}
-	return m.mainWidth(), m.sidebarWidth()
+	return m.mainWidth(), m.detailWidth()
 }
 func (m *Model) inspectorContains(x, y int) bool {
 	if !m.inspectorOpen() {
@@ -81,7 +116,6 @@ func (m *Model) closeInspector() {
 			t.selection = transcriptSelection{}
 		}
 		m.resizeEditor(t)
-		t.invalidateDocument()
 		m.document(t)
 	}
 }
@@ -92,18 +126,6 @@ func (m *Model) openInspector(id string) {
 		return
 	}
 	m.inspector = toolInspector{tabID: t.id, itemID: id}
-	for _, block := range t.doc.Blocks {
-		if block.ID == id && block.InspectorTask != "" {
-			m.inspector.itemID = block.InspectorParent
-			for _, item := range t.state.Items {
-				if item.ID == block.InspectorParent {
-					m.inspector.content = m.extensions.NewInspectorContent(item, block.InspectorTask)
-					break
-				}
-			}
-			break
-		}
-	}
 	t.selection = transcriptSelection{}
 	t.footerHover.active = ""
 	m.extensionControls.Hover = false
@@ -342,100 +364,93 @@ func (m *Model) inspectorCloseRect() (hitRect, bool) {
 }
 
 func (m *Model) toolInspectTarget(x, y int) (string, hitRect, bool) {
+	b, rect, ok := m.toolInspectBlock(x, y)
+	return b.ID, rect, ok
+}
+
+func blockAtOrBefore(blocks []render.Block, row int) int {
+	return sort.Search(len(blocks), func(i int) bool { return blocks[i].Start > row }) - 1
+}
+
+// Render publishes blocks in row order, with child tasks immediately following
+// their enclosing tool. Only the block containing this row (and its parent)
+// can expose a detail action.
+func (m *Model) toolInspectBlock(x, y int) (render.Block, hitRect, bool) {
 	t := m.current()
-	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.inspector.selection.dragging || m.height < 8 || m.inspectorFullscreen() || x < 0 || x >= m.mainWidth() || y < m.chatTop(m.current()) || y >= m.chatTop(m.current())+m.transcriptHeight(t) {
-		return "", hitRect{}, false
+	if t == nil || len(t.dialogs) > 0 || t.selection.dragging || m.inspector.selection.dragging || m.height < 8 || m.inspectorFullscreen() || x < 0 || x >= m.mainWidth() || y < transcriptTop || y >= transcriptTop+m.transcriptHeight(t) {
+		return render.Block{}, hitRect{}, false
 	}
 	if box, ok := m.toastBox(t, time.Now()); ok && box.contains(x, y) {
-		return "", hitRect{}, false
+		return render.Block{}, hitRect{}, false
 	}
 	if t.footerHover.active != "" {
 		box, _, _ := m.footerPopup(t, t.footerHover.active)
 		if box.contains(x, y) {
-			return "", hitRect{}, false
+			return render.Block{}, hitRect{}, false
 		}
 	}
 	if m.extensionPopupVisible() {
 		target, box, _ := m.extensionPopupGeometry()
 		if target.contains(x, y) || box.contains(x, y) {
-			return "", hitRect{}, false
+			return render.Block{}, hitRect{}, false
 		}
+	}
+	row := t.offset + y - transcriptTop
+	blocks := t.doc.Blocks
+	i := blockAtOrBefore(blocks, row)
+	if i < 0 || row >= blocks[i].End {
+		return render.Block{}, hitRect{}, false
+	}
+	action, b := blocks[i], blocks[i]
+	buttonRow := b.Start + 2
+	if b.InspectorTask != "" {
+		parent := b.InspectorParent
+		i = sort.Search(i+1, func(i int) bool { return blocks[i].ID == parent || blocks[i].InspectorParent == parent })
+		if i >= len(blocks) || blocks[i].ID != parent {
+			return render.Block{}, hitRect{}, false
+		}
+		b, buttonRow = blocks[i], action.Start
+	}
+	top := b.Start + 1
+	if !b.Expanded || (b.Role != "tool" && b.Role != "toolResult") || buttonRow <= top || row < top || row < buttonRow-1 || row > buttonRow+1 || buttonRow < t.offset || buttonRow >= t.offset+m.transcriptHeight(t) {
+		return render.Block{}, hitRect{}, false
+	}
+	idx, ok := t.toolIndex(b.ID)
+	if !ok || (action.InspectorTask == "" && m.extensions.InspectableCollection(t.state.Items[idx])) {
+		return render.Block{}, hitRect{}, false
 	}
 	lines := t.documentLines()
-	row := t.offset + y - m.chatTop(m.current())
-	items := map[string]bool{}
-	collections := map[string]bool{}
-	for _, it := range t.state.Items {
-		if it.Role == "tool" || it.Role == "toolResult" {
-			items[it.ID] = true
-			collections[it.ID] = m.extensions.InspectableCollection(it)
-		}
+	if top < 0 || max(row, buttonRow) >= min(b.End, len(lines)) {
+		return render.Block{}, hitRect{}, false
 	}
-	type candidate struct {
-		id   string
-		rect hitRect
+	s := ansi.Strip(lines[top])
+	l, r := strings.IndexAny(s, "╭┌"), strings.LastIndexAny(s, "╮┐")
+	if l < 0 || r < l {
+		return render.Block{}, hitRect{}, false
 	}
-	var targets []candidate
-	for _, b := range t.doc.Blocks {
-		top := b.Start + 1
-		if !items[b.ID] || !b.Expanded || top >= len(lines) || row < top {
-			continue
-		}
-		s := ansi.Strip(lines[top])
-		l, r := strings.IndexAny(s, "╭┌"), strings.LastIndexAny(s, "╮┐")
-		if l < 0 || r < l {
-			continue
-		}
-		left, right := ansi.StringWidth(s[:l]), ansi.StringWidth(s[:r])
-		if right-left < 10 || x < left || x > right {
-			continue
-		}
-		bottom := top
+	left, right := ansi.StringWidth(s[:l]), ansi.StringWidth(s[:r])
+	w := ansi.StringWidth(toolInspectButton)
+	rect := hitRect{x: right - w, y: buttonRow - t.offset + transcriptTop, width: w}
+	if right-left < 10 || x < left || x > right || right-left-1 < w || !nearInspectorButton(rect, x, y) {
+		return render.Block{}, hitRect{}, false
+	}
+	// Cache the enclosing result frame; moving over another task in a large
+	// worker collection must not repeatedly parse the card's borders.
+	key := &blocks[i]
+	if t.inspectFrame != key {
+		t.inspectFrame, t.inspectBottom = key, top
 		for j := top + 1; j < min(b.End, len(lines)); j++ {
 			corner := ansi.Cut(ansi.Strip(lines[j]), left, left+1)
 			if corner == "╰" || corner == "└" {
-				bottom = j
+				t.inspectBottom = j
 				break
 			}
 		}
-		if row > bottom {
-			continue
-		}
-		w := ansi.StringWidth(toolInspectButton)
-		if right-left-1 < w {
-			continue
-		}
-		add := func(id string, buttonRow int) {
-			if buttonRow <= top || buttonRow >= bottom || buttonRow < t.offset || buttonRow >= t.offset+m.transcriptHeight(t) {
-				return
-			}
-			rect := hitRect{x: right - w, y: buttonRow - t.offset + m.chatTop(m.current()), width: w}
-			if nearInspectorButton(rect, x, y) {
-				targets = append(targets, candidate{id, rect})
-			}
-		}
-		if !collections[b.ID] {
-			add(b.ID, top+1)
-		}
-		for _, child := range t.doc.Blocks {
-			if child.InspectorParent == b.ID && child.InspectorTask != "" && row >= child.Start && row < child.End {
-				// Task actions sit at the end of the status/mode/preset row.
-				add(child.ID, child.Start)
-			}
-		}
 	}
-	// A visible button's exact hit always wins over a neighbouring hover zone.
-	// Task actions win ties with their parent, never starting fold/selection.
-	for i := len(targets) - 1; i >= 0; i-- {
-		if targets[i].rect.contains(x, y) {
-			return targets[i].id, targets[i].rect, true
-		}
+	if row > t.inspectBottom || buttonRow >= t.inspectBottom {
+		return render.Block{}, hitRect{}, false
 	}
-	if len(targets) > 0 {
-		target := targets[len(targets)-1]
-		return target.id, target.rect, true
-	}
-	return "", hitRect{}, false
+	return action, rect, true
 }
 func (m *Model) overlayToolInspect(rows []string) {
 	if m.panelResize.dragging || !m.sidebarHistory.pointerKnown {
@@ -445,7 +460,7 @@ func (m *Model) overlayToolInspect(rows []string) {
 	if !ok {
 		return
 	}
-	i := rect.y - m.chatTop(m.current())
+	i := rect.y - transcriptTop
 	if i < 0 || i >= len(rows) {
 		return
 	}

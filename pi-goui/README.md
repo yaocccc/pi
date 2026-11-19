@@ -117,6 +117,7 @@ WebUI 自动发现**同一系统用户、同一 agent 目录**下运行的 goui�
 | `/model`、`/thinking` | 选择模型或思考强度 |
 | `/fork`、`/origin`、`/tree` | 分叉、查看来源或只读浏览会话树 |
 | `/attach` | 附加图片 |
+| `/setting` | 修改主题、切换侧栏左右位置，或设置启动时是否恢复当前目录最近的会话。默认侧栏在右、启动新会话；确认后保存到 agent 目录的 `goui.json`。 |
 | `/theme`、`/reload` | 选择前端主题、重载前端配置 |
 | `/hotkeys` | 查看当前有效快捷键及适用条件 |
 | `/close`、`/delete`、`/quit` | 关闭当前会话、确认后永久删除、退出全部会话 |
@@ -126,7 +127,8 @@ WebUI 自动发现**同一系统用户、同一 agent 目录**下运行的 goui�
 - 点击工具展开预览，使用“查看 ↗”打开完整详情；详情可独立滚动、选择复制和调宽，`Esc` 关闭。预览截断不改变保存记录；估算 token 不是计费 usage。
 - 会话选择器中 `Ctrl+R` 重命名、`Ctrl+D` 删除并确认。悬停用户消息标题，点击“从此轮fork”直接新建独立会话，保留原标签与任务；`/tree` 不提供树编辑。
 - 读取 agent 目录的 `keybindings.json`、`settings.json` 及项目 `.pi/settings.json`；键位覆盖默认值，空数组禁用动作。增强组合键取决于终端支持。
-- `/theme` 预览主题，Enter 保存、Esc 恢复；主题偏好写入 agent 目录的 `goui.json`，不改原生 Pi 主题设置。缺少主题文件时使用内嵌默认值；`/reload` 不重载后端扩展。
+- 消息中的 HTTP(S) 链接可单击，用运行 `pi-goui` 的机器上的默认浏览器打开。单击已有文件路径会调用 `$VISUAL` 或 `$EDITOR`（例如 `export VISUAL=nvim`）；相对路径按当前标签页目录解析。悬停时显示手形指针，拖选仍用于复制。
+- `/theme` 按边框样式分组：`gradient-色名` 为渐变，`solid-色名` 为纯色，默认主题是 `gradient-classic`。例如 `claude` 改为 `gradient-clay`，`codex` 改为 `gradient-mint`，`github` 改为 `gradient-azure`。命令和已有配置仍接受旧名。选择 `random` 后，每次启动都会从全部内置主题中随机选一套（可能与上次相同），`/reload` 不会重新抽取。用 `/theme` 预览主题，Enter 保存、Esc 恢复；主题偏好写入 agent 目录的 `goui.json`，不改原生 Pi 主题设置。缺少主题文件时使用内嵌默认值；`/reload` 不重载后端扩展。
 
 本前端不承诺原生 TUI 功能完全对等：认证、完整模型范围管理及原生设置编辑请使用 `pi`。
 
@@ -134,7 +136,7 @@ WebUI 自动发现**同一系统用户、同一 agent 目录**下运行的 goui�
 
 未安装任何第三方扩展时，普通 Pi 工具、codemode 和通用结果展示仍可用。已有适配支持问卷、Worker、Codex 档位及 SoL-Pi/Web 结果；安装方式以各扩展自身文档为准，Go 不直接加载 TypeScript。
 
-Worker 完整记录通过后端能力只读获取，关闭查看器不会停止任务；不可用时显示已有任务结果，已有部分记录会保留并标记不完整。Codex 档位控件仅在桥与能力可用时显示。接入说明见[扩展指南](internal/extensions/README.md)。
+Worker 完整记录通过后端能力只读获取，关闭查看器不会停止任务；不可用时显示已有任务结果，已有部分记录会保留并标记不完整。Mode 属于当前 Go UI 实例，不写入会话。冷打开标签也显示本实例启动时读取的默认档位；通过后端改档后，各标签共用新档位，其他正在运行的 Go UI 不变，以后启动的实例采用新默认值。Pi 空闲重启仅恢复本实例档位，不覆盖配置；确认缺桥或能力时隐藏控件。接入说明见[扩展指南](internal/extensions/README.md)。
 
 ## 启动更新通知与 Pi 变更内容
 

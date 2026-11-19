@@ -71,8 +71,8 @@ func TestToolInspectorHoverOpenCloseAndNormalFold(t *testing.T) {
 	if !m.inspectorOpen() || !tab.folds["write-1"] || tab.selection.dragging {
 		t.Fatal("icon clicked through to fold/selection")
 	}
-	if m.sidebarWidth() != 53 {
-		t.Fatal("inspector did not replace sidebar with split")
+	if m.detailWidth() != 53 || m.sidebarWidth() != 32 {
+		t.Fatal("expected sidebar and split detail")
 	}
 	// The complete marker may wrap across rows in the numbered change grid.
 	// Remove only the visual gutter before joining continuations.
@@ -230,7 +230,7 @@ func TestToolInspectorMaximumWidth(t *testing.T) {
 		m := inspectorFixture(t)
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
 		m.openInspector("write-1")
-		if got := m.sidebarWidth(); got != min(60, width/3) {
+		if got := m.detailWidth(); got != min(60, width/3) {
 			t.Fatalf("terminal width %d: inspector width %d", width, got)
 		}
 		m.closeInspector()
@@ -337,7 +337,10 @@ func TestToolInspectorDisablesSidebarMode(t *testing.T) {
 		t.Fatal("mode popup did not open before inspector")
 	}
 	m.openInspector("write-1")
-	for _, width := range []int{160, 60, 30} {
+	if _, _, ok := m.extensionPopupGeometry(); !ok {
+		t.Fatal("wide sidebar lost mode target")
+	}
+	for _, width := range []int{120, 60, 30} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
 		for y := 0; y < m.height; y++ {
 			m.Update(tea.MouseMotionMsg{X: max(0, m.width-5), Y: y})

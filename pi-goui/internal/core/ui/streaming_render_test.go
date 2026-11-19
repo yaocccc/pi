@@ -20,6 +20,7 @@ import (
 func streamingModel(t testing.TB, size int) (*Model, []eventMsg) {
 	t.Helper()
 	root := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", root) // Mouse coordinates must not depend on the user's sidebar position.
 	cfg, err := config.Load(root)
 	if err != nil {
 		t.Fatal(err)

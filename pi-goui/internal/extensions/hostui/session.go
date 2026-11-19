@@ -79,7 +79,7 @@ func (s *Session) Sidebar(ctx *render.SidebarContext, state session.State, dead 
 	// Keep the row stable before the first reply (including an empty cache).
 	// This display fallback does not make the mode control available.
 	ctx.Mode = "—"
-	if mode := s.Codex.Mode(dead); mode != "" {
+	if mode := s.Codex.displayState().Level; mode != "" {
 		ctx.Mode = cards.CodexModeLabel(mode)
 	}
 	e := s.Plan.Expiry

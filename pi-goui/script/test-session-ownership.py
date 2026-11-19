@@ -207,6 +207,41 @@ class Suite:
                 os.close(t.master)
                 os.close(t.slave)
 
+    def run_mode(self):
+        config = self.root / 'agent/codex-fast.json'
+        config.write_text(json.dumps({'level': 'fast'}))
+        a, b = Terminal(self, 'mode-a'), Terminal(self, 'mode-b')
+        for terminal in (a, b):
+            terminal.visible('fast x2.5')
+        assert not self.wire('start'), 'cold Mode display started a writer'
+
+        def mouse(terminal, label, button):
+            for y, row in enumerate(terminal.screen.cells):
+                for x in range(len(row)):
+                    if ''.join(row[x:]).startswith(label):
+                        terminal.send(f'\x1b[<{button};{x+1};{y+1}M')
+                        return
+            raise AssertionError(label + ' missing from ' + terminal.text)
+
+        mouse(a, 'fast x2.5', 35)  # hover, then choose from the cold sidebar
+        a.visible('ultrafast x8')
+        mouse(a, 'ultrafast x8', 0)
+        self.wait(lambda: json.loads(config.read_text())['level'] == 'ultrafast', 'A saved startup default')
+        a.idle()
+        a.visible('ultrafast x8')
+        b.visible('fast x2.5')
+        for n in range(2):
+            b.send(f'instance-b-{n}\r')
+            self.wait(lambda: len(self.wire('mode_at_prompt')) == n+1, 'B sent after restoring Mode')
+            observed = self.wire('mode_at_prompt')[-1]
+            assert observed['level'] == 'fast', observed
+            self.control(observed['pid'], 'finish')
+            b.idle()
+        assert len({r['pid'] for r in self.wire('mode_at_prompt')}) == 2, 'expected fresh writers'
+        assert json.loads(config.read_text()) == {'level': 'ultrafast'}, 'restore overwrote startup default'
+        Terminal(self, 'mode-d').visible('ultrafast x8')
+        self.checkpoint('cold Mode, independent running TUIs, fresh writers and next startup default')
+
     def run_fresh(self):
         owner = Terminal(self, 'fresh-owner', saved=False)
         owner.idle()
@@ -414,7 +449,7 @@ def main():
         if not args.binary:
             subprocess.run(['go', 'build', '-o', str(binary), './cmd/pi-goui'], cwd=ROOT, check=True)
         checks = []
-        for name, method in [('ownership', 'run'), ('fresh', 'run_fresh')]:
+        for name, method in [('ownership', 'run'), ('fresh', 'run_fresh'), ('mode', 'run_mode')]:
             folder = root / name
             folder.mkdir()
             suite = Suite(folder, binary)

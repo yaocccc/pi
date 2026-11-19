@@ -1,5 +1,5 @@
 import { estimateToolTokens } from './token-estimate.ts';
-import { StringDecoder } from "node:string_decoder";
+import { WorkerEventLines } from "./event-lines.ts";
 import { WorkerTranscriptWriter } from "./transcript.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { present } from "./callbacks.ts";
@@ -224,8 +224,7 @@ export async function runPiWorker(
 		emit(true);
 		return await new Promise<ChildResult>((resolve) => {
 			let diagnostic: ChildResult["termination"];
-			let stdoutBuffer = "";
-			const stdoutDecoder = new StringDecoder("utf8");
+			const stdoutLines = new WorkerEventLines(MAX_WORKER_EVENT_LINE_BYTES);
 			let stderr = "";
 			let assistantText = "";
 			let actualProvider: string | undefined;
@@ -396,6 +395,10 @@ export async function runPiWorker(
 					upsertTool(event.message.toolCallId, event.message.toolName, event.message.isError ? "failed" : "completed", summarizeToolResult(event.message), toolTokens(event.message.toolCallId, event.message));
 				}
 			};
+			const processLine = (line: string) => {
+				try { processEvent(JSON.parse(line)); }
+				catch { transcript?.incomplete("protocol_error"); /* keep execution independent of logging */ }
+			};
 			child.stdout!.on("data", (chunk: Buffer) => {
 				if (settled) return;
 				stdoutBytes += chunk.length;
@@ -405,26 +408,10 @@ export async function runPiWorker(
 					terminate("output");
 					return;
 				}
-				stdoutBuffer += stdoutDecoder.write(chunk);
-				const lines = stdoutBuffer.split("\n");
-				stdoutBuffer = lines.pop() || "";
-				if (Buffer.byteLength(stdoutBuffer, "utf8") > MAX_WORKER_EVENT_LINE_BYTES) {
+				if (!stdoutLines.write(chunk, processLine)) {
 					errorMessage = `Worker 协议行超过 ${MAX_WORKER_EVENT_LINE_BYTES} 字节安全上限`;
 					truncated = true;
-					stdoutBuffer = "";
 					terminate("output");
-					return;
-				}
-				for (const line of lines) {
-					if (!line.trim()) continue;
-					if (Buffer.byteLength(line, "utf8") > MAX_WORKER_EVENT_LINE_BYTES) {
-						errorMessage = `Worker 协议行超过 ${MAX_WORKER_EVENT_LINE_BYTES} 字节安全上限`;
-						truncated = true;
-						terminate("output");
-						break;
-					}
-					try { processEvent(JSON.parse(line)); }
-					catch { transcript?.incomplete("protocol_error"); /* keep execution independent of logging */ }
 				}
 			});
 			child.stderr!.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(-65_536); });
@@ -447,10 +434,7 @@ export async function runPiWorker(
 					diagnostic = { stage: "process", code: exitSignal ?? `EXIT_${code ?? "UNKNOWN"}`, source: "child_exit", parentPid: process.pid, workerPid: child.pid, ownerId: owner.id };
 					errorMessage ||= `Worker 子进程异常退出 [code=${diagnostic.code} source=child_exit parent=${process.pid} worker=${child.pid ?? "unknown"} owner=${owner.id}]`;
 				}
-				stdoutBuffer += stdoutDecoder.end();
-				if (stdoutBuffer.trim()) {
-					try { processEvent(JSON.parse(stdoutBuffer)); } catch { transcript?.incomplete("protocol_error"); }
-				}
+				stdoutLines.end(processLine);
 				reapDescendants();
 				if (terminating) checkClosedGroup();
 				else finish(closedCode);

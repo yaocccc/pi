@@ -14,6 +14,20 @@ import (
 var forkNameMu sync.Mutex
 
 func CreateNumberedFork(root, sourcePath, sourceID, cwd, name, selected string, snapshot json.RawMessage) (Fork, error) {
+	p, err := PrepareFork(selected, snapshot)
+	if err != nil {
+		return Fork{}, err
+	}
+	return p.createNumbered(root, sourcePath, sourceID, cwd, name, true)
+}
+
+// PersistNumbered writes a validated prefix without building a second RPC-sized
+// buffer. The UI prepares its projection from the resulting file identity.
+func (p *ForkPlan) PersistNumbered(root, sourcePath, sourceID, cwd, name string) (Fork, error) {
+	return p.createNumbered(root, sourcePath, sourceID, cwd, name, false)
+}
+
+func (p *ForkPlan) createNumbered(root, sourcePath, sourceID, cwd, name string, includeEntries bool) (Fork, error) {
 	if cwd == "" {
 		return Fork{}, fmt.Errorf("fork source project directory is unavailable")
 	}
@@ -39,7 +53,7 @@ func CreateNumberedFork(root, sourcePath, sourceID, cwd, name, selected string, 
 	if err != nil {
 		return Fork{}, err
 	}
-	return CreateFork(sourcePath, sourceID, cwd, name, selected, snapshot)
+	return p.create(sourcePath, sourceID, cwd, name, includeEntries)
 }
 
 func forkNameParts(name string) (int, string) {

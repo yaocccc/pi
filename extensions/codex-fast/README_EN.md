@@ -51,7 +51,7 @@ The configuration file is read only when the extension starts. Setting a level u
 - `setLevel(unknown)` validates and atomically saves, returning detached state; invalid levels throw `invalid-level`, and persistence failures do not update committed memory.
 - Successful writes publish `codex-fast:changed` with `{level}`. External file changes load on the next read/request but do not emit this event.
 
-Optional pi-ui supplies `/codex-fast`, native menus and RPC compatibility. `codex-fast.get` / `codex-fast.set` read and commit backend state; frontends do not read/write the file. Missing UI does not affect provider requests; missing capability means hide the control. Services are resolved at use time to tolerate installation order.
+Optional pi-ui supplies `/codex-fast`, native menus and RPC compatibility. `codex-fast.get` / `codex-fast.set` read and commit backend state; the Go UI snapshots the public `codex-fast.json` default once at startup (missing file means normal; legacy booleans supported), without watching or writing it. All tabs share the instance tier. Before execution, new or restarted Pi writers restore it with `codex-fast.apply {level}`. Apply returns `{level,levels}` and changes only memory, without saving or emitting a saved notice. Only `set` updates the default for future instances. Missing UI does not affect provider requests; missing capability means hide the control. Services are resolved at use time to tolerate installation order.
 
 ## Third-party UI quick start (self-contained)
 

@@ -127,7 +127,7 @@ func TestResumeSeesNestedForksWithoutRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m.forkCreated(prepareForkMessage(t, parent.id, fork)) // Do not start real RPC.
+		m.forkCreated(prepareForkMessage(t, m, parent.id, fork)) // Do not start real RPC.
 		rows := openResume()
 		if len(rows) != depth+1 {
 			t.Fatalf("fork depth %d not visible without restart: %+v", depth, rows)

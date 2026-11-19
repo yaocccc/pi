@@ -40,6 +40,12 @@ export function registerCodexFastUI(pi: ExtensionAPI): void {
         const capability = service();
         return { ...capability.getConfig(), levels: [...capability.levels] };
     });
+    registerRpcMethod(pi, 'codex-fast.apply', (params) => {
+        const capability = service();
+        if (!capability.applyLevel) throw new RpcUnavailableError('Non-persistent mode restore unavailable');
+        const level = params && typeof params === 'object' ? (params as { level?: unknown }).level : undefined;
+        return { ...capability.applyLevel(level), levels: [...capability.levels] };
+    });
     registerRpcMethod(pi, 'codex-fast.set', (params, ctx) => {
         revision++; // An explicit remote save supersedes an outstanding menu.
         activeContext = ctx;
@@ -47,7 +53,7 @@ export function registerCodexFastUI(pi: ExtensionAPI): void {
         const level = params && typeof params === 'object' ? (params as { level?: unknown }).level : undefined;
         return { ...capability.setLevel(level), levels: [...capability.levels] };
     });
-    pi.registerCommand('codex-fast', {
+    const settings: Parameters<ExtensionAPI['registerCommand']>[1] = {
         description: '设置 Codex 档位：normal / fast / ultrafast',
         handler: async (_args, ctx) => {
             if (closed) return;
@@ -84,5 +90,7 @@ export function registerCodexFastUI(pi: ExtensionAPI): void {
                 else notifyNativeError(ctx, error);
             }
         },
-    });
+    };
+    pi.registerCommand('codex-fast', settings);
+    pi.registerCommand('codex_settings', settings);
 }

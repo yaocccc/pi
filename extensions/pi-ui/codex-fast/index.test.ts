@@ -105,7 +105,7 @@ test('running extension ignores externally saved mode for requests and menu', as
 
 test('standalone adapter registers codex-fast and its RPC bridge', async (t) => {
     const fixture = await setup(t, { level: 'normal' });
-    assert.deepEqual([...fixture.commands.keys()], ['pi-ui-rpc', 'codex-fast']);
+    assert.deepEqual([...fixture.commands.keys()], ['pi-ui-rpc', 'codex-fast', 'codex_settings']);
 });
 
 for (const level of levels) {
@@ -326,6 +326,10 @@ test('direct capability saves and RPC saves share committed facts', async (t) =>
     assert.deepEqual(await invoke('save', 'codex-fast.set', { level: 'ultrafast' }), { id: 'save', result: { level: 'ultrafast', levels } });
     assert.equal(h.saved().level, 'ultrafast');
     assert.equal(messages.filter(message => message.includes('codex.settings-saved')).length, 2);
+    assert.deepEqual(await invoke('restore', 'codex-fast.apply', { level: 'normal' }), { id: 'restore', result: { level: 'normal', levels } });
+    assert.equal(service.getConfig().level, 'normal');
+    assert.equal(h.saved().level, 'ultrafast');
+    assert.equal((await invoke('bad-restore', 'codex-fast.apply', { level: 'invalid' })).error.code, 'invalid-level');
     assert.equal((await invoke('bad', 'codex-fast.set', { level: 'invalid' })).error.code, 'invalid-level');
     assert.equal(messages.filter(message => message.includes('codex.settings-saved')).length, 2);
     mkdirSync(h.file + '.' + process.pid + '.tmp');

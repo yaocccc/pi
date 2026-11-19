@@ -34,9 +34,9 @@ func TestThemePickerOpenAndSelect(t *testing.T) {
 		t.Fatal("preview persisted settings")
 	}
 	m.View()
-	d.editor.SetValue("nord")
+	d.editor.SetValue("gradient-frost")
 	options := m.filtered(d)
-	if len(options) != 1 || options[0].Value != "nord" {
+	if len(options) != 1 || options[0].Value != "gradient-frost" {
 		t.Fatalf("unexpected filtered options: %+v", options)
 	}
 	d.selected = 0
@@ -44,11 +44,11 @@ func TestThemePickerOpenAndSelect(t *testing.T) {
 	if len(tab.dialogs) != 0 {
 		t.Fatal("picker remained open")
 	}
-	want, err := config.LoadTheme(m.cfg.AgentDir, "nord")
+	want, err := config.LoadTheme(m.cfg.AgentDir, "gradient-frost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.cfg.ThemeName != "nord" || m.cfg.Theme != want {
+	if m.cfg.ThemeName != "gradient-frost" || m.cfg.Theme != want {
 		t.Fatal("selected theme not applied")
 	}
 	m.View()
@@ -59,7 +59,7 @@ func TestThemePickerOpenAndSelect(t *testing.T) {
 		t.Fatal("reopened picker did not preview")
 	}
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if len(tab.dialogs) != 0 || m.cfg.ThemeName != "nord" || m.cfg.Theme != want {
+	if len(tab.dialogs) != 0 || m.cfg.ThemeName != "gradient-frost" || m.cfg.Theme != want {
 		t.Fatal("cancel changed theme or left picker open")
 	}
 }

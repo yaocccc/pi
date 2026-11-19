@@ -40,6 +40,11 @@ export default function (pi: ExtensionAPI) {
         getConfig() {
             return { ...config };
         },
+        applyLevel(level) {
+            if (typeof level !== 'string' || !levels.includes(level as FastLevel)) throw new InvalidFastLevelError(level);
+            config = { level: level as FastLevel };
+            return { ...config };
+        },
         setLevel(level) {
             if (typeof level !== 'string' || !levels.includes(level as FastLevel)) throw new InvalidFastLevelError(level);
             const nextConfig: FastConfig = { level: level as FastLevel };

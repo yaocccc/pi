@@ -33,6 +33,10 @@ func AnimateWorkingLine(row string, theme config.Theme, frame int) string {
 	plain := ansi.Strip(row)
 	width := ansi.StringWidth(plain)
 	palette, _ := frames.Palette(theme.FramePreset, "input")
+	if palette[0] == palette[1] {
+		c := palette[0]
+		return fmt.Sprintf("\x1b[38;2;%d;%d;%dm%s\x1b[39m", c[0], c[1], c[2], plain)
+	}
 	var gradient strings.Builder
 	var state byte
 	column := 0
@@ -53,6 +57,9 @@ func animateForeground(row string, theme config.Theme, frame, start, end int, ki
 	phase := (frame % 15) * 20 / 15 // 80ms ticks: 1.2s cycle, including a short pause.
 	center := -2 + float64(end-start+3)*float64(phase)/16
 	palette, _ := frames.Palette(theme.FramePreset, kind)
+	if palette[0] == palette[1] {
+		return row
+	}
 	baseColor, _ := strconv.ParseUint(strings.TrimPrefix(theme.Text, "#"), 16, 24)
 	if len(theme.Text) != 7 {
 		baseColor = 0xc8c8cc

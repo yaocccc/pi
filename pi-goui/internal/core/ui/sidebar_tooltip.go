@@ -13,8 +13,12 @@ type sidebarTooltip struct {
 	rows                []string
 }
 
+func (m *Model) canShowSidebarTooltip(t *tab) bool {
+	return t != nil && len(t.dialogs) == 0 && !t.selection.dragging && !m.panelResize.dragging && m.searching == "" && m.sidebarWidth() > 0
+}
+
 func (m *Model) sidebarHistoryTooltip(t *tab) (sidebarTooltip, bool) {
-	if t == nil || m.inspectorOpen() || len(t.dialogs) > 0 || t.selection.dragging || m.searching != "" || m.sidebarWidth() == 0 {
+	if !m.canShowSidebarTooltip(t) {
 		return sidebarTooltip{}, false
 	}
 	ctx := m.sidebarContext()
@@ -28,31 +32,38 @@ func (m *Model) sidebarHistoryTooltip(t *tab) (sidebarTooltip, bool) {
 	if index < 0 {
 		return sidebarTooltip{}, false
 	}
-	width := min(40, m.sidebarWidth()-2)
-	availableHeight := m.height - 2
-	if width < 12 || availableHeight < 5 {
-		return sidebarTooltip{}, false
-	}
-	inner := width - 4
 	name := strings.Join(strings.Fields(render.Clean(ctx.History[index])), " ")
-	nameRows := strings.Split(ansi.Hardwrap(name, inner, false), "\n")
 	stamp := "—"
 	if modified := m.sidebarHistoryAt(index).Modified; modified > 0 {
 		stamp = time.UnixMilli(modified).Local().Format("2006-01-02 15:04:05")
 	}
-	stampRows := strings.Split(ansi.Hardwrap(stamp, inner, false), "\n")
-	maxNameRows := availableHeight - len(stampRows) - 3 // Frame and blank separator.
-	if maxNameRows < 1 {
-		return sidebarTooltip{}, false
-	}
-	if len(nameRows) > maxNameRows {
-		nameRows = nameRows[:maxNameRows]
-		nameRows[maxNameRows-1] = ansi.Truncate(nameRows[maxNameRows-1], inner-1, "") + "…"
-	}
-	rows := render.SidebarDetailFrame(nameRows, stampRows, width, m.cfg.Theme)
 	layout := m.sidebarLayout()
 	itemY := layout.HistoryStart + (index-layout.HistoryOffset)*render.SidebarHistoryRows
-	return sidebarTooltip{x: max(0, m.mainWidth()-width+3), y: min(max(1, itemY-1), m.height-1-len(rows)), width: width, height: len(rows), rows: rows}, true
+	return m.sidebarDetailTooltip(itemY, name, stamp)
+}
+
+func (m *Model) sidebarDetailTooltip(itemY int, title, detail string) (sidebarTooltip, bool) {
+	width := min(40, m.sidebarWidth()-2)
+	if width < 12 {
+		return sidebarTooltip{}, false
+	}
+	inner := width - 4
+	titleRows := strings.Split(ansi.Hardwrap(title, inner, false), "\n")
+	detailRows := strings.Split(ansi.Hardwrap(detail, inner, false), "\n")
+	maxTitleRows := m.height - 2 - len(detailRows) - 3 // Frame and blank separator.
+	if maxTitleRows < 1 {
+		return sidebarTooltip{}, false
+	}
+	if len(titleRows) > maxTitleRows {
+		titleRows = titleRows[:maxTitleRows]
+		titleRows[maxTitleRows-1] = ansi.Truncate(titleRows[maxTitleRows-1], inner-1, "") + "…"
+	}
+	rows := render.SidebarDetailFrame(titleRows, detailRows, width, m.cfg.Theme)
+	x := max(0, m.sideX()-width+3)
+	if m.cfg.SidebarPosition == "left" {
+		x = -3
+	}
+	return sidebarTooltip{x: x, y: min(max(1, itemY-1), m.height-1-len(rows)), width: width, height: len(rows), rows: rows}, true
 }
 
 func (m *Model) overlaySidebarHistoryTooltip(t *tab, view string) string {
@@ -60,6 +71,7 @@ func (m *Model) overlaySidebarHistoryTooltip(t *tab, view string) string {
 	if !ok {
 		return view
 	}
+	box.x += m.mainScreenX()
 	rows := strings.Split(view, "\n")
 	for i, line := range box.rows {
 		y := box.y + i

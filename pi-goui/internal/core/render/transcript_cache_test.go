@@ -146,6 +146,53 @@ func TestTranscriptCacheReusesHistoryAndDiscardsStreamingVersions(t *testing.T) 
 	}
 }
 
+// A tool starting/stopping or the arrival of turn statistics must not
+// discard Markdown and frames for all the unrelated turns before it.
+func TestTranscriptCacheIsolatesTurnPresentation(t *testing.T) {
+	items := []session.Item{
+		{ID: "a", Role: "assistant", Text: "Stable **history**"},
+		{ID: "u", Role: "user", Text: "Next"},
+		{ID: "tool", Role: "tool", ToolName: "read"},
+	}
+	opts := Options{Width: 80, AssistantStats: map[string]string{}}
+	theme := testTheme()
+	var cache TranscriptCache
+	assertCachedTranscript(t, &cache, items, theme, opts)
+	history := &cache.sections[0].doc.Blocks[0]
+	user := &cache.sections[1].doc.Blocks[0]
+	for _, active := range []bool{true, false} {
+		opts.ShowToolActivity = active
+		assertCachedTranscript(t, &cache, items, theme, opts)
+		if history != &cache.sections[0].doc.Blocks[0] || user != &cache.sections[1].doc.Blocks[0] {
+			t.Fatal("changed tool activity discarded unrelated frames")
+		}
+	}
+	for _, stats := range []string{"3s", "5s", ""} {
+		opts.AssistantStats["tool"] = stats
+		assertCachedTranscript(t, &cache, items, theme, opts)
+		if history != &cache.sections[0].doc.Blocks[0] || user != &cache.sections[1].doc.Blocks[0] {
+			t.Fatal("changed statistics discarded unrelated frames")
+		}
+	}
+}
+
+func BenchmarkTranscriptCacheToolActivity(b *testing.B) {
+	var items []session.Item
+	for i := 0; i < 32; i++ {
+		items = append(items, session.Item{ID: fmt.Sprintf("u%d", i), Role: "user", Text: "Question"},
+			session.Item{ID: fmt.Sprintf("a%d", i), Role: "assistant", Text: "History with **bold** text, lists and `code`.\n\n- one\n- two"})
+	}
+	items = append(items, session.Item{ID: "u", Role: "user", Text: "Next"}, session.Item{ID: "tool", Role: "tool", ToolName: "read"})
+	theme, opts := testTheme(), Options{Width: 80}
+	var cache TranscriptCache
+	cache.Transcript(items, theme, opts)
+	b.ReportAllocs()
+	for b.Loop() {
+		opts.ShowToolActivity = !opts.ShowToolActivity
+		cache.Transcript(items, theme, opts)
+	}
+}
+
 func BenchmarkTranscriptStreaming(b *testing.B) {
 	body := strings.Repeat("This is a representative assistant paragraph with **bold text**, `inline code`, and implementation details.\n\n", 8) + "```go\nfunc example() string {\n return \"hello\"\n}\n```\n"
 	for _, grouped := range []bool{false, true} {

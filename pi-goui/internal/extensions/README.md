@@ -59,7 +59,7 @@ WebUI 在网页终端中直接运行同一 TUI，复用上述扩展实现；无�
 | 适配 | 必须保持的边界 |
 | --- | --- |
 | 问卷 | 标准 `extension_ui_request/response` 按对话 ID 归属；取消为 `cancelled:true`，不伪造答案或默认同意。答案权威校验由后端完成。 |
-| Codex 档位 | 仅 `codex-fast.get/set`；采用后端返回的 `level/levels`，后端确认后再更新。缺桥/能力隐藏控件，不读配置、不从模型名推断档位。 |
+| Codex 档位 | 每个 TUI 启动仅从公开的 agent `codex-fast.json` 读取一次默认档位。`codex-fast.get/apply/set` 分别发现能力、恢复当前 writer 内存档位、显式保存。缺桥或能力时隐藏控件，不推断档位。 |
 | Worker | 仅 `worker.transcript`，参数为 `descriptor:{version,id}` 和可选不透明 `cursor`；消费记录及 `reset/more/partial`。路径、文件身份、偏移、限制和游标有效期均由后端验证。 |
 | Worker 展示 | 使用稳定 `phaseCode`，不解析翻译文案；回放只重建展示，不执行任务。不将 Activity 当作完整历史，缺失 end 不代表成功；缺记录回退已有结果，部分记录保留并标记不完整。完整历史和批量事件在后台独占 Replay/投影副本上准备，按原查看器、descriptor 与任务代际提交；坏 header/reset 保留旧正文，后续 completed 不能掩盖错误。 |
 

@@ -38,6 +38,7 @@
 | method | params |
 | --- | --- |
 | codex-fast.get | {} |
+| codex-fast.apply | `{level}`：仅恢复当前 Pi 内存，不保存、不发已保存事件 |
 | codex-fast.set | {level:"normal"\|"fast"\|"ultrafast"} |
 | worker.transcript | {descriptor:{version:1,id:UUID},cursor?} |
 

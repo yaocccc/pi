@@ -20,7 +20,7 @@ type forkSnapshotMsg struct {
 	entries                             json.RawMessage
 	client                              *rpc.Client
 	history                             session.ForkCheckpoint
-	plan                                session.ForkPreview
+	plan                                *session.ForkPlan
 	prepared                            bool
 	err                                 error
 }
@@ -32,7 +32,7 @@ type forkCreatedMsg struct {
 	err            error
 	client         *rpc.Client
 	path, sourceID string
-	prepared       *session.PreparedSnapshot
+	prepared       *forkLayout
 }
 
 // Runs only in a command, against immutable captured records and RPC bytes.
@@ -43,9 +43,14 @@ func (v forkSnapshotMsg) prepare() forkSnapshotMsg {
 	}
 	v.selected, v.err = v.history.ResolveUserID(v.selected, v.entries)
 	if v.err == nil {
-		v.plan, v.err = session.PreviewFork(v.selected, v.entries)
+		v.plan, v.err = session.PrepareFork(v.selected, v.entries)
 	}
-	if v.err == nil && v.plan.NextUserID != "" && v.plan.ReplyCompleted && !v.history.Matches(v.plan) {
+	v.entries = nil // The validated plan owns the prefix; don't retain the source response.
+	if v.err != nil {
+		return v
+	}
+	plan := v.plan.Review()
+	if plan.NextUserID != "" && plan.ReplyCompleted && !v.history.Matches(plan) {
 		v.err = fmt.Errorf("所选轮次或活动分支已变化，请重新选择分支消息")
 	}
 	return v
@@ -119,7 +124,7 @@ func (m *Model) forkSnapshot(v forkSnapshotMsg) tea.Cmd {
 	}
 	// Parsing and the request checkpoint's content verification happened in
 	// the command. The UI only checks ownership and current record versions.
-	plan := v.plan
+	plan := v.plan.Review()
 	if plan.NextUserID == "" {
 		if t.ownRunActive() || t.revision != v.revision {
 			t.forkPending = false
@@ -148,13 +153,12 @@ func (m *Model) forkSnapshot(v forkSnapshotMsg) tea.Cmd {
 		}
 	}
 	root := m.cfg.AgentDir
+	readLayout := m.forkLayoutReader(v.cwd)
 	return func() tea.Msg {
-		fork, err := session.CreateNumberedFork(root, v.path, v.sourceID, v.cwd, v.name, v.selected, v.entries)
+		fork, err := v.plan.PersistNumbered(root, v.path, v.sourceID, v.cwd, v.name)
 		result := forkCreatedMsg{id: v.id, sequence: v.sequence, fork: fork, err: err, client: v.client, path: v.path, sourceID: v.sourceID}
 		if err == nil {
-			var fresh session.State
-			state, _ := json.Marshal(map[string]any{"sessionId": fork.ID, "sessionFile": fork.Path, "sessionName": fork.Name, "cwd": fork.Cwd})
-			result.prepared, result.err = fresh.SnapshotPreparation().Prepare(state, fork.Entries, nil)
+			result.prepared, result.err = readLayout(fork)
 		}
 		return result
 	}
@@ -162,25 +166,38 @@ func (m *Model) forkSnapshot(v forkSnapshotMsg) tea.Cmd {
 
 // The candidate list is presentation-only. Selection always obtains and
 // validates a fresh active-branch snapshot, never this potentially stale view.
-func forkChoice(t *tab, id, text string) option {
-	o := option{Label: text, Value: id}
-	turn, found := 0, false
-	for _, item := range t.state.Items {
+type forkChoiceInfo struct {
+	turn  int
+	reply string
+}
+
+// Scan once per chooser. Each row keeps only the latest nonblank assistant
+// reply in its turn, just as the individual user-header action does.
+func forkChoices(items []session.Item) map[string]forkChoiceInfo {
+	rows := make(map[string]forkChoiceInfo)
+	var id string
+	var turn int
+	for _, item := range items {
 		if item.Role == "user" {
-			if found {
-				break
-			}
+			id = strings.TrimSuffix(item.ID, "/0")
 			turn++
-			if strings.TrimSuffix(item.ID, "/0") == id {
-				found = true
-				o.Label = fmt.Sprintf("第 %d 轮 · %s", turn, text)
-				o.Detail = "回复：（无文本）"
-			}
-		} else if found && item.Role == "assistant" && strings.TrimSpace(item.Text) != "" {
-			o.Detail = "回复：" + item.Text
+			rows[id] = forkChoiceInfo{turn: turn}
+		} else if id != "" && item.Role == "assistant" && strings.TrimSpace(item.Text) != "" {
+			rows[id] = forkChoiceInfo{turn, item.Text}
 		}
 	}
-	return o
+	return rows
+}
+
+func (info forkChoiceInfo) choice(id, text string) option {
+	if info.turn == 0 {
+		return option{Value: id, Label: text}
+	}
+	detail := "回复：（无文本）"
+	if info.reply != "" {
+		detail = "回复：" + info.reply
+	}
+	return option{Value: id, Label: fmt.Sprintf("第 %d 轮 · %s", info.turn, text), Detail: detail}
 }
 
 func (m *Model) forkCreated(v forkCreatedMsg) tea.Cmd {
@@ -213,9 +230,13 @@ func (m *Model) forkCreated(v forkCreatedMsg) tea.Cmd {
 	}
 	// A fresh tab has no source live/tool overlays, errors, run state or render
 	// caches. The source tab and RPC writer remain attached to their old session.
-	fork := m.addTab(v.fork.Path)
-	fork.origin = v.fork.Origin
-	fork.state.ApplySnapshot(v.prepared)
+	fork, openCmd, err := m.openForkLayout(t, v.fork, v.prepared)
+	if err != nil {
+		if t != nil {
+			t.notify("创建分支失败：" + err.Error())
+		}
+		return nil
+	}
 	// Publish the durable file immediately, without waiting for RPC startup or
 	// the five-second history poll. Invalidate any pre-creation scan in flight.
 	h := &m.sidebarHistory
@@ -236,5 +257,5 @@ func (m *Model) forkCreated(v forkCreatedMsg) tea.Cmd {
 		}
 	}
 	h.sessions = list
-	return tea.Batch(m.activate(len(m.tabs)-1), m.start(fork), m.requestSidebarHistory(time.Now()))
+	return tea.Batch(openCmd, m.requestSidebarHistory(time.Now()))
 }

@@ -1,3 +1,5 @@
 {
-  "theme": "pi"
+  "resumeLastSession": false,
+  "sidebarPosition": "right",
+  "theme": "gradient-classic"
 }

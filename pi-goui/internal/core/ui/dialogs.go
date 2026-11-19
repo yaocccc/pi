@@ -35,6 +35,9 @@ func (m *Model) filtered(d *dialog) []option {
 		return nil
 	}
 	query := strings.ToLower(d.editor.Value())
+	if d.kind == "fork" && query == "" && !d.reverseSort && !d.namedOnly {
+		return d.options
+	}
 	if d.kind == "session" {
 		query = strings.TrimSpace(query)
 	}
@@ -274,6 +277,8 @@ func (m *Model) confirmDialog(t *tab, d *dialog) (cmd tea.Cmd) {
 	switch d.kind {
 	case "session-send-confirm":
 		return m.confirmSessionSend(t, d, value)
+	case "setting":
+		return m.changeSetting(t, value)
 	case "theme":
 		m.restoreTheme(d)
 		return m.chooseTheme(t, value)
@@ -399,6 +404,8 @@ func (m *Model) extension(t *tab, raw json.RawMessage) tea.Cmd {
 	case "notify":
 		if !t.extensionEvent(e.Message) {
 			t.notify(e.Message)
+		} else {
+			return m.syncInstanceBackends()
 		}
 	case "setStatus":
 		if e.StatusText == "" {

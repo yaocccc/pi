@@ -38,6 +38,7 @@ Only these methods are exposed. Capabilities validate business parameters; the b
 | method | params |
 | --- | --- |
 | codex-fast.get | {} |
+| codex-fast.apply | `{level}`: restore Pi memory only; no save or saved event |
 | codex-fast.set | {level:"normal"\|"fast"\|"ultrafast"} |
 | worker.transcript | {descriptor:{version:1,id:UUID},cursor?} |
 

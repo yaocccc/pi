@@ -20,7 +20,7 @@ func branchFixture(t *testing.T) (*Model, *tab, *tab, json.RawMessage) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.forkCreated(prepareForkMessage(t, source.id, fork)) // Do not launch a real process.
+	m.forkCreated(prepareForkMessage(t, m, source.id, fork)) // Do not launch a real process.
 	branch := m.current()
 	m.document(branch)
 	return m, source, branch, snapshot
@@ -44,11 +44,6 @@ func TestOriginReusesSourceWithoutChangingDraftOrRPC(t *testing.T) {
 	}
 	if !strings.Contains(source.toast.text, "已定位") {
 		t.Fatalf("not located: %+v", source.toast)
-	}
-	// A name change is reflected without using that name as the relation key.
-	source.state.Name = "Renamed\nsource"
-	if label := m.originTitle(branch); !strings.Contains(label, "Renamed source") || strings.Contains(label, "\n") {
-		t.Fatal(label)
 	}
 }
 
@@ -191,8 +186,8 @@ func TestOriginRefreshRestoresHeaderAndCommands(t *testing.T) {
 	// The generic fake RPC omits sessionFile; a saved-session refresh supplies it.
 	msg.state, _ = json.Marshal(map[string]any{"sessionId": "fake", "sessionFile": path})
 	m.Update(msg)
-	if m.chatTop(tab) != 1 || !strings.Contains(m.originTitle(tab), "第 2 轮") {
-		t.Fatal("reopened source banner missing")
+	if tab.origin.Fork == nil || tab.origin.Fork.Turn != 2 || tab.origin.ParentSession != h.ParentSession {
+		t.Fatal("reopened fork lost its provenance")
 	}
 	for _, text := range []string{"/origin"} {
 		if cmd, ok := m.slash(tab, text); !ok || cmd == nil {
@@ -201,36 +196,24 @@ func TestOriginRefreshRestoresHeaderAndCommands(t *testing.T) {
 	}
 }
 
-func TestOriginBannerGeometryCopyAndSidebarClick(t *testing.T) {
+func TestForkTranscriptStartsAtFirstRow(t *testing.T) {
 	m, _, branch, _ := branchFixture(t)
 	branch.follow = false
 	m.document(branch)
-	before := branch.doc.Text
-	if m.chatTop(branch) != 1 || !m.originHit(2, 0) || m.pointerShapeAt(2, 0) != "pointer" {
-		t.Fatal("banner not interactive")
-	}
-	if cmd := m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 2, Y: 0}); cmd == nil {
-		t.Fatal("banner click did not request origin")
-	}
-	m.beginSelection(branch, tea.Mouse{Button: tea.MouseLeft, X: 2, Y: 0})
-	if branch.selection.dragging {
-		t.Fatal("banner entered text selection")
-	}
-	m.key(tea.KeyPressMsg{Code: tea.KeyEscape}) // dismiss the pending source read
 	for _, b := range branch.doc.Blocks {
 		if b.Role == "user" {
-			if _, r, ok := m.forkTarget(2, b.Start+1); !ok || r.y != b.Start+1 {
-				t.Fatal("fork button did not account for source banner")
+			if _, r, ok := m.forkTarget(2, b.Start); !ok || r.y != b.Start {
+				t.Fatal("fork button did not align with the user header")
 			}
 			break
 		}
 	}
 	branch.doc = render.Document{Text: "copy me", Content: []render.ContentSpan{{Start: 0, End: 7, Content: true}}}
 	branch.offset = 0
-	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 0, Y: 1})
-	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: 3, Y: 1})
-	if copied := clipboardText(t, m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: 3, Y: 1})); copied != "copy" {
-		t.Fatalf("banner shifted copied text: %q", copied)
+	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 0, Y: 0})
+	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: 3, Y: 0})
+	if copied := clipboardText(t, m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: 3, Y: 0})); copied != "copy" {
+		t.Fatalf("could not select first-row text: %q", copied)
 	}
 	branch.selection = transcriptSelection{}
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {32, 16}, {8, 8}} {
@@ -238,6 +221,9 @@ func TestOriginBannerGeometryCopyAndSidebarClick(t *testing.T) {
 		m.resizeEditor(branch)
 		m.document(branch)
 		view := strings.Split(m.View().Content, "\n")
+		if first := ansi.Strip(view[0]); strings.Contains(first, "来自") || strings.Contains(first, "查看来源") {
+			t.Fatalf("source banner still visible at %v: %s", size, first)
+		}
 		if len(view) > m.height {
 			t.Fatalf("view overflow at %v: %d", size, len(view))
 		}
@@ -246,9 +232,6 @@ func TestOriginBannerGeometryCopyAndSidebarClick(t *testing.T) {
 				t.Fatalf("width overflow at %v", size)
 			}
 		}
-	}
-	if strings.Contains(branch.doc.Text, "查看来源") || strings.Contains(before, "来自") {
-		t.Fatal("source decoration contaminated copyable document")
 	}
 	m.width, m.height = 120, 40
 	m.resizeEditor(branch)

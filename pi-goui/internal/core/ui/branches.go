@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"pi-goui/internal/core/render"
 	"pi-goui/internal/core/session"
 )
 
@@ -88,17 +87,6 @@ func (m *Model) branchOwner(r branchRequest) *tab {
 	return t
 }
 
-func branchName(s session.Summary) string {
-	name := s.Name
-	if name == "" {
-		name = s.FirstMessage
-	}
-	if name == "" {
-		name = filepath.Base(s.Path)
-	}
-	return strings.Join(strings.Fields(render.Clean(name)), " ")
-}
-
 func summaryOf(t *tab) session.Summary {
 	v := session.Summary{ID: t.state.ID, Path: t.state.File, Cwd: t.state.Cwd, Name: session.DisplayName(t.state)}
 	if t.origin.ID == t.state.ID {
@@ -109,25 +97,6 @@ func summaryOf(t *tab) session.Summary {
 
 func sameSessionPath(a, b string) bool {
 	return a != "" && b != "" && filepath.Clean(a) == filepath.Clean(b)
-}
-
-func (m *Model) knownBranches() []session.Summary {
-	out := []session.Summary{}
-	seen := map[string]bool{}
-	add := func(s session.Summary) {
-		if s.Path != "" && !seen[s.Path] {
-			seen[s.Path] = true
-			out = append(out, s)
-		}
-	}
-	// Live titles take precedence over cached disk names.
-	for _, t := range m.tabs {
-		add(summaryOf(t))
-	}
-	for _, s := range m.sidebarHistory.sessions {
-		add(s)
-	}
-	return out
 }
 
 func (m *Model) requestOrigin(t *tab) tea.Cmd {

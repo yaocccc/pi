@@ -28,6 +28,7 @@ type Options struct {
 type tab struct {
 	extensions                                                                     extensionSession
 	footerHover                                                                    footerHoverState
+	footerCatalog                                                                  *footerCatalog
 	newSession                                                                     bool
 	mutation                                                                       *sessionAction
 	awaitingStart, interruptRequested                                              bool
@@ -40,6 +41,11 @@ type tab struct {
 	nativeDocument                                                                 render.Document
 	promptEcho                                                                     *promptEcho
 	renderCache                                                                    render.TranscriptCache
+	inspectIDs                                                                     map[string]int
+	inspectFrame                                                                   *render.Block
+	inspectBottom                                                                  int
+	requestedWidth                                                                 int
+	layoutHasInspector                                                             bool
 	docLinesText                                                                   string
 	docLines                                                                       []string
 	streamDirty                                                                    bool
@@ -466,6 +472,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg = batch
 	}
 	var cmds []tea.Cmd
+	originX := m.mainScreenX()
 	renderNow := true
 	switch v := msg.(type) {
 	case documentResult:
@@ -737,17 +744,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clipboardTarget = nil
 	case tea.MouseClickMsg:
+		v.X -= originX
 		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		cmds = append(cmds, m.mouse(v.Mouse()))
 	case tea.MouseMotionMsg:
+		v.X -= originX
 		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		m.extensionControls.Hover = m.extensionPopupVisible()
 		m.mouseMotion(v.Mouse())
 		cmds = append(cmds, m.hoverFooter())
 	case tea.MouseReleaseMsg:
+		v.X -= originX
 		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		cmds = append(cmds, m.mouseRelease(v.Mouse()))
 	case tea.MouseWheelMsg:
+		v.X -= originX
 		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		if m.extensionPopupVisible() {
 			break
@@ -790,7 +801,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				t.editor.Scroll(delta)
 				break
 			}
-			if !m.inspectorOpen() && m.sidebarWidth() > 0 && v.X >= m.mainWidth() {
+			if m.sideContainsX(v.X, 0) {
 				layout := m.sidebarLayout()
 				if m.scrollExtensions(t, layout, v.Y, delta) {
 					// The adapter consumed the wheel event.
@@ -848,6 +859,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.inspector.itemID != "" && !m.inspectorOpen() {
 		m.closeInspector()
 	}
+	// Keep a stationary physical pointer aligned when the side pane moves or resizes.
+	if m.sidebarHistory.pointerKnown {
+		m.sidebarHistory.pointerX += originX - m.mainScreenX()
+	}
 	cmds = append(cmds, m.ensureFileCompletion(), m.ensureCwdCompletion(), m.ensureResumePreload())
 	if t := m.current(); renderNow && t != nil && t.dirty {
 		if t.streamDirty {
@@ -866,6 +881,24 @@ func (m *Model) document(t *tab) {
 	if t.selection.dragging || m.panelResize.dragging {
 		return
 	}
+	// Large pane transitions must paint controls immediately. The previous
+	// immutable transcript stays clipped to the new viewport until the next
+	// layout tick; generation checks reject any old-width work, even on Esc.
+	detail, width := m.inspectorOpen(), m.mainWidth()
+	oldWidth := t.requestedWidth
+	t.requestedWidth = width
+	if t.layoutHasInspector != detail || (detail && !m.inspector.layoutSeen) {
+		t.layoutHasInspector, m.inspector.layoutSeen = detail, true
+		if width == oldWidth && (!t.dirty || t.streamDirty) {
+			return // same-width detail switch; no transcript work
+		}
+		if len(t.doc.Text) >= 128<<10 || len(t.doc.Blocks) >= 512 {
+			t.invalidateDocument()
+			t.streamDirty = true
+			return
+		}
+	}
+	t.inspectFrame = nil
 	t.layoutGeneration++ // Invalidate any older asynchronous layout.
 	var doc render.Document
 	if m.showStartupInfo(t) {
@@ -1013,10 +1046,11 @@ func (m *Model) reply(t *tab, v replyMsg) tea.Cmd {
 			Messages []struct{ EntryID, Text string }
 		}
 		_ = json.Unmarshal(v.data, &data)
+		choices := forkChoices(t.state.Items)
 		d := m.newDialog("fork", "从此轮fork · 选择用户消息", "最新在前；选择后直接分叉，包含本轮回复及工具结果。")
 		for i := len(data.Messages) - 1; i >= 0; i-- {
 			v := data.Messages[i]
-			d.options = append(d.options, forkChoice(t, v.EntryID, v.Text))
+			d.options = append(d.options, choices[v.EntryID].choice(v.EntryID, v.Text))
 		}
 		t.dialogs = append(t.dialogs, d)
 	case "get_entries":
