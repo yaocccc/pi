@@ -1,5 +1,5 @@
 {
-  "defaultModel": "gpt-6-astra",
+  "defaultModel": "gpt-6.2-astra",
   "defaultProjectTrust": "ask",
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
@@ -12,7 +12,7 @@
   "enableInstallTelemetry": true,
   "enableSkillCommands": false,
   "enabledModels": [
-    "gpt-6-astra",
+    "gpt-6.2-astra",
     "gpt-6.1-sol"
   ],
   "extensionChangelogVersions": {
