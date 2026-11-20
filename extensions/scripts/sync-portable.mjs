@@ -13,6 +13,7 @@ for (const name of modules) {
 }
 for (const name of ["worker", "codex-fast"]) copies.push(["pi-ui/rpc.ts", `pi-ui/${name}/bridge.ts`, [["../shared/capabilities.ts", `../../${name}/capabilities.ts`]]]);
 for (const name of ["autoname", "telegram"]) copies.push(["shared/session-policy.ts", `${name}/session-policy.ts`]);
+for (const name of ["autoname", "filter-output", "sol-pi", "worker"]) copies.push(["shared/frontend.ts", `${name}/frontend.ts`]);
 copies.push(["shared/token-estimate.ts", "worker/token-estimate.ts"]);
 copies.push(["pi-ui/shared/frame.ts", "pi-ui/ask-question/frame.ts"]);
 copies.push(["pi-ui/shared/tool-tokens.ts", "pi-ui/worker/tool-tokens.ts", [["../../shared/token-estimate.ts", "../../worker/token-estimate.ts"]]]);

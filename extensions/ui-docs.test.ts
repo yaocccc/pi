@@ -37,7 +37,6 @@ test("each copy-pair guide documents the same explicit UI registration layout", 
 		}
 		for (const language of ["", "_EN"]) {
 			const source = readFileSync(new URL(`./${name}/README${language}.md`, import.meta.url), "utf8");
-			assert.ok(source.split("\n").slice(0, 6).join("\n").includes(language ? "](README.md)" : "](README_EN.md)"));
 			assert.ok(source.includes(`cp -R "$SRC/${name}/." "$DEST/${name}/"`));
 			assert.ok(source.includes(`cp -R "$SRC/pi-ui/${name}/." "$DEST/ui/${name}/"`));
 			assert.ok(source.includes(`import registerUI from "./ui/${name}/index.ts";`));

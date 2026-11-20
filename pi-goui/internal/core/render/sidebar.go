@@ -163,38 +163,6 @@ func progressRow(state session.State, theme config.Theme, width int) string {
 	return paint("ctx ", theme.Muted) + bar + strings.Repeat(" ", rightStart-4-cells) + paint(fit(suffix, max(0, width-rightStart)), theme.Text)
 }
 
-func gitRow(g *GitStatus, theme config.Theme, width int) string {
-	changes := []string{}
-	if g.Modified > 0 {
-		changes = append(changes, fmt.Sprintf("M%d", g.Modified))
-	}
-	if g.Staged > 0 {
-		changes = append(changes, fmt.Sprintf("+%d", g.Staged))
-	}
-	if g.Untracked > 0 {
-		changes = append(changes, fmt.Sprintf("?%d", g.Untracked))
-	}
-	if g.Conflicts > 0 {
-		changes = append(changes, fmt.Sprintf("!%d", g.Conflicts))
-	}
-	if g.Truncated {
-		changes = append(changes, "…")
-	}
-	status, color := "clean", theme.Success
-	if len(changes) > 0 {
-		status, color = strings.Join(changes, " "), theme.Warning
-	}
-	if g.Conflicts > 0 {
-		color = theme.Error
-	}
-	branch := oneLine(g.Branch)
-	if branch == "" {
-		branch = "detached"
-	}
-	suffix := " · " + status
-	return fit(paint(fit(branch, max(1, width-ansi.StringWidth(suffix))), theme.Muted)+paint(suffix, color), width)
-}
-
 // SidebarModeValue shares the displayed value and its offset within the inner
 // sidebar row with pointer hit testing. The label and separating space are not
 // part of the target, even when the value needs truncation.

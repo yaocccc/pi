@@ -2,24 +2,11 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import test, { type TestContext } from "node:test";
+import test from "node:test";
 import { DEFAULT_OPTIONS, loadRoutingConfig, resolveRoute, validateConfig, validateTask } from "./config.ts";
 import { PRESETS, THINKING_LEVELS } from "./api.ts";
-import type { RoutingConfig, Thinking, WorkerTask } from "./types.ts";
-
-const settings = (thinking: Thinking = "high"): RoutingConfig => ({
-	...DEFAULT_OPTIONS,
-	fast: { model: "fixture/fast", thinking: "high" },
-	normal: { model: "fixture/normal", thinking: "high" },
-	deep: { model: "fixture/deep", thinking },
-});
-
-const context = (maxThinking = true) => ({
-	modelRegistry: { getAvailable: () => ["fast", "normal", "deep"].map((id) => ({
-		provider: "fixture", id, reasoning: true,
-		thinkingLevelMap: { xhigh: "high", ...(maxThinking ? { max: "max" } : {}) },
-	})) },
-}) as any;
+import type { RoutingConfig, WorkerTask } from "./types.ts";
+import { context, settings, settingsFile } from "./test-helpers.ts";
 
 test("three-tier config requires no max preset and drops legacy max without mutating input", () => {
 	assert.deepEqual(PRESETS, ["fast", "normal", "deep"]);
@@ -29,18 +16,6 @@ test("three-tier config requires no max preset and drops legacy max without muta
 	assert.equal("max" in original, true);
 	assert.deepEqual(validateConfig(settings()).config, settings());
 });
-
-function settingsFile(t: TestContext): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "worker-settings-test-"));
-	const previous = process.env.PI_CODING_AGENT_DIR;
-	t.after(() => {
-		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previous;
-		fs.rmSync(root, { recursive: true, force: true });
-	});
-	process.env.PI_CODING_AGENT_DIR = root;
-	return path.join(root, "worker-settings.json");
-}
 
 test("loadRoutingConfig persists removal of only the legacy top-level max preset", (t) => {
 	const file = settingsFile(t);

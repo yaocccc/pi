@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/render/tooldata"
 	"pi-goui/internal/core/session"
 )
 
@@ -29,7 +30,7 @@ func readDetailRows(item session.Item, theme config.Theme, width int) []string {
 	}
 	var content []string
 	truncated := false
-	source, note := readSource(item.Text, visualMap(item.Details))
+	source, note := tooldata.ReadSource(item.Text, visualMap(item.Details))
 	switch {
 	case item.Error:
 		content = visualWrap(paint("Error: "+Clean(item.Text), theme.Error), width)

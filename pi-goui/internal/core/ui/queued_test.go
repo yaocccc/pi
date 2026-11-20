@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"strings"
@@ -13,59 +12,28 @@ import (
 // A native RPC fixture, not a second implementation of queue merging. The
 // runtime owns clear_queue + prompt sequencing and authoritative queue text.
 func TestQueuedRPCProcess(t *testing.T) {
-	if os.Getenv("PIGOUI_UI_HELPER") != "1" {
-		return
-	}
-	scanner := bufio.NewScanner(os.Stdin)
-	encoder := json.NewEncoder(os.Stdout)
-	for scanner.Scan() {
-		var req map[string]any
-		if json.Unmarshal(scanner.Bytes(), &req) != nil {
-			continue
-		}
-		f, err := os.OpenFile(os.Getenv("PIGOUI_UI_WIRE"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
-		if err != nil {
-			os.Exit(2)
-		}
-		_ = json.NewEncoder(f).Encode(req)
-		_ = f.Close()
-		kind := req["type"]
-		if kind == "prompt" && os.Getenv("GOUI_QUEUE_FAILURE") == "disconnect" {
+	runUIRPCFixture(func(kind string, _ map[string]any) (any, string) {
+		failure := os.Getenv("GOUI_QUEUE_FAILURE")
+		if kind == "prompt" && failure == "disconnect" {
 			os.Exit(0) // Written, but no acknowledgement: never retry in the UI.
 		}
 		data := json.RawMessage(`{}`)
 		if kind == "clear_queue" {
 			data = json.RawMessage(os.Getenv("GOUI_QUEUE_TEXT"))
 		}
-		response := map[string]any{"type": "response", "id": req["id"], "command": kind, "success": true, "data": data}
-		if kind == os.Getenv("GOUI_QUEUE_FAILURE") {
-			response["success"], response["error"] = false, "fake rejection"
+		if kind == failure {
+			return data, "fake rejection"
 		}
-		if encoder.Encode(response) != nil {
-			os.Exit(2)
-		}
-	}
-	os.Exit(0)
+		return data, ""
+	})
 }
 
 func queuedClient(t *testing.T, queue, failure string) (*rpc.Client, string) {
 	t.Helper()
 	t.Setenv("GOUI_QUEUE_TEXT", queue)
 	t.Setenv("GOUI_QUEUE_FAILURE", failure)
-	cfg, wire := fakeConfig(t)
-	wrapper, err := os.ReadFile(cfg.Bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfg.Bin, []byte(strings.Replace(string(wrapper), "TestUIRPCProcess", "TestQueuedRPCProcess", 1)), 0700); err != nil {
-		t.Fatal(err)
-	}
-	client, err := rpc.Start(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	return client, wire
+	cfg, wire := fakeConfigFor(t, "TestQueuedRPCProcess")
+	return startFixtureClient(t, cfg), wire
 }
 
 func TestQueuedSubmissionUsesRuntime(t *testing.T) {

@@ -14,7 +14,7 @@ export default registerWorkerUI;
 export function registerWorkerUI(pi: ExtensionAPI) {
 	registerExtensionRpc(pi);
 	registerFactUI(pi, eventNames, nativeEventNotice);
-	const adapters = new WeakMap<WorkerSessionView, { refresh: WorkerRenderRefresh; dispose(): void }>();
+	const refreshBySession = new WeakMap<WorkerSessionView, WorkerRenderRefresh>();
 	const emptySession: WorkerSessionView = { awaitingHistory: false, closed: true, lookup: () => undefined, history: () => undefined, subscribe: () => () => {} };
 	const service = () => getCapability<WorkerCapability>(pi, WORKER_CAPABILITY);
 	registerRpcMethod(pi, "worker.transcript", (params) => {
@@ -24,24 +24,23 @@ export function registerWorkerUI(pi: ExtensionAPI) {
 	});
 	const getSession = () => {
 		const session = service()?.getSession() ?? emptySession;
-		let adapter = adapters.get(session);
-		if (!adapter) {
-			const refresh = new WorkerRenderRefresh((id) => session.lookup(id), undefined, (id) => session.history(id), session.awaitingHistory);
-			let unsubscribe = () => {};
-			const dispose = () => { refresh.dispose(); unsubscribe(); };
-			adapter = { refresh, dispose };
-			adapters.set(session, adapter);
-			if (session.closed) dispose();
+		let refresh = refreshBySession.get(session);
+		if (!refresh) {
+			const created = new WorkerRenderRefresh((id) => session.lookup(id), undefined, (id) => session.history(id), session.awaitingHistory);
+			refreshBySession.set(session, created);
+			refresh = created;
+			if (session.closed) created.dispose();
 			else {
+				let unsubscribe = () => {};
 				unsubscribe = session.subscribe((change) => {
-					if (change.type === "closed") dispose();
-					else if (change.type === "history") refresh.bindHistory();
-					else if (change.type === "batch") refresh.refreshBatch(change.batchId);
-					else refresh.changed();
+					if (change.type === "closed") { created.dispose(); unsubscribe(); }
+					else if (change.type === "history") created.bindHistory();
+					else if (change.type === "batch") created.refreshBatch(change.batchId);
+					else created.changed();
 				});
 			}
 		}
-		return { lookup: (id: string) => session.lookup(id), history: (id: string) => session.history(id), refresh: adapter.refresh };
+		return { lookup: (id: string) => session.lookup(id), history: (id: string) => session.history(id), refresh };
 	};
 	const renderers = nativeWorkerRenderers(getSession);
 	pi.registerToolRenderer((name, next) => name === "worker" ? renderers : next());

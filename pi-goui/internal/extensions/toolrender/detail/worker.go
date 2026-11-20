@@ -1,7 +1,6 @@
 package detail
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -26,42 +25,21 @@ func WorkerTasks(item session.Item) []WorkerTask {
 	if toolName(item.ToolName) != "worker" {
 		return nil
 	}
-	details := decodeMap(item.Details)
-	args := decodeMap(item.Arguments)
-	root := decodeMap([]byte(item.Text))
-	authoritative := stringField(details, "kind") == "worker-ui"
-	var tasks []any
-	if authoritative {
-		tasks, _ = details["tasks"].([]any)
-	} else {
-		inputs, _ := args["tasks"].([]any)
-		if len(inputs) == 0 {
-			if legacy, ok := args["task"].(map[string]any); ok {
-				inputs = []any{legacy}
+	snapshot := ReadWorkerSnapshot(item)
+	snapshot.ResolveKeys()
+	var out []WorkerTask
+	for _, slot := range snapshot.Tasks {
+		task := slot.Input
+		if !snapshot.Authoritative {
+			task = map[string]any{}
+			for k, v := range slot.Input {
+				task[k] = v
 			}
-		}
-		states, _ := root["tasks"].([]any)
-		result, _ := root["result"].(map[string]any)
-		results, _ := result["results"].([]any)
-		if len(results) == 0 {
-			results, _ = root["results"].([]any)
-		}
-		for i := 0; i < max(len(inputs), len(states), len(results)); i++ {
-			task := map[string]any{}
-			if i < len(inputs) {
-				if a, ok := inputs[i].(map[string]any); ok {
-					task = copyMap(a)
-				}
+			for k, v := range slot.State {
+				task[k] = v
 			}
-			if i < len(states) {
-				if s, ok := states[i].(map[string]any); ok {
-					for k, value := range s {
-						task[k] = value
-					}
-				}
-			}
-			if i < len(results) {
-				task["result"] = results[i]
+			if slot.hasResult {
+				task["result"] = slot.Result
 			}
 			if _, ok := task["status"]; !ok {
 				if item.Running {
@@ -70,34 +48,6 @@ func WorkerTasks(item session.Item) []WorkerTask {
 					task["status"] = "unknown"
 				}
 			}
-			tasks = append(tasks, task)
-		}
-	}
-	batch := stringField(details, "batchId")
-	if !authoritative {
-		batch = stringField(root, "batchId")
-	}
-	var out []WorkerTask
-	counts := map[string]int{}
-	for _, value := range tasks {
-		task, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		key := ""
-		if id := stringField(task, "taskId"); id != "" {
-			key = "id:" + id
-		} else if authoritative {
-			// WorkerUiTask.index is the execution's immutable native index,
-			// unlike its position in a reordered snapshot array.
-			if index, ok := task["index"].(json.Number); ok {
-				if n, err := index.Int64(); err == nil && n >= 0 {
-					key = "index:" + batch + ":" + index.String()
-				}
-			}
-		} else if objective := stringField(task, "objective"); objective != "" {
-			identity, _ := json.Marshal([]string{stringField(task, "mode"), objective, stringField(task, "title")})
-			key = fmt.Sprintf("definition:%x", sha256.Sum256(identity))
 		}
 		title := strings.TrimSpace(stringField(task, "title"))
 		if title == "" {
@@ -112,22 +62,14 @@ func WorkerTasks(item session.Item) []WorkerTask {
 		isolated := map[string]any{"kind": "worker-ui", "tasks": []any{task}}
 		// Only timing shared by the batch is relevant to a task; never copy
 		// payload/text/controlErrors containing other tasks' private results.
-		if now, ok := details["snapshotAt"]; ok {
+		if now, ok := snapshot.Details["snapshotAt"]; ok {
 			isolated["snapshotAt"] = now
 		}
 		raw, _ := json.Marshal(isolated)
 		selected := item
 		selected.Text, selected.Arguments, selected.Details = "", nil, raw
 		selected.Images, selected.Error = nil, false
-		out = append(out, WorkerTask{Key: key, Title: title, Item: selected})
-		if key != "" {
-			counts[key]++
-		}
-	}
-	for i := range out {
-		if counts[out[i].Key] != 1 {
-			out[i].Key = ""
-		}
+		out = append(out, WorkerTask{Key: slot.Key, Title: title, Item: selected})
 	}
 	return out
 }
@@ -176,12 +118,12 @@ func (v *Renderer) workers(details map[string]any) {
 			v.Line(strings.Repeat("─", min(v.Width, 24)), v.Theme.Muted)
 		}
 		status := taskStatus(task)
-		icon, color := taskStatusStyle(status, v.Theme)
+		icon, color := WorkerStatusStyle(status, v.Theme)
 		v.Line(fmt.Sprintf("%s Task %d · %s", icon, i+1, status), color)
 		if task["status"] == status {
 			delete(task, "status")
 		}
-		if duration := taskDuration(task, numberField(details, "snapshotAt")); duration != "" {
+		if duration := taskDuration(task, WorkerNumber(details, "snapshotAt")); duration != "" {
 			v.Line("Duration · "+duration, v.Theme.Muted)
 		}
 		v.Field(task, "title", "◦ Title")
@@ -292,7 +234,7 @@ func (v *Renderer) workerActivity(value any, last bool) {
 	}
 	activity = copyMap(activity)
 	status := stringField(activity, "status")
-	icon, color := taskStatusStyle(status, v.Theme)
+	icon, color := WorkerStatusStyle(status, v.Theme)
 	label := stringField(activity, "label")
 	if status == "" && stringField(activity, "type") == "thinking" {
 		icon, color = "!", v.Theme.Thinking
@@ -380,7 +322,7 @@ func (v *Renderer) workerChecks(result map[string]any, key, label string) {
 		check = copyMap(check)
 		status := stringField(check, "result")
 		if status != "" {
-			icon, color := taskStatusStyle(status, v.Theme)
+			icon, color := WorkerStatusStyle(status, v.Theme)
 			v.Line(icon+" "+status, color)
 			delete(check, "result")
 		}
@@ -397,7 +339,7 @@ func (v *Renderer) workerChecks(result map[string]any, key, label string) {
 	delete(result, key)
 }
 
-func taskStatusStyle(status string, theme config.Theme) (string, string) {
+func WorkerStatusStyle(status string, theme config.Theme) (string, string) {
 	switch status {
 	case "completed", "passed":
 		return "✓", theme.Success
@@ -415,7 +357,7 @@ func taskStatusStyle(status string, theme config.Theme) (string, string) {
 		return "?", theme.Muted
 	}
 }
-func numberField(m map[string]any, key string) float64 {
+func WorkerNumber(m map[string]any, key string) float64 {
 	if m[key] == nil {
 		return 0
 	}
@@ -426,14 +368,17 @@ func numberField(m map[string]any, key string) float64 {
 	return n
 }
 func taskDuration(task map[string]any, now float64) string {
-	end := numberField(task, "finishedAt")
+	return FormatWorkerDuration(WorkerNumber(task, "startedAt"), WorkerNumber(task, "finishedAt"), now)
+}
+
+func FormatWorkerDuration(start, end, now float64) string {
 	if end == 0 {
 		end = now
 	}
-	if numberField(task, "startedAt") <= 0 || end < numberField(task, "startedAt") || end <= 0 {
+	if start <= 0 || end < start || end <= 0 {
 		return ""
 	}
-	seconds := int(math.Round((end - numberField(task, "startedAt")) / 1000))
+	seconds := int(math.Round((end - start) / 1000))
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", seconds)
 	}

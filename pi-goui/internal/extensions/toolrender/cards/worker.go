@@ -2,8 +2,6 @@ package cards
 
 import (
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -17,6 +15,7 @@ import (
 // Worker cards consume saved WorkerUiDetails, never the extension's live registry.
 // A captured snapshot time freezes historical durations; missing metrics stay absent.
 type WorkerCard struct {
+	inspectKey                                                                   string
 	Index                                                                        int
 	Mode, Title, Objective, Status, Preset, Model, SessionMode, Phase, PhaseCode string
 	Started, Finished                                                            float64
@@ -35,16 +34,9 @@ type WorkerView struct {
 
 func workerMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
 func workerArray(v any) []any        { a, _ := v.([]any); return a }
-func workerNumber(m map[string]any, key string) float64 {
-	if m[key] == nil {
-		return 0
-	}
-	n, _ := strconv.ParseFloat(fmt.Sprint(m[key]), 64)
-	if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
-		return 0
-	}
-	return n
-}
+
+var workerNumber = detailview.WorkerNumber
+
 func workerFirst(values ...string) string {
 	for _, s := range values {
 		if s != "" {
@@ -69,10 +61,13 @@ func (r *Renderer) WorkerCardFrom(m map[string]any, position int) WorkerCard {
 	return c
 }
 func (r *Renderer) WorkerData(item session.Item) WorkerView {
-	args := r.Map(item.Arguments)
-	details := r.Map(item.Details)
+	return r.workerData(item, detailview.ReadWorkerSnapshot(item))
+}
+
+func (r *Renderer) workerData(item session.Item, snapshot detailview.WorkerSnapshot) WorkerView {
+	args, details := snapshot.Args, snapshot.Details
 	v := WorkerView{Batch: workerFirst(r.String(details, "batchId"), r.String(args, "batchId")), Status: r.String(details, "status")}
-	if r.String(details, "kind") == "worker-ui" {
+	if snapshot.Authoritative {
 		// Do not decode content at all when authoritative UI details are available.
 		v.Authoritative = true
 		v.Result = workerMap(details["payload"])
@@ -81,10 +76,10 @@ func (r *Renderer) WorkerData(item session.Item) WorkerView {
 		if v.Now == 0 {
 			v.Now = workerNumber(details, "finishedAt")
 		}
-		for i, value := range workerArray(details["tasks"]) {
-			if m := workerMap(value); m != nil {
-				v.Cards = append(v.Cards, r.WorkerCardFrom(m, i))
-			}
+		for _, slot := range snapshot.Tasks {
+			c := r.WorkerCardFrom(slot.Input, slot.Position)
+			c.inspectKey = slot.Key
+			v.Cards = append(v.Cards, c)
 		}
 		for _, value := range workerArray(details["controlErrors"]) {
 			if s := r.String(workerMap(value), "message"); s != "" {
@@ -93,38 +88,17 @@ func (r *Renderer) WorkerData(item session.Item) WorkerView {
 		}
 		return v
 	}
-	root := r.Map([]byte(item.Text))
+	root := snapshot.Root
 	v.Result = root
 	v.Status = workerFirst(v.Status, r.String(root, "status"))
 	v.Batch = workerFirst(v.Batch, r.String(root, "batchId"))
 	if root == nil {
 		v.Text = item.Text
 	}
-	taskArgs := workerArray(args["tasks"])
-	if len(taskArgs) == 0 {
-		if legacy := workerMap(args["task"]); legacy != nil {
-			taskArgs = []any{legacy}
-		}
-	}
-	tasks := workerArray(root["tasks"])
-	result := workerMap(root["result"])
-	results := workerArray(result["results"])
-	if len(results) == 0 {
-		results = workerArray(root["results"])
-	}
-	count := max(len(taskArgs), len(tasks), len(results))
-	for i := 0; i < count; i++ {
-		var a, state, res map[string]any
-		if i < len(taskArgs) {
-			a = workerMap(taskArgs[i])
-		}
-		if i < len(tasks) {
-			state = workerMap(tasks[i])
-		}
-		if i < len(results) {
-			res = workerMap(results[i])
-		}
-		c := r.WorkerCardFrom(a, i)
+	for _, slot := range snapshot.Tasks {
+		state, res := slot.State, workerMap(slot.Result)
+		c := r.WorkerCardFrom(slot.Input, slot.Position)
+		c.inspectKey = slot.Key
 		c.Result = res
 		c.Status = workerFirst(r.String(res, "status"), r.String(state, "status"), v.Status)
 		if c.Status == "" {
@@ -145,24 +119,9 @@ func (r *Renderer) WorkerData(item session.Item) WorkerView {
 	}
 	return v
 }
-func workerStatus(status string, theme config.Theme) (string, string) {
-	switch status {
-	case "completed", "passed":
-		return "✓", theme.Success
-	case "running", "cancelling":
-		return "⋯", theme.Warning
-	case "blocked":
-		return "!", theme.Warning
-	case "failed":
-		return "✗", theme.Error
-	case "cancelled", "canceled":
-		return "■", theme.Muted
-	case "queued":
-		return "○", theme.Muted
-	default:
-		return "?", theme.Muted
-	}
-}
+
+var workerStatus = detailview.WorkerStatusStyle
+
 func (v WorkerView) overall(item session.Item) string {
 	if item.Error {
 		return "failed"
@@ -214,18 +173,7 @@ func (r *Renderer) WorkerHeader(item session.Item, v WorkerView, expanded bool, 
 	return r.Badge(header, r.Tokens(item.EstimatedTokens, theme), width, 24, false)
 }
 func WorkerDuration(c WorkerCard, now float64) string {
-	end := c.Finished
-	if end == 0 {
-		end = now
-	}
-	if c.Started <= 0 || end < c.Started || end <= 0 {
-		return ""
-	}
-	seconds := int(math.Round((end - c.Started) / 1000))
-	if seconds < 60 {
-		return fmt.Sprintf("%ds", seconds)
-	}
-	return fmt.Sprintf("%dm%ds", seconds/60, seconds%60)
+	return detailview.FormatWorkerDuration(c.Started, c.Finished, now)
 }
 func workerTokens(n float64) string {
 	if n >= 1e6 {
@@ -271,8 +219,11 @@ func WorkerSlotNotice(code string) bool {
 }
 
 func (r *Renderer) WorkerDetailRows(item session.Item, theme config.Theme, _ Options, width int) ([]string, []Block) {
+	return r.workerDetailRows(item, theme, width, r.WorkerData(item))
+}
+
+func (r *Renderer) workerDetailRows(item session.Item, theme config.Theme, width int, v WorkerView) ([]string, []Block) {
 	width = max(1, width)
-	v := r.WorkerData(item)
 	var rows []string
 	var blocks []Block
 	var separators []int
@@ -368,7 +319,11 @@ func (r *Renderer) WorkerDetailRows(item session.Item, theme config.Theme, _ Opt
 			}, theme)
 			section("", theme.Muted, progress)
 		}
-		blocks = append(blocks, Block{ID: WorkerTaskID(item, c.Index, i), Role: "workerTask", MessageIndex: item.MessageIndex, Start: start, End: len(rows), Expanded: true})
+		block := Block{ID: WorkerTaskID(item, c.Index, i), Role: "workerTask", MessageIndex: item.MessageIndex, Start: start, End: len(rows), Expanded: true}
+		if c.inspectKey != "" {
+			block.InspectorParent, block.InspectorTask = item.ID, c.inspectKey
+		}
+		blocks = append(blocks, block)
 	}
 	if len(v.Cards) == 0 || v.Result["summary"] != nil || v.Result["error"] != nil || v.Result["validation_errors"] != nil {
 		workerResult(v.Result, line, theme)
@@ -433,7 +388,11 @@ func workerResult(result map[string]any, line func(string, string), theme config
 func (r *Renderer) WorkerLayout(item session.Item, theme config.Theme, opts Options, width int) ([]string, []Block) {
 	width = max(1, width)
 	expanded := r.Expanded(item.ID, opts)
-	v := r.WorkerData(item)
+	snapshot := detailview.ReadWorkerSnapshot(item)
+	if expanded {
+		snapshot.ResolveKeys()
+	}
+	v := r.workerData(item, snapshot)
 	rows := []string{r.WorkerHeader(item, v, expanded, theme, width)}
 	blocks := []Block{{ID: item.ID, Role: item.Role, MessageIndex: item.MessageIndex, Start: 0, End: 1, Foldable: true, Expanded: expanded}}
 	if !expanded {
@@ -445,7 +404,7 @@ func (r *Renderer) WorkerLayout(item session.Item, theme config.Theme, opts Opti
 		contentWidth = width - 4
 		offset++
 	}
-	detail, children := r.WorkerDetailRows(item, theme, opts, contentWidth)
+	detail, children := r.workerDetailRows(item, theme, contentWidth, v)
 	if width >= 8 {
 		title := "worker"
 		var cardWidth int
@@ -454,11 +413,7 @@ func (r *Renderer) WorkerLayout(item session.Item, theme config.Theme, opts Opti
 	}
 	rows = append(rows, detail...)
 	blocks[0].End = len(rows)
-	tasks := detailview.WorkerTasks(item)
-	for i, b := range children {
-		if i < len(tasks) && tasks[i].Key != "" {
-			b.InspectorParent, b.InspectorTask = item.ID, tasks[i].Key
-		}
+	for _, b := range children {
 		b.Start += offset
 		b.End += offset
 		blocks = append(blocks, b)

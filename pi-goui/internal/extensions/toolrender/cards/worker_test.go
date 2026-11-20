@@ -7,6 +7,7 @@ import (
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions/toolrender"
 	"pi-goui/internal/extensions/toolrender/cards"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -128,6 +129,24 @@ func TestWorkerStepsInterleaveToolsAndThinking(t *testing.T) {
 	}
 	if len(blocks) != 1 || blocks[0].Foldable || !blocks[0].Expanded {
 		t.Fatalf("task can fold: %+v", blocks)
+	}
+}
+
+func TestWorkerInspectorKeysFollowVisibleCards(t *testing.T) {
+	item := session.Item{ID: "w", Role: "tool", ToolName: "worker", Details: json.RawMessage(`{"kind":"worker-ui","batchId":"b","tasks":[{"index":7},null,{"taskId":"dup"},{"taskId":"dup"},{"index":1}]}`)}
+	doc := render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, Expanded: map[string]bool{"tool-group:w": true, "w": true}})
+	var keys []string
+	for _, b := range doc.Blocks {
+		if b.Role == "workerTask" {
+			if (b.InspectorParent == item.ID) != (b.InspectorTask != "") {
+				t.Fatalf("unexpected parent: %+v", b)
+			}
+			keys = append(keys, b.InspectorTask)
+		}
+	}
+	want := []string{"index:b:7", "", "", "index:b:1"}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("card keys = %q, want %q", keys, want)
 	}
 }
 

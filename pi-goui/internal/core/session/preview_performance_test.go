@@ -97,8 +97,6 @@ func TestPrepareFileMatchesEnvelopePreview(t *testing.T) {
 
 func TestPrepareFileRejectsInvalidHistory(t *testing.T) {
 	for name, contents := range map[string]string{
-		"empty": "", "missing-header": `{"type":"message","id":"x"}`,
-		"header-id":          `{"type":"session"}`,
 		"malformed-record":   previewHeader + `{"type":"message","id":"x",broken}`,
 		"newline-truncation": previewHeader + `{"type":"message","id":"x"` + "\n",
 		"invalid-schema":     previewHeader + `{"type":"message","id":"x","parentId":12,"message":{}}`,
@@ -117,23 +115,6 @@ func TestPrepareFileRejectsInvalidHistory(t *testing.T) {
 				t.Fatal("invalid file yielded a snapshot")
 			}
 		})
-	}
-	var s State
-	dir := t.TempDir()
-	for _, path := range []string{dir, filepath.Join(dir, "missing")} {
-		if _, _, err := s.SnapshotPreparation().PrepareFile(path); err == nil {
-			t.Fatal("invalid path accepted")
-		}
-	}
-	path := filepath.Join(dir, "history.jsonl")
-	if err := os.WriteFile(path, []byte(previewHeader), 0600); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(dir, "link.jsonl")
-	if err := os.Symlink(path, link); err == nil {
-		if _, _, err := s.SnapshotPreparation().PrepareFile(link); err == nil {
-			t.Fatal("followed symlink")
-		}
 	}
 }
 

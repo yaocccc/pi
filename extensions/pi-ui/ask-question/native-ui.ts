@@ -15,10 +15,6 @@ const padToWidth = (text: string, width: number): string => {
     return truncated + ' '.repeat(Math.max(0, safeWidth - visibleWidth(truncated)));
 };
 
-const addQuestionHeading = (lines: string[], width: number, heading: string): void => {
-    for (const line of wrapTextWithAnsi(heading, width)) lines.push(padToWidth(line, width));
-};
-
 // Both entry forms share selection, custom input and rendering. Only questionnaires
 // expose navigation and require a final review; a single question submits immediately.
 export const showQuestions = (questions: AskQuestionInput[], review: boolean, ctx: ExtensionContext, signal?: AbortSignal) =>
@@ -26,8 +22,7 @@ export const showQuestions = (questions: AskQuestionInput[], review: boolean, ct
         let currentTab = 0;
         let inputMode = false;
         let warning: string | undefined;
-        let cachedLines: string[] | undefined;
-        let cachedWidth: number | undefined;
+        let cache: { width: number; lines: string[] } | undefined;
         const selectedIndices = questions.map(() => 0);
         const checked = questions.map(() => new Set<number>());
         const customAnswers = questions.map(() => [] as string[]);
@@ -46,8 +41,7 @@ export const showQuestions = (questions: AskQuestionInput[], review: boolean, ct
         const editor = new Editor(tui, editorTheme);
 
         const refresh = () => {
-            cachedLines = undefined;
-            cachedWidth = undefined;
+            cache = undefined;
             tui.requestRender();
         };
         const isSubmitTab = () => currentTab === questions.length;
@@ -68,7 +62,7 @@ export const showQuestions = (questions: AskQuestionInput[], review: boolean, ct
                 done({ answers, cancelled: false });
                 return;
             }
-            currentTab = currentTab < questions.length - 1 ? currentTab + 1 : questions.length;
+            currentTab++;
             warning = undefined;
             refresh();
         };
@@ -158,43 +152,31 @@ export const showQuestions = (questions: AskQuestionInput[], review: boolean, ct
             const question = currentQuestion()!;
             const options = displayOptions(currentTab);
             const selectedIndex = selectedIndices[currentTab]!;
-            if (matchesKey(data, Key.up)) {
-                selectedIndices[currentTab] = Math.max(0, selectedIndex - 1);
-                warning = undefined;
-                refresh();
-                return;
-            }
-            if (matchesKey(data, Key.down)) {
-                selectedIndices[currentTab] = Math.min(options.length - 1, selectedIndex + 1);
+            const move = matchesKey(data, Key.up) ? -1 : matchesKey(data, Key.down) ? 1 : 0;
+            if (move) {
+                selectedIndices[currentTab] = Math.max(0, Math.min(options.length - 1, selectedIndex + move));
                 warning = undefined;
                 refresh();
                 return;
             }
             const option = options[selectedIndex];
-            if (question.multiSelect && matchesKey(data, Key.space)) {
-                if (option?.isCustom) openCustomInput();
-                else if (option) {
-                    if (checked[currentTab]!.has(selectedIndex)) checked[currentTab]!.delete(selectedIndex);
-                    else checked[currentTab]!.add(selectedIndex);
-                    answers[currentTab] = undefined;
-                    warning = undefined;
-                    refresh();
-                }
-                return;
-            }
-            if (matchesKey(data, Key.enter) || (!question.multiSelect && matchesKey(data, Key.space))) {
-                if (option?.isCustom) {
-                    openCustomInput();
-                } else if (option) {
-                    if (question.multiSelect) saveMulti();
-                    else saveSingle(option.label, false);
-                }
+            const space = matchesKey(data, Key.space);
+            if (!option || !(space || matchesKey(data, Key.enter))) return;
+            if (option.isCustom) openCustomInput();
+            else if (!question.multiSelect) saveSingle(option.label, false);
+            else if (!space) saveMulti();
+            else {
+                const choices = checked[currentTab]!;
+                if (!choices.delete(selectedIndex)) choices.add(selectedIndex);
+                answers[currentTab] = undefined;
+                warning = undefined;
+                refresh();
             }
         };
 
         const addLine = (lines: string[], width: number, text = '') => lines.push(padToWidth(text, width));
         const render = (outerWidth: number): string[] => {
-            if (cachedLines && cachedWidth === outerWidth) return cachedLines;
+            if (cache?.width === outerWidth) return cache.lines;
             if (outerWidth < 1) return [];
             const framed = outerWidth >= 3;
             const width = framed ? outerWidth - 2 : outerWidth;
@@ -230,7 +212,8 @@ export const showQuestions = (questions: AskQuestionInput[], review: boolean, ct
                 const question = currentQuestion()!;
                 const options = displayOptions(currentTab);
                 const selectedIndex = selectedIndices[currentTab]!;
-                addQuestionHeading(lines, width, theme.fg('accent', ` ${review ? labelFor(currentTab) : '？'}`) + theme.fg('text', ` ${question.question}`));
+                const heading = theme.fg('accent', ` ${review ? labelFor(currentTab) : '？'}`) + theme.fg('text', ` ${question.question}`);
+                for (const line of wrapTextWithAnsi(heading, width)) addLine(lines, width, line);
                 if (question.multiSelect) addLine(lines, width, theme.fg('dim', ` 多选模式：已选 ${selectedValues(currentTab).length} 项`));
                 addLine(lines, width);
                 for (let index = 0; index < options.length; index++) {
@@ -274,20 +257,20 @@ export const showQuestions = (questions: AskQuestionInput[], review: boolean, ct
             }
             addLine(lines, width, theme.fg('dim', help));
             const border = (text: string, edge: Parameters<typeof frameBorder>[1]) => frameBorder(text, edge, 'input');
-            cachedWidth = outerWidth;
-            cachedLines = framed ? [
+            const rendered = framed ? [
                 border('╭', 'topLeft') + border('─'.repeat(width), 'top') + border('╮', 'topRight'),
                 ...lines.map(line => border('│', 'left') + line + border('│', 'right')),
                 border('╰', 'bottomLeft') + border('─'.repeat(width), 'bottom') + border('╯', 'bottomRight'),
             ] : lines;
-            return cachedLines;
+            cache = { width: outerWidth, lines: rendered };
+            return rendered;
         };
 
         return {
             get focused() { return editor.focused; },
-            set focused(value: boolean) { editor.focused = value; cachedLines = undefined; },
+            set focused(value: boolean) { editor.focused = value; cache = undefined; },
             render,
-            invalidate: () => { cachedLines = undefined; cachedWidth = undefined; editor.invalidate(); },
+            invalidate: () => { cache = undefined; editor.invalidate(); },
             handleInput,
         };
     });
@@ -344,9 +327,7 @@ export const nativeRenderers: ToolRenderers = {
                 const lines = details.answer.map((answer) => `${theme.fg('success', '✓ ')}${theme.fg('accent', answer)}`);
                 return new Text(lines.join('\n'), 0, 0);
             }
-            if (details.wasCustom) {
-                return new Text(theme.fg('success', '✓ ') + theme.fg('muted', '自己输入：') + theme.fg('accent', details.answer), 0, 0);
-            }
-            return new Text(theme.fg('success', '✓ ') + theme.fg('accent', details.answer), 0, 0);
+            const custom = details.wasCustom ? theme.fg('muted', '自己输入：') : '';
+            return new Text(theme.fg('success', '✓ ') + custom + theme.fg('accent', details.answer), 0, 0);
         },
 };

@@ -1,4 +1,4 @@
-import { estimateToolTokens } from './token-estimate.ts';
+import { createWorkerEventProgress } from "./event-progress.ts";
 import { WorkerEventLines } from "./event-lines.ts";
 import { WorkerTranscriptWriter } from "./transcript.ts";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -9,13 +9,13 @@ import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { estimateTokens, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildTaskPrompt, workerPromptBody } from "./prompt.ts";
 import { resolveRoute, resolveTaskCwd } from "./config.ts";
 import { WORKER_ALLOWED_PATHS_ENV, WORKER_CWD_ENV, WORKER_FORBIDDEN_PATHS_ENV, WORKER_MODE_ENV } from "./guard.ts";
 import { attributeChangedFiles, changedSince, killProcessTree, processGroupActive, snapshotWorkspace } from "./security.ts";
-import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerPhaseCode, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkerUsage, WorkspaceSnapshot } from "./types";
-import { addWorkerUsage, appendUiActivity, createThinkingActivityRecorder, emptyWorkerUsage, estimateMessageTokens, messageUsage, summarizeToolArgs, summarizeToolResult, uiSnippet } from "./data.ts";
+import type { ChildProgress, ChildResult, Route, RoutingConfig, WorkerPhaseCode, WorkerTask, WorkerUiActivity, WorkerUiActivityStatus, WorkerUiTask, WorkspaceSnapshot } from "./types";
+import { appendUiActivity } from "./data.ts";
 
 export interface WorkerOwner {
 	readonly id: string;
@@ -122,34 +122,15 @@ export async function runPiWorker(
 ): Promise<ChildResult> {
 	const owner = control?.owner ?? defaultOwner;
 	const activities: WorkerUiActivity[] = [];
-	const seenToolIds = new Set<string>();
-	// Keep only counts, not potentially large or sensitive raw arguments.
-	const toolArgumentTokens = new Map<string, number>();
-	const recordToolArgs = (id: string, args: unknown) => {
-		if (args !== undefined) toolArgumentTokens.set(id, estimateToolTokens(args, { content: [] }));
-	};
-	const toolTokens = (id: string, result: any): number | undefined => Array.isArray(result?.content)
-		? (toolArgumentTokens.get(id) ?? 0) + estimateTokens({ ...result, role: 'toolResult' })
-		: undefined;
 	let transcript: WorkerTranscriptWriter | undefined;
 	let phase = "等待执行槽位";
 	let phaseCode: WorkerPhaseCode = "waiting_slot";
-	let toolCalls = 0;
 	let lastEmitAt = 0;
-	let settledUsage = emptyWorkerUsage();
-	let streamUsage = emptyWorkerUsage();
-	let currentTurn = 1;
-	let activeTurn = true;
-	const usageSnapshot = (): WorkerUsage => {
-		const usage = addWorkerUsage(settledUsage, streamUsage);
-		usage.turns = Math.max(settledUsage.turns, activeTurn ? currentTurn : 0);
-		return usage;
-	};
 	const emit = (force = false) => {
 		const now = Date.now();
 		if (!force && now - lastEmitAt < 150) return;
 		lastEmitAt = now;
-		present(() => onProgress?.({ phase, phaseCode, activities: activities.map((item) => ({ ...item })), toolCalls, usage: usageSnapshot(), actualModel: undefined, transcript: transcript ? { ...transcript.descriptor } : undefined }));
+		present(() => onProgress?.({ phase, phaseCode, activities: activities.map((item) => ({ ...item })), ...eventProgress.snapshot(), actualModel: undefined, transcript: transcript ? { ...transcript.descriptor } : undefined }));
 	};
 	const setPhase = (code: WorkerPhaseCode, value: string, status: WorkerUiActivityStatus = "running") => {
 		phase = value;
@@ -160,25 +141,18 @@ export async function runPiWorker(
 		appendUiActivity(activities, { id: `phase:${code}`, type: "phase", phaseCode: code, status, label: value, at: Date.now() });
 		emit(true);
 	};
-	const upsertTool = (id: string, name: string, status: WorkerUiActivityStatus, detail?: string, contextSizeEstimate?: number) => {
-		if (!seenToolIds.has(id)) {
-			seenToolIds.add(id);
-			toolCalls++;
-		}
-		const activityId = `tool:${id}`;
-		const previous = activities.find((item) => item.id === activityId);
-		appendUiActivity(activities, {
-			id: activityId,
-			type: "tool",
-			status,
-			label: uiSnippet(name, 32) || "未知工具",
-			detail: detail || previous?.detail,
-			contextSizeEstimate: contextSizeEstimate ?? previous?.contextSizeEstimate,
-			at: Date.now(),
-		});
-		emit(status !== "running");
-	};
-	const recordThinking = createThinkingActivityRecorder(activities, () => emit());
+	const eventProgress = createWorkerEventProgress(activities, emit);
+
+	function stoppedBeforeLaunch(stage: "slot" | "spawn", source: string, errorMessage: string): ChildResult {
+		const timedOut = source === "task_timeout" || source === "slot_timeout";
+		const timeoutLabel = stage === "slot" ? "等待执行槽位超时" : "已超时";
+		setPhase(timedOut ? "timed_out" : "cancelled", timedOut ? timeoutLabel : "已取消", "failed");
+		return {
+			exitCode: 1, stderr: "", assistantText: "", errorMessage, aborted: !timedOut, timedOut,
+			termination: { stage, code: source, source, parentPid: process.pid, ownerId: owner.id },
+			truncated: false, activities: activities.map(item => ({ ...item })), ...eventProgress.snapshot(),
+		};
+	}
 
 	emit(true);
 	const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-worker-"));
@@ -195,29 +169,12 @@ export async function runPiWorker(
 			release = await acquireSlot(concurrencyLimit, signal, timeoutMs, owner);
 		} catch (error) {
 			const source = signal?.aborted ? terminationSource(signal) : owner.closed ? "owner_shutdown" : "slot_timeout";
-			const timedOut = source === "task_timeout" || source === "slot_timeout";
-			const aborted = !timedOut;
-			const message = `${error instanceof Error ? error.message : String(error)} [stage=slot source=${source} parent=${process.pid} owner=${owner.id}]`;
-			setPhase(aborted ? "cancelled" : "timed_out", aborted ? "已取消" : "等待执行槽位超时", "failed");
-			return {
-				exitCode: 1,
-				stderr: "",
-				assistantText: "",
-				errorMessage: message,
-				aborted,
-				timedOut,
-				termination: { stage: "slot", code: source, source, parentPid: process.pid, ownerId: owner.id },
-				truncated: false,
-				activities: activities.map((item) => ({ ...item })),
-				toolCalls,
-				usage: usageSnapshot(),
-			};
+			return stoppedBeforeLaunch("slot", source, `${error instanceof Error ? error.message : String(error)} [stage=slot source=${source} parent=${process.pid} owner=${owner.id}]`);
 		}
 		// Shutdown can run between slot acquisition and this continuation.
 		if (owner.closed || signal?.aborted) {
 			const source = signal?.aborted ? terminationSource(signal) : "owner_shutdown";
-			setPhase(source === "task_timeout" ? "timed_out" : "cancelled", source === "task_timeout" ? "已超时" : "已取消", "failed");
-			return { exitCode: 1, stderr: "", assistantText: "", errorMessage: `Worker 启动前已终止 [source=${source} parent=${process.pid} owner=${owner.id}]`, aborted: source !== "task_timeout", timedOut: source === "task_timeout", termination: { stage: "spawn", code: source, source, parentPid: process.pid, ownerId: owner.id }, truncated: false, activities, toolCalls, usage: usageSnapshot() };
+			return stoppedBeforeLaunch("spawn", source, `Worker 启动前已终止 [source=${source} parent=${process.pid} owner=${owner.id}]`);
 		}
 		setPhase("slot_acquired", "已获得槽位");
 		transcript = new WorkerTranscriptWriter({ cwd, prompt, root: control?.transcriptRoot });
@@ -232,11 +189,8 @@ export async function runPiWorker(
 			let stopReason: string | undefined;
 			let errorMessage: string | undefined;
 			let truncated = false;
-			let aborted = false;
-			let timedOut = false;
+			let stop: "cleanup" | "cancelled" | "timed_out" | "output" | undefined;
 			let settled = false;
-			let terminating = false;
-			let cleaningDescendants = false;
 			let stdoutBytes = 0;
 			let forceKillTimer: NodeJS.Timeout | undefined;
 			let forceSettleTimer: NodeJS.Timeout | undefined;
@@ -270,18 +224,18 @@ export async function runPiWorker(
 				if (groupCheckTimer) clearTimeout(groupCheckTimer);
 				signal?.removeEventListener("abort", abortHandler);
 				if (childClosed) forgetChild(owner, child);
-				transcript?.finish(timedOut ? "timed_out" : aborted ? "cancelled" : exitCode !== 0 || errorMessage ? "failed" : "completed");
-				phase = aborted ? "已取消" : timedOut ? "已超时" : exitCode === 0 ? "子进程已完成" : "子进程失败";
-				phaseCode = aborted ? "cancelled" : timedOut ? "timed_out" : exitCode === 0 ? "completed" : "failed";
+				const aborted = stop === "cancelled", timedOut = stop === "timed_out";
+				const outcome = aborted ? "cancelled" : timedOut ? "timed_out" : exitCode === 0 ? "completed" : "failed";
+				transcript?.finish(outcome === "completed" && errorMessage ? "failed" : outcome);
+				phaseCode = outcome;
+				phase = { cancelled: "已取消", timed_out: "已超时", completed: "子进程已完成", failed: "子进程失败" }[outcome];
 				for (const activity of activities) {
 					if (activity.status !== "running") continue;
-					activity.status = activity.type === "tool" && (exitCode !== 0 || aborted || timedOut) ? "failed" : "completed";
+					activity.status = activity.type === "tool" && outcome !== "completed" ? "failed" : "completed";
 				}
-				appendUiActivity(activities, { id: "phase:finished", type: "phase", phaseCode, status: exitCode === 0 && !aborted && !timedOut ? "completed" : "failed", label: phase, detail: errorMessage, at: Date.now() });
+				appendUiActivity(activities, { id: "phase:finished", type: "phase", phaseCode, status: outcome === "completed" ? "completed" : "failed", label: phase, detail: errorMessage, at: Date.now() });
 				emit(true);
-				const usage = usageSnapshot();
-				usage.turns = Math.max(usage.turns, settledUsage.turns);
-				resolve({ transcript: transcript ? { ...transcript.descriptor } : undefined, exitCode, stderr: stderr.slice(-16_384), assistantText, actualProvider, actualModel, stopReason, errorMessage, termination: diagnostic, aborted, timedOut, truncated, activities: activities.map((item) => ({ ...item })), toolCalls, usage });
+				resolve({ transcript: transcript ? { ...transcript.descriptor } : undefined, exitCode, stderr: stderr.slice(-16_384), assistantText, actualProvider, actualModel, stopReason, errorMessage, termination: diagnostic, aborted, timedOut, truncated, activities: activities.map((item) => ({ ...item })), ...eventProgress.snapshot() });
 			};
 			const checkClosedGroup = () => {
 				if (settled || closedCode === undefined) return;
@@ -294,21 +248,26 @@ export async function runPiWorker(
 				// Keep the cleanup alive even when the group leader closed all its pipes.
 			};
 			const terminate = (reason: "abort" | "timeout" | "output" | "owner_shutdown" | "cleanup") => {
-				if (settled || (terminating && !cleaningDescendants)) return;
-				const alreadyTerminating = terminating;
-				terminating = true;
-				if (reason === "output") transcript?.incomplete("protocol_error");
-				cleaningDescendants = reason === "cleanup";
-				if (!cleaningDescendants) {
-					const source = reason === "abort" ? terminationSource(signal) : reason;
+				if (settled || (stop && stop !== "cleanup")) return;
+				const alreadyCleaning = stop === "cleanup";
+				const source = reason === "abort" ? terminationSource(signal) : reason;
+				if (reason === "cleanup") stop = "cleanup";
+				else {
+					stop = reason === "output" ? "output" : reason === "timeout" || source === "task_timeout" ? "timed_out" : "cancelled";
+					if (reason === "output") transcript?.incomplete("protocol_error");
 					diagnostic ??= { stage: "process", code: source, source, parentPid: process.pid, workerPid: child.pid, ownerId: owner.id };
-					aborted = (reason === "abort" && source !== "task_timeout") || reason === "owner_shutdown";
-					timedOut = reason === "timeout" || source === "task_timeout";
 					errorMessage ||= `Worker 已终止 [source=${source} parent=${process.pid} worker=${child.pid ?? "unknown"} owner=${owner.id}]`;
 				}
-				const terminatingPhase = () => setPhase(cleaningDescendants ? "cleanup" : aborted ? "cancelling" : timedOut ? "terminating_timeout" : "terminating_output", cleaningDescendants ? "清理子进程" : aborted ? "正在取消" : timedOut ? "正在终止超时任务" : "正在终止超限输出", cleaningDescendants ? "running" : "failed");
+				const reportStop = () => {
+					switch (stop) {
+						case "cleanup": return setPhase("cleanup", "清理子进程");
+						case "cancelled": return setPhase("cancelling", "正在取消", "failed");
+						case "timed_out": return setPhase("terminating_timeout", "正在终止超时任务", "failed");
+						case "output": return setPhase("terminating_output", "正在终止超限输出", "failed");
+					}
+				};
 				// A cancellation during normal cleanup changes the result, not its fixed grace.
-				if (alreadyTerminating) { terminatingPhase(); return; }
+				if (alreadyCleaning) { reportStop(); return; }
 				killProcessTree(child, "SIGTERM");
 				forceKillTimer = setTimeout(() => {
 					if (settled) return;
@@ -324,7 +283,7 @@ export async function runPiWorker(
 				}, WORKER_TERMINATE_GRACE_MS);
 				forceKillTimer.unref();
 				// Install cleanup before notifying presentation code (including reentrancy).
-				terminatingPhase();
+				reportStop();
 			};
 			const abortHandler = () => terminate("abort");
 			owner.stops.set(child, () => terminate("owner_shutdown"));
@@ -335,65 +294,14 @@ export async function runPiWorker(
 			const processEvent = (event: any) => {
 				if (!event || typeof event !== "object" || typeof event.type !== "string") { transcript?.incomplete("protocol_error"); return; }
 				transcript?.record(event);
-				recordThinking(event);
-				if (event.type === "turn_start") {
-					currentTurn = Math.max(currentTurn, Number(event.turnIndex) + 1 || settledUsage.turns + 1);
-					activeTurn = true;
-					emit(true);
-					return;
-				}
-				if (event.type === "message_update") {
-					if (event.message?.role === "assistant") {
-						streamUsage = messageUsage(event.message);
-						streamUsage.output = Math.max(streamUsage.output, estimateMessageTokens(event.message));
-						activeTurn = true;
-					}
-					const thinking = activities.find((item) => item.type === "thinking" && item.status === "running");
-					if (thinking?.detail) streamUsage.output = Math.max(streamUsage.output, Math.ceil(thinking.detail.length / 4));
-					emit();
-					return;
-				}
 				if (event.type === "message_end" && event.message?.role === "assistant") {
 					assistantText = extractText(event.message) || assistantText;
 					actualProvider = event.message.provider || actualProvider;
 					actualModel = event.message.model || actualModel;
 					stopReason = event.message.stopReason || stopReason;
 					errorMessage ||= event.message.errorMessage;
-					const reported = messageUsage(event.message, 1);
-					if (!reported.input) reported.input = streamUsage.input;
-					// Match main-session output: explicit usage (even zero) is authoritative.
-					if (event.message.usage == null) reported.output = Math.max(streamUsage.output, estimateMessageTokens(event.message));
-					if (!reported.cacheRead) reported.cacheRead = streamUsage.cacheRead;
-					if (!reported.cacheWrite) reported.cacheWrite = streamUsage.cacheWrite;
-					if (!reported.contextTokens) reported.contextTokens = streamUsage.contextTokens;
-					settledUsage = addWorkerUsage(settledUsage, reported);
-					currentTurn = Math.max(currentTurn, settledUsage.turns);
-					streamUsage = emptyWorkerUsage();
-					activeTurn = false;
-					for (const part of event.message.content ?? []) {
-						if (part?.type === "toolCall") {
-							recordToolArgs(part.id, part.arguments);
-							upsertTool(part.id, part.name, "running", summarizeToolArgs(part.arguments));
-						}
-					}
-					return;
 				}
-				if (event.type === "tool_execution_start" && event.toolCallId && event.toolName) {
-					recordToolArgs(event.toolCallId, event.args);
-					upsertTool(event.toolCallId, event.toolName, "running", summarizeToolArgs(event.args));
-					return;
-				}
-				if (event.type === "tool_execution_update" && event.toolCallId && event.toolName) {
-					upsertTool(event.toolCallId, event.toolName, "running", summarizeToolResult(event.partialResult) ?? summarizeToolArgs(event.args));
-					return;
-				}
-				if (event.type === "tool_execution_end" && event.toolCallId && event.toolName) {
-					upsertTool(event.toolCallId, event.toolName, event.isError ? "failed" : "completed", summarizeToolResult(event.result), toolTokens(event.toolCallId, event.result));
-					return;
-				}
-				if ((event.type === "message_end" || event.type === "tool_result_end") && event.message?.role === "toolResult") {
-					upsertTool(event.message.toolCallId, event.message.toolName, event.message.isError ? "failed" : "completed", summarizeToolResult(event.message), toolTokens(event.message.toolCallId, event.message));
-				}
+				eventProgress.record(event);
 			};
 			const processLine = (line: string) => {
 				try { processEvent(JSON.parse(line)); }
@@ -422,7 +330,7 @@ export async function runPiWorker(
 				finish(1);
 			});
 			const reapDescendants = () => {
-				if (!settled && !terminating && process.platform !== "win32" && child.pid && processGroupActive(child.pid) !== false) terminate("cleanup");
+				if (!settled && !stop && process.platform !== "win32" && child.pid && processGroupActive(child.pid) !== false) terminate("cleanup");
 			};
 			// Descendants can hold inherited output pipes open after the leader exits,
 			// so waiting for "close" before starting cleanup would deadlock until timeout.
@@ -436,7 +344,7 @@ export async function runPiWorker(
 				}
 				stdoutLines.end(processLine);
 				reapDescendants();
-				if (terminating) checkClosedGroup();
+				if (stop) checkClosedGroup();
 				else finish(closedCode);
 			});
 		});

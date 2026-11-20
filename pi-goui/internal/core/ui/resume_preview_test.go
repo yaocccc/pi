@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"os"
@@ -194,24 +193,9 @@ func TestResumeDeferredInputCancelAndClose(t *testing.T) {
 
 // Delays native get_state, not a production hook or a model request.
 func TestResumePreviewRPCProcess(t *testing.T) {
-	if os.Getenv("PIGOUI_UI_HELPER") != "1" {
-		return
-	}
-	scanner := bufio.NewScanner(os.Stdin)
-	encoder := json.NewEncoder(os.Stdout)
-	for scanner.Scan() {
-		var req map[string]any
-		if json.Unmarshal(scanner.Bytes(), &req) != nil {
-			os.Exit(2)
-		}
-		f, err := os.OpenFile(os.Getenv("PIGOUI_UI_WIRE"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			os.Exit(2)
-		}
-		_ = json.NewEncoder(f).Encode(req)
-		_ = f.Close()
+	runUIRPCFixture(func(kind string, _ map[string]any) (any, string) {
 		data := any(map[string]any{})
-		switch req["type"] {
+		switch kind {
 		case "get_state":
 			deadline := time.Now().Add(10 * time.Second)
 			for {
@@ -229,25 +213,15 @@ func TestResumePreviewRPCProcess(t *testing.T) {
 		case "prompt":
 			data = map[string]any{"disposition": "accepted"}
 		}
-		if encoder.Encode(map[string]any{"type": "response", "id": req["id"], "command": req["type"], "success": true, "data": data}) != nil {
-			os.Exit(2)
-		}
-	}
-	os.Exit(0)
+		return data, ""
+	})
 }
 
 func TestResumeDeferredInputWaitsForAuthorityAndSendsExactlyOnce(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "busy"}[busy], func(t *testing.T) {
 			m, tab := previewModel(t)
-			cfg, wire := fakeConfig(t)
-			wrapper, err := os.ReadFile(cfg.Bin)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(cfg.Bin, []byte(strings.Replace(string(wrapper), "TestUIRPCProcess", "TestResumePreviewRPCProcess", 1)), 0700); err != nil {
-				t.Fatal(err)
-			}
+			cfg, wire := fakeConfigFor(t, "TestResumePreviewRPCProcess")
 			release := filepath.Join(t.TempDir(), "release")
 			t.Setenv("GOUI_RESUME_RELEASE", release)
 			t.Setenv("GOUI_RESUME_FILE", tab.state.File)

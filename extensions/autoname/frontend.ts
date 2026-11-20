@@ -1,7 +1,8 @@
+// Bundled support from shared/frontend.ts; update via npm run sync:portable.
+// Self-contained at runtime: consumers do not need the source template.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-/** Backend facts owned by this capability; UI owns their presentation. */
-export type FrontendEvent =
-	| { name: "autoname.renamed"; data: { name: string; contextTokens: number; durationMs: number } };
+import type { FrontendEvent } from "./frontend-events.ts";
+export type { FrontendEvent } from "./frontend-events.ts";
 
 export const FRONTEND_EVENT = "pi:frontend-event:v1";
 type ReadonlyFact<T> = T extends object ? { readonly [K in keyof T]: ReadonlyFact<T[K]> } : T;

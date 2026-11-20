@@ -1,10 +1,8 @@
-import { PRESETS } from "../../worker/api.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { WorkerCapability } from "../../worker/api.ts";
-import type { SettingsErrorData } from "../../worker/api.ts";
+import { PRESETS, type WorkerCapability, type SettingsErrorData } from "../../worker/api.ts";
+import type { WorkerPreset, RoutingConfig } from "../../worker/types.ts";
 
 type GetModels = () => ReturnType<WorkerCapability["getModels"]>;
-import type { WorkerPreset, RoutingConfig } from "../../worker/types.ts";
 
 type MenuKey = WorkerPreset | "maxConcurrentWorkers" | "defaultTimeoutMs" | "maxOutputBytes" | "save" | "cancel";
 
@@ -35,9 +33,9 @@ const configurePreset = async (ctx: ExtensionContext, draft: RoutingConfig, pres
 
 		const available = getModels();
 		if (key === "model") {
-			const modelIds = [...new Set(available.map((model) => model.id))].sort((a, b) => a.localeCompare(b));
-			if (setting.model && !modelIds.includes(setting.model)) modelIds.unshift(setting.model);
 			const availableIds = new Set(available.map((model) => model.id));
+			const modelIds = [...availableIds].sort((a, b) => a.localeCompare(b));
+			if (setting.model && !availableIds.has(setting.model)) modelIds.unshift(setting.model);
 			const options = modelIds.map((modelId) => [
 				modelId === setting.model ? "●" : "○",
 				modelId,
@@ -49,10 +47,8 @@ const configurePreset = async (ctx: ExtensionContext, draft: RoutingConfig, pres
 			if (!modelId) continue;
 			setting.model = modelId;
 			const model = available.find((item) => item.id === modelId);
-			if (model) {
-				if (!model.thinking.includes(setting.thinking)) {
-					ctx.ui.notify(`模型不支持当前 Thinking ${setting.thinking}；已保留原值，请显式选择支持的等级`, "warning");
-				}
+			if (model && !model.thinking.includes(setting.thinking)) {
+				ctx.ui.notify(`模型不支持当前 Thinking ${setting.thinking}；已保留原值，请显式选择支持的等级`, "warning");
 			}
 		} else if (key === "thinking") {
 			const model = available.find((item) => item.id === setting.model);
@@ -121,12 +117,8 @@ export const configureWorkerSettings = async (
 		const dirty = JSON.stringify(draft) !== original;
 		const items = menuItems(draft);
 		const selected = await ctx.ui.select(`Worker 设置${dirty ? "  ·  未保存" : ""}`, items.map((item) => item.label));
-		if (!selected) {
-			if (!dirty || await ctx.ui.confirm("放弃更改？", "当前修改尚未保存。")) return undefined;
-			continue;
-		}
 		const key = items.find((item) => item.label === selected)?.key;
-		if (key === "cancel") {
+		if (!selected || key === "cancel") {
 			if (!dirty || await ctx.ui.confirm("放弃更改？", "当前修改尚未保存。")) return undefined;
 			continue;
 		}

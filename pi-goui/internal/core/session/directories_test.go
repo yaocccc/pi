@@ -17,13 +17,7 @@ func directorySession(t *testing.T, root, name, cwd string, modified time.Time) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, "sessions", name+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
-		t.Fatal(err)
-	}
+	path := writeSessionFixture(t, root, name, append(raw, '\n'))
 	if err := os.Chtimes(path, modified, modified); err != nil {
 		t.Fatal(err)
 	}
@@ -104,9 +98,7 @@ func TestRecentDirectoriesSkipInvalidHeadersAndDirectories(t *testing.T) {
 		"wrong-type": `{"type":"message","cwd":` + fmt.Sprintf("%q", invalidCwd) + "}\n",
 		"oversized":  `{"type":"session","cwd":` + fmt.Sprintf("%q", invalidCwd) + `,"padding":"` + strings.Repeat("x", 70*1024) + "\"}\n",
 	} {
-		if err := os.WriteFile(filepath.Join(root, "sessions", name+".jsonl"), []byte(header), 0600); err != nil {
-			t.Fatal(err)
-		}
+		writeSessionFixture(t, root, name, []byte(header))
 	}
 	got, err := RecentDirectories(root, 10)
 	if err != nil || !reflect.DeepEqual(got, []string{cwd}) {

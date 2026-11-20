@@ -339,18 +339,6 @@ type replyMsg struct {
 	deferred      bool // Local intent captured before the first authoritative snapshot.
 	echo          *promptEcho
 }
-type snapshotMsg struct {
-	id                              int
-	revision                        uint64
-	state, entries, stats, commands json.RawMessage
-	origin                          *session.Header
-	err                             error
-	client                          *rpc.Client
-	file, sourceID                  string
-	prepared                        *session.PreparedSnapshot
-	preparationDone                 bool
-	prepareErr                      error
-}
 type sessionsMsg struct {
 	hideCurrent bool
 	id          int
@@ -400,64 +388,6 @@ func call(t *tab, op string, data map[string]any) tea.Cmd {
 		defer cancel()
 		raw, err := c.Call(ctx, data)
 		return replyMsg{id: id, client: c, generation: generation, op: op, data: raw, err: err}
-	}
-}
-func (m *Model) refresh(t *tab) tea.Cmd {
-	if t.client == nil || t.dead || t.cycle.phase == cycleClosing {
-		return nil
-	}
-	if t.refreshing {
-		t.refreshAgain = true
-		return nil
-	}
-	t.refreshing = true
-	t.refreshAgain = false
-	id, c, file, revision := t.id, t.client, t.state.File, t.revision
-	sourceID := t.state.ID
-	preparation := t.state.SnapshotPreparation()
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		s := snapshotMsg{id: id, revision: revision, client: c, file: file, sourceID: sourceID}
-		finish := func() tea.Msg {
-			s.prepared, s.prepareErr = preparation.Prepare(s.state, s.entries, s.stats)
-			s.preparationDone = true
-			return s
-		}
-		s.state, s.err = c.Call(ctx, map[string]any{"type": "get_state"})
-		if s.err != nil {
-			s.preparationDone = true
-			return s
-		}
-		var current struct{ SessionFile, SessionID string }
-		if json.Unmarshal(s.state, &current) == nil && current.SessionFile != "" {
-			file = current.SessionFile
-		}
-		if file != "" {
-			h, headerErr := session.ReadHeader(file, current.SessionID)
-			s.origin = &h
-			// Some endpoints omit a known saved path. Preserve it only after
-			// confirming that its native header still identifies this session.
-			if headerErr == nil && current.SessionFile == "" && current.SessionID != "" {
-				var fields map[string]json.RawMessage
-				if json.Unmarshal(s.state, &fields) == nil {
-					fields["sessionFile"], _ = json.Marshal(file)
-					s.state, _ = json.Marshal(fields)
-				}
-			}
-		}
-		s.entries, s.err = c.Call(ctx, map[string]any{"type": "get_entries"})
-		if s.err != nil && file != "" {
-			s.entries, s.err = session.ReadFile(file)
-		}
-		if s.err != nil {
-			// State metadata and history are one commit. A failed history
-			// fetch must not publish only a replacement session identity.
-			s.preparationDone = true
-			return s
-		}
-		// Commit the authoritative body before optional statistics/commands.
-		return finish()
 	}
 }
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -566,79 +496,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t == nil || (v.client != nil && (t.client != v.client || t.state.File != v.file || t.state.ID != v.sourceID)) {
 			return m, tea.Batch(cmds...)
 		}
-		t.refreshing = false
-		if v.err != nil {
-			t.status = "Refresh: " + v.err.Error()
-			if t.resume.pending {
-				m.failResume(t, v.err)
-				cmds = append(cmds, m.closeCycle(t))
-			}
-
-		}
-		if !t.dead && v.revision == t.revision && len(v.commands) > 0 {
-			var c struct{ Commands []command }
-			if err := json.Unmarshal(v.commands, &c); err == nil {
-				t.commands = c.Commands
-			}
-		}
-		if !t.dead && v.revision == t.revision {
-			// Never fall back to parsing raw history on the event loop.
-			prepared, prepareErr := v.prepared, v.prepareErr
-			if !v.preparationDone {
-				prepared = nil
-				prepareErr = errors.New("history snapshot was not prepared")
-			}
-			if prepareErr != nil {
-				t.status = prepareErr.Error()
-			}
-			if t.resume.pending && prepared == nil && (v.err != nil || prepareErr != nil) {
-				err := v.err
-				if err == nil {
-					err = prepareErr
-				}
-				m.failResume(t, err)
-				cmds = append(cmds, m.closeCycle(t))
-			}
-			// A later optional endpoint failure must not throw away valid history.
-			// Invalid history cannot publish ancestry/navigation, but must still
-			// allow a queued refresh below to run.
-			if prepared != nil {
-				t.state.ApplySnapshot(prepared)
-				t.confirmPromptEcho()
-				if t.resume.pending && len(v.state) > 0 && len(v.entries) > 0 {
-					t.resume.authoritative = true
-					if v.err == nil && prepareErr == nil {
-						t.status = "Ready"
-					}
-					cmds = append(cmds, m.primeCycle(t))
-				}
-				if v.origin != nil {
-					t.origin = *v.origin
-				}
-				t.invalidateDocument()
-				if len(v.entries) > 0 {
-					m.finishOriginJump(t)
-				}
-				if len(t.history) == 0 {
-					for _, it := range t.state.Items {
-						if it.Role == "user" && strings.TrimSpace(it.Text) != "" {
-							t.history = append(t.history, it.Text)
-						}
-					}
-				}
-				cmds = append(cmds, m.snapshotMetadata(t))
-			}
-		}
-		if !t.dead && v.revision != t.revision {
-			t.refreshAgain = true
-		}
-		// During a run, keep consuming live events rather than spin on snapshots
-		// that immediately become stale. agent_settled requests the final refresh.
-		// An ordered initialization can retry a local revision change: live
-		// deltas cannot starve preparation beyond its next FIFO fence.
-		if t.refreshAgain && !t.ownRunActive() {
-			cmds = append(cmds, m.refresh(t))
-		}
+		cmds = append(cmds, m.applySessionSnapshot(t, v)...)
 	case sessionGuardMsg:
 		cmds = append(cmds, m.sessionGuardResult(v))
 	case replyMsg:
@@ -823,24 +681,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tickMsg:
-		m.frame++
-		now := time.Time(v)
-		for _, t := range m.tabs {
-			if t == m.current() {
-				cmds = append(cmds, m.pollSession(t, now, false))
-			}
-			for i := len(t.dialogs) - 1; i >= 0; i-- {
-				d := t.dialogs[i]
-				if !d.deadline.IsZero() && now.After(d.deadline) {
-					t.dialogs = append(t.dialogs[:i], t.dialogs[i+1:]...)
-					cmds = append(cmds, respond(t, d, map[string]any{"cancelled": true}))
-					if t == m.current() {
-						cmds = append(cmds, m.focus(t))
-					}
-				}
-			}
-		}
-		cmds = append(cmds, m.pollExtensions(now), tick(), m.requestGit(now), m.requestSidebarHistory(now), m.pollQuota(now))
+		cmds = append(cmds, m.onTick(time.Time(v))...)
 	default:
 		if cmd, handled := m.extensionMessage(msg); handled {
 			cmds = append(cmds, cmd)
@@ -876,6 +717,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, m.markReleaseNotesDisplayed(), m.updatePointer())
 	return m, tea.Batch(cmds...)
 }
+func (m *Model) onTick(now time.Time) []tea.Cmd {
+	var cmds []tea.Cmd
+	m.frame++
+	for _, t := range m.tabs {
+		if t == m.current() {
+			cmds = append(cmds, m.pollSession(t, now, false))
+		}
+		for i := len(t.dialogs) - 1; i >= 0; i-- {
+			d := t.dialogs[i]
+			if !d.deadline.IsZero() && now.After(d.deadline) {
+				t.dialogs = append(t.dialogs[:i], t.dialogs[i+1:]...)
+				cmds = append(cmds, respond(t, d, map[string]any{"cancelled": true}))
+				if t == m.current() {
+					cmds = append(cmds, m.focus(t))
+				}
+			}
+		}
+	}
+	cmds = append(cmds, m.pollExtensions(now), tick(), m.requestGit(now), m.requestSidebarHistory(now), m.pollQuota(now))
+	return cmds
+}
+
 func (m *Model) document(t *tab) {
 	// Freeze only the display during a drag, never the RPC event projection.
 	if t.selection.dragging || m.panelResize.dragging {

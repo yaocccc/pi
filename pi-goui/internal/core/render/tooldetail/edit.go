@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"pi-goui/internal/core/render/tooldata"
 	"pi-goui/internal/core/session"
 )
 
@@ -28,16 +29,16 @@ func (v *renderer) edit(item session.Item, args, details map[string]any) {
 		}
 	} else {
 		v.line("Replacement preview · not a recorded diff", v.theme.Warning)
-		edits := editArguments(args)
+		edits := tooldata.EditArguments(args)
 		if len(edits) > 0 {
 			v.line("Line numbers are relative to each replacement", v.theme.Muted)
 		}
 		for i, edit := range edits {
 			oldText, newText := stringField(edit, "oldText"), stringField(edit, "newText")
 			v.heading(fmt.Sprintf("Replacement %d", i+1))
-			v.line(fmt.Sprintf("− old · %d source lines", editPreviewLines(oldText)), v.theme.Error)
+			v.line(fmt.Sprintf("− old · %d source lines", tooldata.SourceLineCount(oldText)), v.theme.Error)
 			v.editSource(oldText, path, v.theme.Error)
-			v.line(fmt.Sprintf("+ new · %d source lines", editPreviewLines(newText)), v.theme.Success)
+			v.line(fmt.Sprintf("+ new · %d source lines", tooldata.SourceLineCount(newText)), v.theme.Success)
 			v.editSource(newText, path, v.theme.Success)
 		}
 		if len(edits) == 0 {
@@ -93,35 +94,3 @@ func (v *renderer) editSource(source, path, color string) {
 }
 
 // Preview counts describe source snippets, not a confirmed file diff.
-func editPreviewLines(source string) int {
-	if source == "" {
-		return 0
-	}
-	return strings.Count(strings.TrimSuffix(source, "\n"), "\n") + 1
-}
-
-func editArguments(args map[string]any) []map[string]any {
-	var out []map[string]any
-	value := args["edits"]
-	if s, ok := value.(string); ok {
-		if decoded, valid := decodeJSON([]byte(s)); valid {
-			value = decoded
-		}
-	}
-	switch edits := value.(type) {
-	case []any:
-		for _, e := range edits {
-			if m, ok := e.(map[string]any); ok {
-				out = append(out, m)
-			}
-		}
-	case map[string]any:
-		out = append(out, edits)
-	}
-	if _, ok := args["oldText"].(string); ok {
-		if _, ok := args["newText"].(string); ok {
-			out = append(out, map[string]any{"oldText": args["oldText"], "newText": args["newText"]})
-		}
-	}
-	return out
-}

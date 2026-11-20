@@ -15,9 +15,9 @@ func summaryFixture(cwd, name, parent, first string) []byte {
 	return []byte(string(header) + "\n" + string(user) + "\n" + string(info) + "\n")
 }
 
-func writeSummaryFixture(t testing.TB, root string, raw []byte) string {
+func writeSessionFixture(t testing.TB, root, name string, raw []byte) string {
 	t.Helper()
-	path := filepath.Join(root, "sessions", "cwd", "session.jsonl")
+	path := filepath.Join(root, "sessions", name+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestListSummaryFastPathMetadata(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			raw := append(summaryFixture(t.TempDir(), "Original", "/parent", "first"), []byte(tc.record+"\n")...)
-			writeSummaryFixture(t, root, raw)
+			writeSessionFixture(t, root, "cwd/session", raw)
 			if got := onlySummary(t, root); got.Name != tc.want || got.FirstMessage != "first" {
 				t.Fatalf("summary = %+v, want name %q", got, tc.want)
 			}

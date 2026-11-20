@@ -1,73 +1,23 @@
 package render
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode"
 
 	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/render/tooldata"
 	"pi-goui/internal/core/session"
 )
 
-func visualJSON(data []byte) (any, bool) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, true
-	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	d.UseNumber()
-	var v any
-	if d.Decode(&v) != nil {
-		return nil, false
-	}
-	var extra any
-	if d.Decode(&extra) != io.EOF {
-		return nil, false
-	}
-	return v, true
-}
-func visualMap(raw json.RawMessage) map[string]any {
-	v, ok := visualJSON(raw)
-	if !ok {
-		return nil
-	}
-	m, _ := v.(map[string]any)
-	return m
-}
-func visualString(m map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if s, ok := m[key].(string); ok && s != "" {
-			return s
-		}
-	}
-	return ""
-}
-func visualInt(m map[string]any, key string, fallback int) int {
-	v := m[key]
-	switch n := v.(type) {
-	case json.Number:
-		i, e := strconv.Atoi(string(n))
-		if e == nil && i > 0 && i < 1<<30 {
-			return i
-		}
-	case float64:
-		if n > 0 && n < 1<<30 {
-			return int(n)
-		}
-	}
-	return fallback
-}
-func visualName(name string) string {
-	name = strings.ToLower(name)
-	if i := strings.LastIndex(name, "."); i >= 0 {
-		name = name[i+1:]
-	}
-	return name
-}
+var visualJSON = tooldata.DecodeJSON
+var visualMap = tooldata.DecodeMap
+var visualString = tooldata.StringField
+var visualInt = tooldata.IntField
+var visualName = tooldata.ToolName
+
 func visualLabel(key string) string {
 	var b strings.Builder
 	for i, r := range key {
@@ -213,31 +163,6 @@ func (v *toolVisual) structured(value any, depth int, label string) {
 		v.line(indent+prefix+visualScalar(x), v.theme.Text)
 	}
 }
-func (v *toolVisual) arguments(raw json.RawMessage, skip ...string) {
-	value, ok := visualJSON(raw)
-	if !ok {
-		v.heading("Parameters unavailable · incomplete or invalid payload")
-		return
-	}
-	if value == nil {
-		return
-	}
-	if m, ok := value.(map[string]any); ok {
-		copyMap := map[string]any{}
-		for k, val := range m {
-			copyMap[k] = val
-		}
-		for _, k := range skip {
-			delete(copyMap, k)
-		}
-		if len(copyMap) == 0 {
-			return
-		}
-		value = copyMap
-	}
-	v.heading("Parameters")
-	v.structured(value, 0, "")
-}
 func (v *toolVisual) result(item session.Item) {
 	title := "Result"
 	if item.Error {
@@ -260,38 +185,35 @@ func (v *toolVisual) result(item session.Item) {
 		v.line("No result recorded", visualDim(v.theme))
 	}
 }
-func (v *toolVisual) metadata(raw json.RawMessage, skip ...string) {
+
+// section decodes a fresh map; dropping fields here never mutates saved payloads.
+func (v *toolVisual) section(raw json.RawMessage, metadata bool) {
+	title, invalid := "Parameters", "Parameters unavailable · incomplete or invalid payload"
+	if metadata {
+		title, invalid = "Metadata", "Result metadata unavailable · invalid payload"
+	}
 	value, ok := visualJSON(raw)
 	if !ok {
-		v.heading("Result metadata unavailable · invalid payload")
+		v.heading(invalid)
 		return
 	}
 	if value == nil {
 		return
 	}
 	if m, ok := value.(map[string]any); ok {
-		copyMap := map[string]any{}
-		for k, val := range m {
-			copyMap[k] = val
+		if metadata {
+			trunc, _ := m["truncation"].(map[string]any)
+			delete(trunc, "content")
+		} else {
+			delete(m, "command")
+			delete(m, "cmd")
+			delete(m, "script")
 		}
-		for _, k := range skip {
-			delete(copyMap, k)
-		}
-		if len(copyMap) == 0 {
+		if len(m) == 0 {
 			return
 		}
-		if truncation, ok := copyMap["truncation"].(map[string]any); ok {
-			info := map[string]any{}
-			for key, field := range truncation {
-				if key != "content" {
-					info[key] = field
-				}
-			}
-			copyMap["truncation"] = info
-		}
-		value = copyMap
 	}
-	v.heading("Metadata")
+	v.heading(title)
 	v.structured(value, 0, "")
 }
 
@@ -307,26 +229,19 @@ func toolDetailRows(item session.Item, theme config.Theme, width int, providers 
 			return rows
 		}
 	}
-	if visualName(item.ToolName) == "read" {
-		return readDetailRows(item, theme, width)
-	}
-	if visualName(item.ToolName) == "bash" {
-		return bashDetailRows(item, theme, width)
-	}
-	if visualName(item.ToolName) == "codemode" {
-		return codemodeRows(item, theme, width)
-	}
-	if name := visualName(item.ToolName); name == "edit" || name == "write" {
-		return changeDiffRows(item, theme, width)
-	}
-	if genericTool(item.ToolName, tools) {
-		return genericToolRows(item, theme, width)
-	}
-	v := &toolVisual{theme: theme, width: width}
-	args := visualMap(item.Arguments)
 	name := visualName(item.ToolName)
+	v := &toolVisual{theme: theme, width: width}
 	switch name {
-	case "bash", "shell", "powershell":
+	case "read":
+		return readDetailRows(item, theme, width)
+	case "bash":
+		return bashDetailRows(item, theme, width)
+	case "codemode":
+		return codemodeRows(item, theme, width)
+	case "edit", "write":
+		return changeDiffRows(item, theme, width)
+	case "shell", "powershell":
+		args := visualMap(item.Arguments)
 		command := visualString(args, "command", "cmd", "script")
 		if command != "" {
 			v.heading("Command")
@@ -336,66 +251,18 @@ func toolDetailRows(item session.Item, theme config.Theme, width int, providers 
 			}
 			v.source(command, "", language, 1)
 		}
-		v.arguments(item.Arguments, "command", "cmd", "script")
+		v.section(item.Arguments, false)
 		v.result(item)
+	default:
+		if !extensionPolicy(item.ToolName, tools).Specialized {
+			return genericToolRows(item, theme, width)
+		}
 	}
-	v.metadata(item.Details)
+	v.section(item.Details, true)
 	if len(v.rows) == 0 {
 		v.line("No displayable result", visualDim(theme))
 	}
 	return v.rows
-}
-func sourceLineCount(s string) int {
-	if s == "" {
-		return 0
-	}
-	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
-}
-func visualEdits(args map[string]any) []map[string]any {
-	var out []map[string]any
-	value := args["edits"]
-	if s, ok := value.(string); ok {
-		if decoded, valid := visualJSON([]byte(s)); valid {
-			value = decoded
-		}
-	}
-	switch edits := value.(type) {
-	case []any:
-		for _, e := range edits {
-			if m, ok := e.(map[string]any); ok {
-				out = append(out, m)
-			}
-		}
-	case map[string]any:
-		out = append(out, edits)
-	}
-	if _, ok := args["oldText"].(string); ok {
-		if _, ok := args["newText"].(string); ok {
-			out = append(out, map[string]any{"oldText": args["oldText"], "newText": args["newText"]})
-		}
-	}
-	return out
-}
-func readSource(text string, details map[string]any) (source, note string) {
-	if trunc, ok := details["truncation"].(map[string]any); ok {
-		if content, ok := trunc["content"].(string); ok {
-			if strings.HasPrefix(text, content) {
-				return content, strings.TrimSpace(strings.TrimPrefix(text, content))
-			}
-		}
-		if first, _ := trunc["firstLineExceedsLimit"].(bool); first {
-			return "", text
-		}
-	}
-	// Only remove pi's recognizable final continuation notices, not arbitrary
-	// bracketed file content or every line resembling an informational message.
-	if i := strings.LastIndex(text, "\n\n["); i >= 0 {
-		tail := text[i+2:]
-		if strings.HasSuffix(tail, "]") && !strings.Contains(tail, "\n") && strings.Contains(tail, "Use offset=") && (strings.HasPrefix(tail, "[Showing lines ") || strings.Contains(tail, " more lines in file.")) {
-			return text[:i], tail
-		}
-	}
-	return text, ""
 }
 
 // toolPreview is a plain, compact description. It never includes object JSON;
@@ -410,13 +277,13 @@ func toolPreview(item session.Item) string {
 		if diff := visualString(details, "diff", "patch"); diff != "" {
 			a, d := diffCounts(diff)
 			summary = fmt.Sprintf("+%d / −%d", a, d)
-		} else if edits := visualEdits(args); len(edits) > 0 {
+		} else if edits := tooldata.EditArguments(args); len(edits) > 0 {
 			summary = fmt.Sprintf("%d replacement(s)", len(edits))
 		}
 	}
 	if name == "write" {
 		if content, ok := args["content"].(string); ok {
-			summary = fmt.Sprintf("%d lines · %d bytes", sourceLineCount(content), len(content))
+			summary = fmt.Sprintf("%d lines · %d bytes", tooldata.SourceLineCount(content), len(content))
 		}
 	}
 	if name == "read" {

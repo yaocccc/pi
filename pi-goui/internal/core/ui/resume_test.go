@@ -83,7 +83,7 @@ func TestResumeReplacesSlotAndIsolatesLateEvents(t *testing.T) {
 		t.Fatalf("wrong target startup: %q", argv)
 	}
 	m.Update(eventMsg{id: firstID, event: rpc.Event{Data: json.RawMessage(`{"type":"agent_start"}`)}})
-	m.Update(snapshotMsg{id: firstID, state: json.RawMessage(`{"sessionName":"wrong session"}`)})
+	m.Update(prepareSnapshotMessage(m.current(), snapshotMsg{id: firstID}, json.RawMessage(`{"sessionName":"wrong session"}`), nil))
 	if m.current().state.Busy || m.current().state.Name == "wrong session" {
 		t.Fatal("late old events reached replacement")
 	}

@@ -140,8 +140,7 @@ func TestPromptEchoSnapshotConfirmationAndQueuedDisposition(t *testing.T) {
 			e := owner.promptEcho
 			switch kind {
 			case "snapshot":
-				v := snapshotMsg{id: owner.id, revision: owner.revision, state: json.RawMessage(`{"sessionId":"native"}`), entries: json.RawMessage(`{"entries":[{"type":"message","id":"native-user","message":{"role":"user","timestamp":7,"content":[{"type":"text","text":"captured"}]}}]}`)}
-				m.Update(prepareSnapshotMessage(owner, v))
+				m.Update(prepareSnapshotMessage(owner, snapshotMsg{id: owner.id, revision: owner.revision}, json.RawMessage(`{"sessionId":"native"}`), json.RawMessage(`{"entries":[{"type":"message","id":"native-user","message":{"role":"user","timestamp":7,"content":[{"type":"text","text":"captured"}]}}]}`)))
 				m.document(owner)
 				if len(owner.state.Items) != 1 || echoUserBlocks(owner) != 1 {
 					t.Fatal("authoritative snapshot duplicated or lost the prompt")

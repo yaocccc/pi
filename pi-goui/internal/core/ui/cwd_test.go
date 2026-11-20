@@ -200,7 +200,7 @@ func TestCwdReplacementStartsInDirectoryAndIsolatesSession(t *testing.T) {
 		t.Fatal("old backend remained running")
 	}
 	m.Update(eventMsg{id: old.id, event: rpc.Event{Data: json.RawMessage(`{"type":"agent_start"}`)}})
-	m.Update(snapshotMsg{id: old.id, state: json.RawMessage(`{"sessionName":"stale"}`)})
+	m.Update(prepareSnapshotMessage(m.current(), snapshotMsg{id: old.id}, json.RawMessage(`{"sessionName":"stale"}`), nil))
 	if replacement.state.Busy || replacement.state.Name == "stale" || replacement.state.Cwd != dir {
 		t.Fatal("late old events contaminated replacement")
 	}

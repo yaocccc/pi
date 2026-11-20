@@ -12,6 +12,8 @@ import (
 	"pi-goui/internal/extensions/toolrender/detail"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func testHooks(t *testing.T) tooldetail.Hooks {
@@ -29,6 +31,42 @@ func testHooks(t *testing.T) tooldetail.Hooks {
 		},
 		DiffRows:   func(diff string, width int, theme config.Theme) []string { return []string{diff} },
 		DiffCounts: func(string) (int, int) { return 1, 1 },
+	}
+}
+
+func renderDetailText(t *testing.T, item session.Item, width int) string {
+	t.Helper()
+	return strings.Join(tooldetail.Render(item, config.Theme{}, width, testHooks(t), toolrender.NewViews().FullDetail), "\n")
+}
+
+func checkDetailWidths(t *testing.T, item session.Item, wantAt60 ...string) {
+	t.Helper()
+	hooks := testHooks(t)
+	hooks.Line = func(text, _ string, width int) []string {
+		return strings.Split(ansi.Hardwrap(text, width, true), "\n")
+	}
+	original := string(item.Details)
+	provider := toolrender.NewViews().FullDetail
+	for _, width := range []int{3, 20, 30, 60} {
+		t.Run(fmt.Sprintf("width=%d", width), func(t *testing.T) {
+			rows := tooldetail.Render(item, config.Theme{}, width, hooks, provider)
+			for _, row := range rows {
+				if ansi.StringWidth(row) > width {
+					t.Fatalf("overflow: %q", row)
+				}
+			}
+			if width == 60 {
+				got := strings.Join(rows, "\n")
+				for _, want := range wantAt60 {
+					if !strings.Contains(got, want) {
+						t.Fatalf("missing %q:\n%s", want, got)
+					}
+				}
+			}
+			if string(item.Details) != original {
+				t.Fatal("rendering mutated source details")
+			}
+		})
 	}
 }
 

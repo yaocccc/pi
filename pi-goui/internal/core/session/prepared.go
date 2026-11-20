@@ -21,6 +21,9 @@ type PreparedSnapshot struct {
 	preview                     *previewMetadata
 }
 
+func (p *PreparedSnapshot) HasEntries() bool { return p.hasEntries }
+func (p *PreparedSnapshot) HasState() bool   { return len(p.stateData) > 0 }
+
 func detachedState(s State) State {
 	s.records = slices.Clone(s.records)
 	s.live = slices.Clone(s.live)

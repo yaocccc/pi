@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,47 +22,13 @@ func RecentDirectories(root string, limit int) ([]string, error) {
 	}
 	recent := make(map[string]time.Time)
 	dir := filepath.Join(root, "sessions")
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			if path == dir && errors.Is(walkErr, os.ErrNotExist) {
-				return nil
-			}
-			return walkErr
-		}
-		if d.IsDir() || d.Type()&os.ModeSymlink != 0 || filepath.Ext(path) != ".jsonl" {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		opened, err := f.Stat()
-		if err != nil {
-			return err
-		}
-		if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-			return fmt.Errorf("session file changed while opening: %s", path)
-		}
+	err := walkSessionFiles(dir, func(path string, f *os.File, opened os.FileInfo) error {
 		raw, readErr := bufio.NewReaderSize(f, 64*1024).ReadSlice('\n')
 		if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, bufio.ErrBufferFull) {
 			return readErr
 		}
-		// Reject replacement by a symlink or different file, while allowing an
-		// active session writer to append after its header has been read.
-		current, err := os.Lstat(path)
-		if err != nil {
+		if err := checkSessionFileIdentity(path, opened); err != nil {
 			return err
-		}
-		if !current.Mode().IsRegular() || !os.SameFile(opened, current) {
-			return fmt.Errorf("session file changed while reading: %s", path)
 		}
 		var header struct{ Type, Cwd string }
 		if errors.Is(readErr, bufio.ErrBufferFull) || json.Unmarshal(raw, &header) != nil || header.Type != "session" || !filepath.IsAbs(header.Cwd) {

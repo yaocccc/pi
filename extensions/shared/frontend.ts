@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { FrontendEvent } from "./frontend-events.ts";
+export type { FrontendEvent } from "./frontend-events.ts";
 
 export const FRONTEND_EVENT = "pi:frontend-event:v1";
 type ReadonlyFact<T> = T extends object ? { readonly [K in keyof T]: ReadonlyFact<T[K]> } : T;

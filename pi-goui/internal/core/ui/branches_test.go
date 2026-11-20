@@ -144,7 +144,7 @@ func TestOriginOpensThenLocatesOnlyMatchingSnapshot(t *testing.T) {
 				target.revision++
 			}
 			state, _ := json.Marshal(map[string]any{"sessionId": id, "sessionFile": path})
-			m.Update(prepareSnapshotMessage(target, snapshotMsg{id: target.id, revision: revision, state: state, entries: snapshot}))
+			m.Update(prepareSnapshotMessage(target, snapshotMsg{id: target.id, revision: revision}, state, snapshot))
 			switch mode {
 			case "success":
 				if target.originJump != nil || target.follow || !strings.Contains(target.toast.text, "已定位") {
@@ -184,8 +184,10 @@ func TestOriginRefreshRestoresHeaderAndCommands(t *testing.T) {
 		t.Fatalf("refresh omitted header: %+v", msg)
 	}
 	// The generic fake RPC omits sessionFile; a saved-session refresh supplies it.
-	msg.state, _ = json.Marshal(map[string]any{"sessionId": "fake", "sessionFile": path})
 	m.Update(msg)
+	if tab.state.File != path {
+		t.Fatalf("refresh lost saved session path: %q", tab.state.File)
+	}
 	if tab.origin.Fork == nil || tab.origin.Fork.Turn != 2 || tab.origin.ParentSession != h.ParentSession {
 		t.Fatal("reopened fork lost its provenance")
 	}

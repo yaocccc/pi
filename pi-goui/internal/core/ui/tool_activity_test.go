@@ -9,31 +9,38 @@ import (
 	"pi-goui/internal/core/session"
 )
 
-func TestLiveWorkerPreviewCanBeManuallyFolded(t *testing.T) {
+func liveToolFixture(t *testing.T, item session.Item) (*Model, *tab) {
+	t.Helper()
 	m := testModel(t, "")
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	tab := m.current()
 	tab.state.Busy = true
-	tab.state.Items = []session.Item{{ID: "w", Role: "tool", ToolName: "worker", Running: true, Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"mode":"scout","status":"completed","objective":"Inspect source","result":{"summary":["Saved conclusion"]}}]}`)}}
+	item.Role, item.Running = "tool", true
+	tab.state.Items = []session.Item{item}
 	m.document(tab)
 	tab.follow, tab.offset = false, 0
-	clickWorker := func() {
-		t.Helper()
-		for _, block := range tab.doc.Blocks {
-			if block.ID != "w" {
-				continue
-			}
+	return m, tab
+}
+
+func clickLiveTool(t *testing.T, m *Model, tab *tab, id string) {
+	t.Helper()
+	for _, block := range tab.doc.Blocks {
+		if block.ID == id {
 			click := tea.Mouse{Button: tea.MouseLeft, X: 4, Y: transcriptTop + block.Start}
 			m.mouse(click)
 			m.mouseRelease(click)
 			return
 		}
-		t.Fatal("missing Worker click target")
 	}
+	t.Fatalf("missing click target for tool %q", id)
+}
+
+func TestLiveWorkerPreviewCanBeManuallyFolded(t *testing.T) {
+	m, tab := liveToolFixture(t, session.Item{ID: "w", ToolName: "worker", Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"mode":"scout","status":"completed","objective":"Inspect source","result":{"summary":["Saved conclusion"]}}]}`)})
 	if !strings.Contains(tab.doc.Text, "Saved conclusion") {
 		t.Fatal("preview not expanded by default")
 	}
-	clickWorker()
+	clickLiveTool(t, m, tab, "w")
 	if value, ok := tab.folds["w"]; !ok || value || strings.Contains(tab.doc.Text, "Saved conclusion") {
 		t.Fatal("Worker click did not collapse preview")
 	}
@@ -42,7 +49,7 @@ func TestLiveWorkerPreviewCanBeManuallyFolded(t *testing.T) {
 	if strings.Contains(tab.doc.Text, "Saved conclusion") {
 		t.Fatal("completion reopened manually folded Worker")
 	}
-	clickWorker()
+	clickLiveTool(t, m, tab, "w")
 	if !strings.Contains(tab.doc.Text, "Saved conclusion") || !tab.folds["w"] {
 		t.Fatal("Worker click did not reopen preview")
 	}
@@ -52,30 +59,11 @@ func TestLiveWorkerPreviewCanBeManuallyFolded(t *testing.T) {
 }
 
 func TestLiveToolPreviewUsesNormalFoldState(t *testing.T) {
-	m := testModel(t, "")
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	tab := m.current()
-	tab.state.Busy = true
-	tab.state.Items = []session.Item{{ID: "call", Role: "tool", ToolName: "bash", Running: true, Arguments: json.RawMessage(`{"command":"pwd"}`), Text: "summary\nLIVE_OUTPUT"}}
-	m.document(tab)
-	tab.follow, tab.offset = false, 0
-	clickTool := func() {
-		t.Helper()
-		for _, block := range tab.doc.Blocks {
-			if block.ID != "call" {
-				continue
-			}
-			click := tea.Mouse{Button: tea.MouseLeft, X: 4, Y: transcriptTop + block.Start}
-			m.mouse(click)
-			m.mouseRelease(click)
-			return
-		}
-		t.Fatal("missing tool click target")
-	}
+	m, tab := liveToolFixture(t, session.Item{ID: "call", ToolName: "bash", Arguments: json.RawMessage(`{"command":"pwd"}`), Text: "summary\nLIVE_OUTPUT"})
 	if strings.Contains(tab.doc.Text, "LIVE_OUTPUT") {
 		t.Fatal("ordinary preview opened by default")
 	}
-	clickTool()
+	clickLiveTool(t, m, tab, "call")
 	if !tab.folds["call"] || !strings.Contains(tab.doc.Text, "LIVE_OUTPUT") {
 		t.Fatal("click did not expand normal tool result")
 	}
@@ -91,7 +79,7 @@ func TestLiveToolPreviewUsesNormalFoldState(t *testing.T) {
 	}
 	tab.folds["tool-group:call"] = false
 	m.document(tab)
-	clickTool()
+	clickLiveTool(t, m, tab, "call")
 	if tab.folds["call"] || strings.Contains(tab.doc.Text, "UPDATED_OUTPUT") {
 		t.Fatal("click did not collapse tool preview")
 	}
@@ -101,13 +89,7 @@ func TestLiveToolPreviewUsesNormalFoldState(t *testing.T) {
 }
 
 func TestRunningAnimationLeavesDocumentStable(t *testing.T) {
-	m := testModel(t, "")
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	tab := m.current()
-	tab.state.Busy = true
-	tab.state.Items = []session.Item{{ID: "call", Role: "tool", ToolName: "bash", Running: true}}
-	m.document(tab)
-	tab.follow, tab.offset = false, 0
+	m, tab := liveToolFixture(t, session.Item{ID: "call", ToolName: "bash"})
 	before := tab.doc.Text
 	first := m.View().Content
 	m.frame += 3
@@ -121,13 +103,7 @@ func TestRunningAnimationLeavesDocumentStable(t *testing.T) {
 }
 
 func TestLiveToolActivityIndependentOfGroupFold(t *testing.T) {
-	m := testModel(t, "")
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	tab := m.current()
-	tab.state.Busy = true
-	tab.state.Items = []session.Item{{ID: "call", Role: "tool", ToolName: "bash", Running: true}}
-	m.document(tab)
-	tab.follow, tab.offset = false, 0
+	m, tab := liveToolFixture(t, session.Item{ID: "call", ToolName: "bash"})
 	if len(tab.doc.ActivityRows) == 0 {
 		t.Fatal("live activity missing")
 	}

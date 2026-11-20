@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import workerExtension, { validateWorkerInput, batchResponse, batchUiSnapshot } from "./index.ts";
 import { WorkerRuntime } from "./runtime.ts";
 import { DEFAULT_OPTIONS } from "./config.ts";
@@ -43,7 +43,13 @@ function harness(execute: typeof executeTask, maxConcurrentWorkers = DEFAULT_OPT
 }
 
 
-test("field clipping is visible, keeps explicit failures, and survives further byte compression", async () => {
+function completingHarness(t: TestContext, execute: typeof executeTask) {
+	const h = harness(execute);
+	t.after(h.close);
+	return h;
+}
+
+test("field clipping is visible, keeps explicit failures, and survives further byte compression", async (t) => {
 	const result = {
 		status: "completed",
 		findings: [...Array.from({ length: 10 }, () => ({ severity: "low" })), { severity: "critical" }],
@@ -70,33 +76,29 @@ test("field clipping is visible, keeps explicit failures, and survives further b
 	assert.equal(compactWorkerResult(complete).truncated, undefined);
 	assert.equal(serializePayload({ results: [compactWorkerResult(complete)] }, 8192).payload.truncated, undefined);
 	assert.deepEqual(result, original);
-	const h = harness(async () => structuredClone(result));
-	try {
-		const response = await h.call({ tasks: [task] });
-		assert.equal(payload(response).result.truncated, true);
-		assert.equal(payload(response).result.results[0].omitted.findings, 1);
-		assert.equal(payload(response).result.results[0].validation[0].result, "failed");
-	} finally { await h.close(); }
+	const h = completingHarness(t, async () => structuredClone(result));
+	const response = await h.call({ tasks: [task] });
+	assert.equal(payload(response).result.truncated, true);
+	assert.equal(payload(response).result.results[0].omitted.findings, 1);
+	assert.equal(payload(response).result.results[0].validation[0].result, "failed");
 });
 
-test("real UI snapshots preserve numeric protocol usage and detach sanitized user content", async () => {
+test("real UI snapshots preserve numeric protocol usage and detach sanitized user content", async (t) => {
 	const usage = { input: 20, output: 10, cacheRead: 3, cacheWrite: 4, contextTokens: 1200, turns: 2 };
 	const result = { ...complete, execution: { usage }, failure: { api_key: "credential", accessToken: "credential", active: false, contextTokens: 1200 } };
 	const original = structuredClone(result);
-	const h = harness(async () => result);
-	try {
-		const response = await h.call({ tasks: [task] });
-		const snapshot = response.details;
-		assert.deepEqual(snapshot.tasks[0].usage, usage);
-		assert.deepEqual(JSON.parse(JSON.stringify(snapshot)).tasks[0].usage, usage);
-		assert.deepEqual(sanitizeStructuredValue(result.failure), { api_key: "[已隐藏]", accessToken: "[已隐藏]", active: false, contextTokens: 1200 });
-		snapshot.tasks[0].usage.contextTokens = -1;
-		snapshot.tasks[0].activities.push({ label: "tampered" });
-		const next = await h.call({ batchId: snapshot.batchId });
-		assert.equal(next.details.tasks[0].usage.contextTokens, 1200);
-		assert.equal(next.details.tasks[0].activities.some((item: any) => item.label === "tampered"), false);
-		assert.deepEqual(result, original);
-	} finally { await h.close(); }
+	const h = completingHarness(t, async () => result);
+	const response = await h.call({ tasks: [task] });
+	const snapshot = response.details;
+	assert.deepEqual(snapshot.tasks[0].usage, usage);
+	assert.deepEqual(JSON.parse(JSON.stringify(snapshot)).tasks[0].usage, usage);
+	assert.deepEqual(sanitizeStructuredValue(result.failure), { api_key: "[已隐藏]", accessToken: "[已隐藏]", active: false, contextTokens: 1200 });
+	snapshot.tasks[0].usage.contextTokens = -1;
+	snapshot.tasks[0].activities.push({ label: "tampered" });
+	const next = await h.call({ batchId: snapshot.batchId });
+	assert.equal(next.details.tasks[0].usage.contextTokens, 1200);
+	assert.equal(next.details.tasks[0].activities.some((item: any) => item.label === "tampered"), false);
+	assert.deepEqual(result, original);
 });
 
 test("registered Worker redacts token credentials while preserving numeric counters and independent snapshots", async () => {
@@ -142,35 +144,31 @@ test("registered Worker redacts token credentials while preserving numeric count
 	} finally { await h.close(); }
 });
 
-test("title survives schema, execution and UI snapshots without replacing objective", async () => {
+test("title survives schema, execution and UI snapshots without replacing objective", async (t) => {
 	const titled = { ...task, title: "Inspect task cards" };
-	const h = harness(async (received) => {
+	const h = completingHarness(t, async (received) => {
 		assert.equal(received.title, titled.title);
 		assert.equal(received.objective, task.objective);
 		return structuredClone(complete);
 	});
-	try {
-		for (const title of [undefined, "", " \t ", titled.title]) {
-			assert.doesNotThrow(() => validateWorkerInput({ tasks: [{ ...task, title }] }));
-		}
-		assert.throws(() => validateWorkerInput({ tasks: [{ ...task, title: 42 }] }));
-		const response = await h.call({ tasks: [titled] });
-		assert.equal(response.details.tasks[0].status, "completed");
-		assert.equal(response.details.tasks[0].title, titled.title);
-		assert.equal(response.details.tasks[0].objective, task.objective);
-	} finally { await h.close(); }
+	for (const title of [undefined, "", " \t ", titled.title]) {
+		assert.doesNotThrow(() => validateWorkerInput({ tasks: [{ ...task, title }] }));
+	}
+	assert.throws(() => validateWorkerInput({ tasks: [{ ...task, title: 42 }] }));
+	const response = await h.call({ tasks: [titled] });
+	assert.equal(response.details.tasks[0].status, "completed");
+	assert.equal(response.details.tasks[0].title, titled.title);
+	assert.equal(response.details.tasks[0].objective, task.objective);
 });
 
-test("host transcript locator survives completion without progress and result compaction", async () => {
+test("host transcript locator survives completion without progress and result compaction", async (t) => {
 	const transcript = { version: 1 as const, id: "12345678-1234-4234-8234-123456789abc" };
-	const h = harness(async () => ({ ...complete, transcript }));
-	try {
-		const response = await h.call({ tasks: [task] });
-		assert.deepEqual(response.details.tasks[0].transcript, transcript);
-		assert.notEqual(response.details.tasks[0].transcript, transcript);
-		const continued = await h.call({ batchId: payload(response).batchId });
-		assert.deepEqual(continued.details.tasks[0].transcript, transcript);
-	} finally { await h.close(); }
+	const h = completingHarness(t, async () => ({ ...complete, transcript }));
+	const response = await h.call({ tasks: [task] });
+	assert.deepEqual(response.details.tasks[0].transcript, transcript);
+	assert.notEqual(response.details.tasks[0].transcript, transcript);
+	const continued = await h.call({ batchId: payload(response).batchId });
+	assert.deepEqual(continued.details.tasks[0].transcript, transcript);
 });
 
 test("only tasks-array starts, continuations and cancellations are accepted", () => {
@@ -194,46 +192,42 @@ test("only tasks-array starts, continuations and cancellations are accepted", ()
 	]) assert.throws(() => validateWorkerInput(input), /参数错误/);
 });
 
-test("continuations preserve completed results and do not reload settings or admit work", async () => {
+test("continuations preserve completed results and do not reload settings or admit work", async (t) => {
 	let starts = 0;
-	const h = harness(async () => { starts++; return structuredClone(batchResultFixture); });
+	const h = completingHarness(t, async () => { starts++; return structuredClone(batchResultFixture); });
 	const expected = { ...compactWorkerResult(batchResultFixture), observed_changed_files: batchResultFixture.observed_changed_files };
-	try {
-		assert.deepEqual([...h.tools.keys()], ["worker"]);
-		await assert.rejects(h.call({ task }), /参数错误/);
-		await assert.rejects(h.call({ task, tasks: [task] }), /参数错误/);
-		await assert.rejects(h.call({ tasks: [task], manual: true }), /参数错误/);
-		assert.equal(h.loads(), 0);
-		assert.equal(starts, 0);
-		for (const input of [{ tasks: [task] }, { tasks: [task, task] }]) {
-			const first = await h.call(input);
-			assert.deepEqual(first.details.payload.result, { status: "completed", results: input.tasks.map(() => expected) });
-			const loads = h.loads();
-			const calls: number = starts;
-			const continued = await h.call({ batchId: first.details.batchId });
-			assert.deepEqual(continued.content, first.content);
-			assert.equal(first.content[0].text, JSON.stringify(payload(first)));
-			assert.deepEqual(continued.details, { ...first.details, snapshotAt: continued.details.snapshotAt });
-			assert.equal(payload(await h.call({ batchId: first.details.batchId, cancel: true })).finished, true);
-			assert.equal(h.loads(), loads);
-			assert.equal(starts, calls);
-		}
-		assert.equal(starts, 3);
-		await assert.rejects(h.call({ batchId: "foreign" }), /未知/);
-	} finally { await h.close(); }
+	assert.deepEqual([...h.tools.keys()], ["worker"]);
+	await assert.rejects(h.call({ task }), /参数错误/);
+	await assert.rejects(h.call({ task, tasks: [task] }), /参数错误/);
+	await assert.rejects(h.call({ tasks: [task], manual: true }), /参数错误/);
+	assert.equal(h.loads(), 0);
+	assert.equal(starts, 0);
+	for (const input of [{ tasks: [task] }, { tasks: [task, task] }]) {
+		const first = await h.call(input);
+		assert.deepEqual(first.details.payload.result, { status: "completed", results: input.tasks.map(() => expected) });
+		const loads = h.loads();
+		const calls: number = starts;
+		const continued = await h.call({ batchId: first.details.batchId });
+		assert.deepEqual(continued.content, first.content);
+		assert.equal(first.content[0].text, JSON.stringify(payload(first)));
+		assert.deepEqual(continued.details, { ...first.details, snapshotAt: continued.details.snapshotAt });
+		assert.equal(payload(await h.call({ batchId: first.details.batchId, cancel: true })).finished, true);
+		assert.equal(h.loads(), loads);
+		assert.equal(starts, calls);
+	}
+	assert.equal(starts, 3);
+	await assert.rejects(h.call({ batchId: "foreign" }), /未知/);
 });
 
-test("blocked worker results return immediately without a waiting state or legacy response fields", async () => {
-	const h = harness(async () => ({ status: "blocked", summary: ["Need a decision"], recommended_next_action: ["Provide context in a new contract"] }));
-	try {
-		const result = payload(await h.call({ tasks: [task] }));
-		assert.equal(result.finished, true);
-		assert.equal(result.status, "partial");
-		assert.equal(result.tasks[0].status, "blocked");
-		assert.equal(result.result.results[0].status, "blocked");
-		assert.deepEqual(Object.keys(result).sort(), ["batchId", "finished", "next_action", "result", "status", "tasks"]);
-		assert.equal(payload(await h.call({ tasks: [task] })).finished, true);
-	} finally { await h.close(); }
+test("blocked worker results return immediately without a waiting state or legacy response fields", async (t) => {
+	const h = completingHarness(t, async () => ({ status: "blocked", summary: ["Need a decision"], recommended_next_action: ["Provide context in a new contract"] }));
+	const result = payload(await h.call({ tasks: [task] }));
+	assert.equal(result.finished, true);
+	assert.equal(result.status, "partial");
+	assert.equal(result.tasks[0].status, "blocked");
+	assert.equal(result.result.results[0].status, "blocked");
+	assert.deepEqual(Object.keys(result).sort(), ["batchId", "finished", "next_action", "result", "status", "tasks"]);
+	assert.equal(payload(await h.call({ tasks: [task] })).finished, true);
 });
 
 test("cancel waits for cleanup, cancels queued siblings and prevents new admission until released", async () => {
@@ -299,22 +293,20 @@ for (const mode of ["initial", "continue", "pre-continue"] as const) {
 	});
 }
 
-test("one invalid directory scope rejects the entire batch before routing or subprocess execution", async () => {
+test("one invalid directory scope rejects the entire batch before routing or subprocess execution", async (t) => {
 	let starts = 0;
-	const h = harness(async () => { starts++; return complete; });
-	try {
-		const result = payload(await h.call({ tasks: [
-			{ mode: "implement", preset: "normal", sessionMode: "fork", objective: "backend", allowedPaths: ["extensions/worker"] },
-			{ mode: "implement", preset: "normal", sessionMode: "fork", objective: "frontend", allowedPaths: ["README.md"] },
-		] }));
-		assert.equal(result.status, "failed");
-		assert.match(result.validation_errors[0].errors[0], /extensions\/worker\/\*\*/);
-		assert.deepEqual(result.validation_errors[1].errors, []);
-		assert.equal(h.loads(), 0);
-		assert.equal(starts, 0);
-		assert.equal(payload(await h.call({ tasks: [{ mode: "implement", preset: "normal", sessionMode: "fork", objective: "valid", allowedPaths: ["README.md"] }] })).finished, true);
-		assert.equal(starts, 1);
-	} finally { await h.close(); }
+	const h = completingHarness(t, async () => { starts++; return complete; });
+	const result = payload(await h.call({ tasks: [
+		{ mode: "implement", preset: "normal", sessionMode: "fork", objective: "backend", allowedPaths: ["extensions/worker"] },
+		{ mode: "implement", preset: "normal", sessionMode: "fork", objective: "frontend", allowedPaths: ["README.md"] },
+	] }));
+	assert.equal(result.status, "failed");
+	assert.match(result.validation_errors[0].errors[0], /extensions\/worker\/\*\*/);
+	assert.deepEqual(result.validation_errors[1].errors, []);
+	assert.equal(h.loads(), 0);
+	assert.equal(starts, 0);
+	assert.equal(payload(await h.call({ tasks: [{ mode: "implement", preset: "normal", sessionMode: "fork", objective: "valid", allowedPaths: ["README.md"] }] })).finished, true);
+	assert.equal(starts, 1);
 });
 
 

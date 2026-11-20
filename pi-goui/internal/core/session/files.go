@@ -207,16 +207,11 @@ func List(root, cwd string) ([]Summary, error) {
 	return listSessions(filepath.Join(root, "sessions"), cwd)
 }
 
-func listSessions(dir, cwd string) ([]Summary, error) {
-	var result []Summary
-	if cwd != "" {
-		abs, err := filepath.Abs(cwd)
-		if err != nil {
-			return nil, err
-		}
-		cwd = filepath.Clean(abs)
-	}
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+// walkSessionFiles opens regular session logs for an in-place read. The
+// visitor owns the timing of its post-read identity check: not all callers
+// inspect or validate the same records.
+func walkSessionFiles(dir string, visit func(string, *os.File, os.FileInfo) error) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == dir && errors.Is(walkErr, os.ErrNotExist) {
 				return nil
@@ -245,6 +240,32 @@ func listSessions(dir, cwd string) ([]Summary, error) {
 		if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 			return fmt.Errorf("session file changed while opening: %s", path)
 		}
+		return visit(path, f, opened)
+	})
+}
+
+// Reject path replacement, but allow the active writer to append.
+func checkSessionFileIdentity(path string, opened os.FileInfo) error {
+	current, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		return fmt.Errorf("session file changed while reading: %s", path)
+	}
+	return nil
+}
+
+func listSessions(dir, cwd string) ([]Summary, error) {
+	var result []Summary
+	if cwd != "" {
+		abs, err := filepath.Abs(cwd)
+		if err != nil {
+			return nil, err
+		}
+		cwd = filepath.Clean(abs)
+	}
+	err := walkSessionFiles(dir, func(path string, f *os.File, opened os.FileInfo) error {
 		r := bufio.NewReaderSize(f, 32*1024)
 		raw, err := readRecord(r)
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -285,13 +306,8 @@ func listSessions(dir, cwd string) ([]Summary, error) {
 				}
 			}
 		}
-		// Reject path replacement while allowing the active writer to append.
-		current, pathErr := os.Lstat(path)
-		if pathErr != nil {
-			return pathErr
-		}
-		if !current.Mode().IsRegular() || !os.SameFile(opened, current) {
-			return fmt.Errorf("session file changed while reading: %s", path)
+		if err := checkSessionFileIdentity(path, opened); err != nil {
+			return err
 		}
 		result = append(result, v)
 		return nil

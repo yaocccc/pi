@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"pi-goui/internal/core/config"
+	"pi-goui/internal/core/render/tooldata"
 	"pi-goui/internal/core/session"
 )
 
@@ -56,7 +57,7 @@ func changeDiffRows(item session.Item, theme config.Theme, width int) []string {
 			v.rows = append(v.rows, writtenGrid(content, visualString(args, "path"), width, theme)...)
 		}
 	} else {
-		edits := visualEdits(args)
+		edits := tooldata.EditArguments(args)
 		if len(edits) > 0 {
 			line("Replacement preview · not a recorded diff", theme.Muted)
 		}

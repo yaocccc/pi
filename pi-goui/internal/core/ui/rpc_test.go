@@ -17,29 +17,52 @@ import (
 	rpc "pi-goui/internal/runtime"
 )
 
-// Executed only by a temporary wrapper pointed at this test binary, never pi.
-func TestUIRPCProcess(t *testing.T) {
+// runUIRPCFixture serves only the test binary's temporary fake Pi wrapper.
+func runUIRPCFixture(respond func(kind string, req map[string]any) (data any, rejection string)) {
 	if os.Getenv("PIGOUI_UI_HELPER") != "1" {
 		return
+	}
+	var wire *json.Encoder
+	if path := os.Getenv("PIGOUI_UI_WIRE"); path != "" {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			os.Exit(2)
+		}
+		wire = json.NewEncoder(f)
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
 		var req map[string]any
 		if json.Unmarshal(scanner.Bytes(), &req) != nil {
-			continue
+			os.Exit(2)
+		}
+		if wire != nil && wire.Encode(req) != nil {
+			os.Exit(2)
 		}
 		kind, _ := req["type"].(string)
-		if path := os.Getenv("PIGOUI_UI_WIRE"); path != "" {
-			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
-			if err == nil {
-				b, _ := json.Marshal(req)
-				_, _ = f.Write(append(b, '\n'))
-				_ = f.Close()
-			}
+		data, rejection := respond(kind, req)
+		if data == nil && rejection == "" {
+			continue // A one-way request only appears on the wire.
 		}
+		response := map[string]any{"type": "response", "id": req["id"], "command": kind, "success": rejection == "", "data": data}
+		if rejection != "" {
+			response["error"] = rejection
+		}
+		if encoder.Encode(response) != nil {
+			os.Exit(2)
+		}
+	}
+	if scanner.Err() != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestUIRPCProcess(t *testing.T) {
+	runUIRPCFixture(func(kind string, req map[string]any) (any, string) {
 		if kind == "extension_ui_response" {
-			continue
+			return nil, ""
 		}
 		data := any(map[string]any{})
 		switch kind {
@@ -59,18 +82,19 @@ func TestUIRPCProcess(t *testing.T) {
 				data = map[string]any{"disposition": "handled"}
 			}
 		}
-		response := map[string]any{"type": "response", "id": req["id"], "command": kind, "success": true, "data": data}
 		if kind == "prompt" && strings.TrimSpace(fmt.Sprint(req["message"])) == "fail" {
-			response["success"] = false
-			response["error"] = "fake rejection"
+			return data, "fake rejection"
 		}
-		if err := encoder.Encode(response); err != nil {
-			os.Exit(2)
-		}
-	}
-	os.Exit(0)
+		return data, ""
+	})
 }
+
 func fakeConfig(t *testing.T) (rpc.Config, string) {
+	t.Helper()
+	return fakeConfigFor(t, "TestUIRPCProcess")
+}
+
+func fakeConfigFor(t *testing.T, helper string) (rpc.Config, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX wrapper")
@@ -83,21 +107,27 @@ func fakeConfig(t *testing.T) (rpc.Config, string) {
 		t.Fatal(err)
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-	script := "#!/bin/sh\nPIGOUI_UI_HELPER=1 PIGOUI_UI_WIRE=" + quote(wire) + " exec " + quote(exe) + " -test.run=^TestUIRPCProcess$ -- \"$@\"\n"
+	script := "#!/bin/sh\nPIGOUI_UI_HELPER=1 PIGOUI_UI_WIRE=" + quote(wire) + " exec " + quote(exe) + " -test.run=" + quote("^"+helper+"$") + " -- \"$@\"\n"
 	if err = os.WriteFile(bin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	return rpc.Config{Bin: bin, Cwd: dir, AgentDir: dir, NoSession: true}, wire
 }
+
 func fakeClient(t *testing.T) (*rpc.Client, string) {
 	t.Helper()
 	cfg, wire := fakeConfig(t)
+	return startFixtureClient(t, cfg), wire
+}
+
+func startFixtureClient(t *testing.T, cfg rpc.Config) *rpc.Client {
+	t.Helper()
 	c, err := rpc.Start(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	return c, wire
+	return c
 }
 func wireRecords(t *testing.T, path string, n int) []map[string]any {
 	t.Helper()

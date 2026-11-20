@@ -43,10 +43,9 @@ func event(m *Model, t *tab, raw string) {
 }
 
 // Tests deliver the same prepared payload shape as the asynchronous producer.
-func prepareSnapshotMessage(tab *tab, message snapshotMsg) snapshotMsg {
+func prepareSnapshotMessage(tab *tab, message snapshotMsg, state, entries json.RawMessage) snapshotMsg {
 	message.client, message.file, message.sourceID = tab.client, tab.state.File, tab.state.ID
-	message.prepared, message.prepareErr = tab.state.SnapshotPreparation().Prepare(message.state, message.entries, message.stats)
-	message.preparationDone = true
+	message.prepared, message.prepareErr = tab.state.SnapshotPreparation().Prepare(state, entries, nil)
 	return message
 }
 
@@ -116,7 +115,7 @@ func TestStaleSnapshotCannotRegressLiveState(t *testing.T) {
 	revision := tab.revision
 	event(m, tab, `{"type":"agent_start"}`)
 	event(m, tab, `{"type":"message_start","message":{"role":"assistant","timestamp":1,"content":[{"type":"text","text":"new live text"}]}}`)
-	m.Update(prepareSnapshotMessage(tab, snapshotMsg{id: tab.id, revision: revision, state: json.RawMessage(`{"sessionId":"old","model":{"id":"stale"},"isStreaming":false}`), entries: json.RawMessage(`{"entries":[],"leafId":null}`)}))
+	m.Update(prepareSnapshotMessage(tab, snapshotMsg{id: tab.id, revision: revision}, json.RawMessage(`{"sessionId":"old","model":{"id":"stale"},"isStreaming":false}`), json.RawMessage(`{"entries":[],"leafId":null}`)))
 	if !tab.state.Busy || tab.state.ID != "one" || tab.state.Model.ID != "current" {
 		t.Fatalf("stale snapshot regressed state: %+v", tab.state)
 	}
@@ -125,7 +124,7 @@ func TestStaleSnapshotCannotRegressLiveState(t *testing.T) {
 	}
 	busyRevision := tab.revision
 	event(m, tab, `{"type":"agent_settled"}`)
-	m.Update(prepareSnapshotMessage(tab, snapshotMsg{id: tab.id, revision: busyRevision, state: json.RawMessage(`{"sessionId":"one","isStreaming":true}`)}))
+	m.Update(prepareSnapshotMessage(tab, snapshotMsg{id: tab.id, revision: busyRevision}, json.RawMessage(`{"sessionId":"one","isStreaming":true}`), nil))
 	if tab.state.Busy {
 		t.Fatal("old busy snapshot resurrected a settled run")
 	}
@@ -134,7 +133,7 @@ func TestPartialSnapshotRetainsHistory(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
 	entries := json.RawMessage(`{"entries":[{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"before compaction"}},{"type":"compaction","id":"c1","parentId":"u1","summary":"summary","firstKeptEntryId":"u1"},{"type":"message","id":"a1","parentId":"c1","message":{"role":"assistant","content":"after compaction"}}],"leafId":"a1"}`)
-	m.Update(prepareSnapshotMessage(tab, snapshotMsg{id: tab.id, revision: tab.revision, state: json.RawMessage(`{"sessionId":"one","thinkingLevel":"high"}`), entries: entries, err: errors.New("optional commands unavailable")}))
+	m.Update(prepareSnapshotMessage(tab, snapshotMsg{id: tab.id, revision: tab.revision, err: errors.New("optional commands unavailable")}, json.RawMessage(`{"sessionId":"one","thinkingLevel":"high"}`), entries))
 	text := ansi.Strip(tab.doc.Text)
 	if !strings.Contains(text, "before compaction") || !strings.Contains(text, "after compaction") {
 		t.Fatalf("valid history discarded after optional failure: %s", text)

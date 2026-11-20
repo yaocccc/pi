@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -15,25 +14,13 @@ import (
 // supply its real native snapshot over RPC rather than replace it afterwards.
 func forkFixtureClient(t *testing.T, snapshot json.RawMessage) (*rpc.Client, string) {
 	t.Helper()
-	cfg, wire := fakeConfig(t)
+	cfg, wire := fakeConfigFor(t, "TestForkRPCProcess")
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	if err := os.WriteFile(path, snapshot, 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PIGOUI_FORK_SNAPSHOT", path)
-	script, err := os.ReadFile(cfg.Bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfg.Bin, []byte(strings.ReplaceAll(string(script), "TestUIRPCProcess", "TestForkRPCProcess")), 0700); err != nil {
-		t.Fatal(err)
-	}
-	client, err := rpc.Start(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	return client, wire
+	return startFixtureClient(t, cfg), wire
 }
 
 func setForkFixtureSnapshot(t *testing.T, snapshot json.RawMessage) {
@@ -116,35 +103,14 @@ func TestPreparedForkRevalidatesEnrichedDetailsWithoutBlockingLaterStream(t *tes
 }
 
 func TestForkRPCProcess(t *testing.T) {
-	if os.Getenv("PIGOUI_UI_HELPER") != "1" {
-		return
-	}
-	scanner := bufio.NewScanner(os.Stdin)
-	encoder := json.NewEncoder(os.Stdout)
-	for scanner.Scan() {
-		var request map[string]any
-		if json.Unmarshal(scanner.Bytes(), &request) != nil {
+	runUIRPCFixture(func(kind string, _ map[string]any) (any, string) {
+		if kind != "get_entries" {
+			return json.RawMessage(`{}`), ""
+		}
+		snapshot, err := os.ReadFile(os.Getenv("PIGOUI_FORK_SNAPSHOT"))
+		if err != nil {
 			os.Exit(3)
 		}
-		if path := os.Getenv("PIGOUI_UI_WIRE"); path != "" {
-			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-			if err != nil {
-				os.Exit(3)
-			}
-			_, _ = f.Write(append(append([]byte(nil), scanner.Bytes()...), '\n'))
-			_ = f.Close()
-		}
-		data := json.RawMessage(`{}`)
-		if request["type"] == "get_entries" {
-			snapshot, err := os.ReadFile(os.Getenv("PIGOUI_FORK_SNAPSHOT"))
-			if err != nil {
-				os.Exit(3)
-			}
-			data = snapshot
-		}
-		if err := encoder.Encode(map[string]any{"type": "response", "id": request["id"], "command": request["type"], "success": true, "data": data}); err != nil {
-			os.Exit(2)
-		}
-	}
-	os.Exit(0)
+		return json.RawMessage(snapshot), ""
+	})
 }

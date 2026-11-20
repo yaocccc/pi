@@ -51,8 +51,8 @@ func TestCreateNumberedForkProjectScope(t *testing.T) {
 				}
 				path = moved
 			}
-			writeSummaryFixture(t, root, summaryFixture(cwd, "[3]Original", "", "same project"))
-			writeSummaryFixture(t, filepath.Join(root, "sessions", "other"), summaryFixture(t.TempDir(), "[99]Original", "", "other project"))
+			writeSessionFixture(t, root, "cwd/session", summaryFixture(cwd, "[3]Original", "", "same project"))
+			writeSessionFixture(t, root, "other/sessions/cwd/session", summaryFixture(t.TempDir(), "[99]Original", "", "other project"))
 			foreignSibling := filepath.Join(filepath.Dir(path), "other-project.jsonl")
 			if err := os.WriteFile(foreignSibling, summaryFixture(t.TempDir(), "[999]Original", "", "other project"), 0600); err != nil {
 				t.Fatal(err)

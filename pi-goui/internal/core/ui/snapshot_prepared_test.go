@@ -35,7 +35,7 @@ func BenchmarkPreparedBackgroundSnapshot(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	message := snapshotMsg{id: tab.id, revision: tab.revision, entries: raw, prepared: prepared, preparationDone: true}
+	message := snapshotMsg{id: tab.id, revision: tab.revision, prepared: prepared}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -47,7 +47,7 @@ func TestUnpreparedHistoryNeverLoadsOnEventLoop(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
 	tab.state.Name = "original"
-	m.Update(snapshotMsg{id: tab.id, revision: tab.revision, state: json.RawMessage(`{"sessionName":"unexpected"}`), entries: json.RawMessage(`{`)})
+	m.Update(snapshotMsg{id: tab.id, revision: tab.revision})
 	if tab.state.Name != "original" || tab.status != "history snapshot was not prepared" {
 		t.Fatalf("unprepared history reached the loader: name=%q status=%q", tab.state.Name, tab.status)
 	}
@@ -64,7 +64,7 @@ func TestFailedPreparationStillSchedulesQueuedRefresh(t *testing.T) {
 	client, _ := fakeClient(t)
 	tab.client = client
 	tab.refreshing, tab.refreshAgain = true, true
-	m.Update(snapshotMsg{id: tab.id, revision: tab.revision, client: client, file: tab.state.File, sourceID: tab.state.ID, preparationDone: true, prepareErr: errors.New("invalid history")})
+	m.Update(snapshotMsg{id: tab.id, revision: tab.revision, client: client, file: tab.state.File, sourceID: tab.state.ID, prepareErr: errors.New("invalid history")})
 	if !tab.refreshing || tab.refreshAgain {
 		t.Fatal("failed preparation lost the already queued refresh")
 	}
@@ -77,12 +77,9 @@ func TestRefreshPreparesBeforeReturningToUI(t *testing.T) {
 	client, _ := fakeClient(t)
 	tab.client = client
 	message := m.refresh(tab)().(snapshotMsg)
-	if message.err != nil || message.prepareErr != nil || !message.preparationDone || message.prepared == nil {
+	if message.err != nil || message.prepareErr != nil || message.prepared == nil {
 		t.Fatalf("refresh returned unprepared history: %+v", message)
 	}
-	// The consumer must use the immutable candidate, not decode RPC bytes a
-	// second time on the UI goroutine.
-	message.entries = json.RawMessage(`invalid JSON no longer needed by commit`)
 	status := tab.status
 	m.Update(message)
 	if tab.state.ID != "fake" || tab.state.Model.ID != "one" || tab.status != status {
@@ -108,6 +105,25 @@ func TestStaleSnapshotDoesNotSpinDuringLocalWorkingRun(t *testing.T) {
 	}
 	if !tab.resume.pending {
 		t.Fatal("rejected snapshot was treated as authoritative")
+	}
+}
+
+func TestStaleRefreshErrorsDuringResume(t *testing.T) {
+	for _, transport := range []bool{false, true} {
+		m := testModel(t, "")
+		tab := m.current()
+		tab.resume.pending = true
+		tab.revision++
+		v := snapshotMsg{id: tab.id, revision: tab.revision - 1}
+		if transport {
+			v.err = errors.New("connection lost")
+		} else {
+			v.prepareErr = errors.New("invalid old history")
+		}
+		m.Update(v)
+		if tab.resume.failed != transport || tab.resume.pending == transport {
+			t.Fatalf("transport=%t: pending=%t failed=%t", transport, tab.resume.pending, tab.resume.failed)
+		}
 	}
 }
 
@@ -156,7 +172,7 @@ func TestPreparedRefreshFailureDoesNotPublishPartialState(t *testing.T) {
 	if err == nil || prepared != nil {
 		t.Fatal("bad history produced a prepared candidate")
 	}
-	m.Update(snapshotMsg{id: tab.id, revision: tab.revision, state: state, entries: entries, prepared: prepared, preparationDone: true, prepareErr: err, origin: &session.Header{ID: "new"}})
+	m.Update(snapshotMsg{id: tab.id, revision: tab.revision, prepared: prepared, prepareErr: err, origin: &session.Header{ID: "new"}})
 	if tab.state.ID != "original" || tab.state.File != "old.jsonl" || tab.origin.ID == "new" || !reflect.DeepEqual(tab.state.Items, before) {
 		t.Fatal("failed history published part of a replacement session")
 	}
