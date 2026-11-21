@@ -24,7 +24,7 @@ type toolInspector struct {
 	offset       int
 	followPaused bool
 	cache        inspectorKey
-	rows         []string
+	rows         render.DocumentRows
 	title        string
 	selection    transcriptSelection
 }
@@ -116,7 +116,7 @@ func (m *Model) closeInspector() {
 			t.selection = transcriptSelection{}
 		}
 		m.resizeEditor(t)
-		m.document(t)
+		m.reflowDocument(t)
 	}
 }
 func (m *Model) openInspector(id string) {
@@ -130,7 +130,7 @@ func (m *Model) openInspector(id string) {
 	t.footerHover.active = ""
 	m.extensionControls.Hover = false
 	m.resizeEditor(t)
-	m.document(t)
+	m.reflowDocument(t)
 }
 func (m *Model) inspectorInset() int {
 	_, width := m.inspectorBounds()
@@ -140,13 +140,22 @@ func (m *Model) inspectorInset() int {
 	return 1
 }
 func (m *Model) inspectorBodyHeight() int { return max(0, m.height-4) }
-func (m *Model) inspectorRows() []string {
+
+// Unlike a transcript, an absent inspector page has no selectable rows.
+func inspectorRowCount(rows render.DocumentRows) int {
+	if rows == (render.DocumentRows{}) {
+		return 0
+	}
+	return rows.LineCount()
+}
+
+func (m *Model) inspectorRows() render.DocumentRows {
 	if m.panelResize.dragging && m.panelResize.detail {
 		return m.inspector.rows
 	}
 	item, ok := m.inspectedTool()
 	if !ok {
-		return nil
+		return render.DocumentRows{}
 	}
 	if m.inspector.selection.dragging {
 		return m.inspector.rows
@@ -164,7 +173,7 @@ func (m *Model) inspectorRows() []string {
 	// Compare raw bytes to the saved strings before building a new key. The
 	// string comparisons are allocation-free; converting into a new key on
 	// every wheel/motion event otherwise copies the whole task snapshot.
-	if m.inspector.rows == nil || key.name != item.ToolName || key.text != item.Text ||
+	if key.name != item.ToolName || key.text != item.Text ||
 		key.args != string(item.Arguments) || key.details != string(item.Details) ||
 		key.running != item.Running || key.failed != item.Error || key.result != item.HasResult ||
 		key.images != len(item.Images) || key.width != bodyWidth || key.theme != m.cfg.Theme || key.version != version {
@@ -172,18 +181,19 @@ func (m *Model) inspectorRows() []string {
 		if m.inspector.content != nil {
 			m.inspector.rows = m.inspector.content.Rows(item, m.cfg.Theme, bodyWidth, conversationOptions, toolInspectButton)
 		} else {
-			m.inspector.rows = render.ToolResultRows(item, m.cfg.Theme, bodyWidth, m.extensions.Tools)
+			m.inspector.rows = render.PlainRows(render.ToolResultRows(item, m.cfg.Theme, bodyWidth, m.extensions.Tools))
 		}
 		// The title may decode large source arguments too; cache it with rows.
 		m.inspector.title = render.ToolResultTitle(item)
 		m.inspector.selection = transcriptSelection{}
 	}
-	m.inspector.offset = min(max(0, m.inspector.offset), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+	m.inspector.offset = min(max(0, m.inspector.offset), max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()))
 	return m.inspector.rows
 }
 func (m *Model) inspectorView() string {
 	left, width := m.inspectorBounds()
 	rows := m.inspectorRows()
+	count := inspectorRowCount(rows)
 	var out []string
 	title := m.inspector.title
 	if heading := m.inspector.view().Title; heading != "" {
@@ -200,8 +210,8 @@ func (m *Model) inspectorView() string {
 	for i := 0; i < m.inspectorBodyHeight(); i++ {
 		row := m.inspector.offset + i
 		line := ""
-		if row < len(rows) {
-			line = rows[row]
+		if row < count {
+			line = rows.Line(row)
 			if m.inspector.content != nil && m.inspector.content.Activity(row) {
 				line = render.AnimateToolActivity(line, m.cfg.Theme, m.frame)
 			}
@@ -216,7 +226,7 @@ func (m *Model) inspectorView() string {
 		out = append(out, line)
 	}
 	if m.height > 3 {
-		status := fmt.Sprintf("%d–%d / %d · wheel · Esc", min(len(rows), m.inspector.offset+1), min(len(rows), m.inspector.offset+m.inspectorBodyHeight()), len(rows))
+		status := fmt.Sprintf("%d–%d / %d · wheel · Esc", min(count, m.inspector.offset+1), min(count, m.inspector.offset+m.inspectorBodyHeight()), count)
 		if m.inspector.view().Conversation {
 			status = m.inspector.view().Status + " · " + status
 		}
@@ -233,7 +243,7 @@ func (m *Model) inspectorView() string {
 }
 func (m *Model) inspectorPoint(x, y int) textPoint {
 	left, _ := m.inspectorBounds()
-	return textPoint{line: min(max(0, m.inspector.offset+y-2), max(0, len(m.inspector.rows)-1)), cell: min(max(0, x-left-m.inspectorInset()), max(0, m.inspector.cache.width-1))}
+	return textPoint{line: min(max(0, m.inspector.offset+y-2), max(0, inspectorRowCount(m.inspector.rows)-1)), cell: min(max(0, x-left-m.inspectorInset()), max(0, m.inspector.cache.width-1))}
 }
 func (m *Model) inspectorClick(v tea.Mouse) bool {
 	t := m.current()
@@ -255,12 +265,9 @@ func (m *Model) inspectorClick(v tea.Mouse) bool {
 	}
 	if v.Y >= 2 && v.Y < m.height-2 && v.X >= left+inset && v.X < left+width-inset && v.Mod&tea.ModShift == 0 {
 		rows := m.inspectorRows()
-		if v.Y-2+m.inspector.offset < len(rows) {
+		if v.Y-2+m.inspector.offset < inspectorRowCount(rows) {
 			p := m.inspectorPoint(v.X, v.Y)
-			m.inspector.selection = transcriptSelection{anchor: p, end: p, dragging: true, lines: rows}
-			if m.inspector.view().Conversation {
-				m.inspector.selection.content = m.inspector.view().Document.Content
-			}
+			m.inspector.selection = transcriptSelection{anchor: p, end: p, dragging: true, document: rows}
 		}
 	}
 	return true
@@ -319,7 +326,7 @@ func (m *Model) inspectorWheel(v tea.Mouse) bool {
 		delta = 3
 	}
 	m.inspector.selection = transcriptSelection{}
-	bottom := max(0, len(rows)-m.inspectorBodyHeight())
+	bottom := max(0, inspectorRowCount(rows)-m.inspectorBodyHeight())
 	m.inspector.offset = min(max(0, m.inspector.offset+delta), bottom)
 	if m.inspector.view().Conversation && delta != 0 {
 		// An upward gesture pauses even when the content currently fits.
@@ -419,11 +426,10 @@ func (m *Model) toolInspectBlock(x, y int) (render.Block, hitRect, bool) {
 	if !ok || (action.InspectorTask == "" && m.extensions.InspectableCollection(t.state.Items[idx])) {
 		return render.Block{}, hitRect{}, false
 	}
-	lines := t.documentLines()
-	if top < 0 || max(row, buttonRow) >= min(b.End, len(lines)) {
+	if top < 0 || max(row, buttonRow) >= min(b.End, t.doc.LineCount()) {
 		return render.Block{}, hitRect{}, false
 	}
-	s := ansi.Strip(lines[top])
+	s := ansi.Strip(t.doc.Line(top))
 	l, r := strings.IndexAny(s, "╭┌"), strings.LastIndexAny(s, "╮┐")
 	if l < 0 || r < l {
 		return render.Block{}, hitRect{}, false
@@ -439,8 +445,8 @@ func (m *Model) toolInspectBlock(x, y int) (render.Block, hitRect, bool) {
 	key := &blocks[i]
 	if t.inspectFrame != key {
 		t.inspectFrame, t.inspectBottom = key, top
-		for j := top + 1; j < min(b.End, len(lines)); j++ {
-			corner := ansi.Cut(ansi.Strip(lines[j]), left, left+1)
+		for j := top + 1; j < min(b.End, t.doc.LineCount()); j++ {
+			corner := ansi.Cut(ansi.Strip(t.doc.Line(j)), left, left+1)
 			if corner == "╰" || corner == "└" {
 				t.inspectBottom = j
 				break

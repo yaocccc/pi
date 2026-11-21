@@ -15,14 +15,18 @@ func TestMouseFramedSelectionSkipsBordersAndPadding(t *testing.T) {
 	tab := m.current()
 	tab.doc = render.Transcript([]session.Item{{ID: "u", Role: "user", Text: "hello"}, {ID: "a", Role: "assistant", Text: "world"}}, m.cfg.Theme, render.Options{Width: 50})
 	tab.dirty, tab.follow, tab.offset = false, false, 0
-	rows := strings.Split(tab.doc.Text, "\n")
+	rows := strings.Split(tab.doc.FullText(), "\n")
 	m.beginSelection(tab, tea.Mouse{Button: tea.MouseLeft, X: 0, Y: transcriptTop})
 	tab.selection.end = textPoint{len(rows) - 1, 49}
 	tab.selection.moved = true
 	if got := tab.selection.text(); got != "hello\nworld" {
 		t.Fatalf("copied %q", got)
 	}
-	for i, span := range tab.doc.Content {
+	for i := 0; i < tab.doc.LineCount(); i++ {
+		span, ok := tab.doc.Span(i)
+		if !ok {
+			t.Fatal("missing span", i)
+		}
 		marked := m.selectionLine(tab, rows[i], i)
 		if ansi.Strip(marked) != ansi.Strip(rows[i]) {
 			t.Fatal("highlight changed display text")
@@ -37,7 +41,7 @@ func TestMouseFramedSelectionSkipsBordersAndPadding(t *testing.T) {
 		}
 	}
 	// The snapshot owns its spans even when a new document is assigned.
-	tab.doc.Content = nil
+	tab.doc.DocumentRows = render.PlainRows(rows)
 	if got := tab.selection.text(); got != "hello\nworld" {
 		t.Fatalf("snapshot lost spans: %q", got)
 	}
@@ -45,7 +49,7 @@ func TestMouseFramedSelectionSkipsBordersAndPadding(t *testing.T) {
 
 func TestSelectionContentPreservesIndentationBlankLinesAndWideText(t *testing.T) {
 	rows := []string{"╭──────────╮", "│   │x│    │", "│          │", "│   界é   │", "╰──────────╯"}
-	s := transcriptSelection{anchor: textPoint{0, 0}, end: textPoint{4, 11}, moved: true, lines: rows, content: []render.ContentSpan{{}, {Start: 2, End: 7, Content: true}, {Start: 2, End: 2, Content: true}, {Start: 2, End: 7, Content: true}, {}}}
+	s := transcriptSelection{anchor: textPoint{0, 0}, end: textPoint{4, 11}, moved: true, document: render.RowsWithSpans(rows, []render.ContentSpan{{}, {Start: 2, End: 7, Content: true}, {Start: 2, End: 2, Content: true}, {Start: 2, End: 7, Content: true}, {}})}
 	if got := s.text(); got != "  │x│\n\n  界é" {
 		t.Fatalf("copied %q", got)
 	}

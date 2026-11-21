@@ -1,7 +1,6 @@
 package render
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -15,8 +14,8 @@ func TestImageLinksFollowRenderedUnicodeGeometry(t *testing.T) {
 		items := []session.Item{{ID: "a", Role: "assistant", Text: "Earlier message", MessageIndex: 1}, item}
 		opts := Options{Width: width, MessageCount: 2}
 		doc := Transcript(items, testTheme(), opts)
-		rows := strings.Split(doc.Text, "\n")
-		checkWidth(t, doc.Text, width)
+		rows := strings.Split(doc.FullText(), "\n")
+		checkWidth(t, doc.FullText(), width)
 		for _, link := range doc.ImageLinks {
 			if link.ItemID != item.ID || link.ImageIndex < 0 || link.ImageIndex >= 2 || link.Row < 0 || link.Row >= len(rows) {
 				t.Fatalf("bad link %+v", link)
@@ -25,7 +24,7 @@ func TestImageLinksFollowRenderedUnicodeGeometry(t *testing.T) {
 			if got := ansi.Strip(ansi.Cut(rows[link.Row], link.Start, link.End)); got != want {
 				t.Fatalf("width %d: link %+v hits %q", width, link, got)
 			}
-			span := doc.Content[link.Row]
+			span, _ := doc.Span(link.Row)
 			if !span.Content || link.Start < span.Start || link.End > span.End {
 				t.Fatalf("link outside selectable body: %+v %+v", link, span)
 			}
@@ -34,9 +33,9 @@ func TestImageLinksFollowRenderedUnicodeGeometry(t *testing.T) {
 			}
 		}
 		if width >= 30 && len(doc.ImageLinks) != 2 {
-			t.Fatalf("width %d: missing links: %q %+v", width, ansi.Strip(doc.Text), doc.ImageLinks)
+			t.Fatalf("width %d: missing links: %q %+v", width, ansi.Strip(doc.FullText()), doc.ImageLinks)
 		}
-		if strings.Contains(doc.Text, "PRIVATE_") || strings.Contains(doc.Text, "\x1b]8;") {
+		if strings.Contains(doc.FullText(), "PRIVATE_") || strings.Contains(doc.FullText(), "\x1b]8;") {
 			t.Fatal("data or external OSC link leaked")
 		}
 		if len(doc.Blocks) != 2 {
@@ -44,7 +43,7 @@ func TestImageLinksFollowRenderedUnicodeGeometry(t *testing.T) {
 		}
 		var cache TranscriptCache
 		for i := 0; i < 2; i++ {
-			if got := cache.Transcript(items, testTheme(), opts); !reflect.DeepEqual(got, doc) {
+			if got := cache.Transcript(items, testTheme(), opts); !equalDocuments(got, doc) {
 				t.Fatalf("cached link offsets differ at width %d", width)
 			}
 		}
@@ -79,7 +78,7 @@ func TestImageReferenceColorPreservesTextAndRejectsInvalidIndices(t *testing.T) 
 		t.Fatal("cache missed new image reference")
 	}
 	item.Images[0].Data = "replacement bytes"
-	if got := cache.Transcript([]session.Item{item}, testTheme(), Options{Width: 100}); !reflect.DeepEqual(got, doc) {
+	if got := cache.Transcript([]session.Item{item}, testTheme(), Options{Width: 100}); !equalDocuments(got, doc) {
 		t.Fatal("image byte replacement unnecessarily changed display")
 	}
 }

@@ -210,7 +210,7 @@ func TestForkTranscriptStartsAtFirstRow(t *testing.T) {
 			break
 		}
 	}
-	branch.doc = render.Document{Text: "copy me", Content: []render.ContentSpan{{Start: 0, End: 7, Content: true}}}
+	branch.doc = render.Document{DocumentRows: render.RowsWithSpans([]string{"copy me"}, []render.ContentSpan{{Start: 0, End: 7, Content: true}})}
 	branch.offset = 0
 	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 0, Y: 0})
 	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: 3, Y: 0})

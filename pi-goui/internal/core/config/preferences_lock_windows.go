@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -11,7 +12,11 @@ func lockFrontend(path string) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, new(windows.Overlapped))
+	err = retryFrontendLock(path, func() error {
+		return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, new(windows.Overlapped))
+	}, func(err error) bool {
+		return errors.Is(err, windows.ERROR_LOCK_VIOLATION)
+	})
 	if err != nil {
 		f.Close()
 		return nil, err

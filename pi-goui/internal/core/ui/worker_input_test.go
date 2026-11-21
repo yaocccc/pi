@@ -34,19 +34,19 @@ func TestWorkerInputListInteractionAndCache(t *testing.T) {
 			w.Revision++
 			rows := m.inspectorRows()
 			if len(w.InputActions) != 2 {
-				t.Fatalf("no action metadata: %+v\n%s", w.InputActions, strings.Join(rows, "\n"))
+				t.Fatalf("no action metadata: %+v\n%s", w.InputActions, rows.FullText())
 			}
-			if strings.Contains(ansi.Strip(strings.Join(rows, "\n")), "path-11.go") {
+			if strings.Contains(ansi.Strip(rows.FullText()), "path-11.go") {
 				t.Fatal("list not collapsed")
 			}
 			again := m.inspectorRows()
-			if &rows[0] != &again[0] {
+			if rows != again {
 				t.Fatal("static hover rebuilt document")
 			}
 			a := w.InputActions[0]
 			// Scroll to the action rather than relying on auto-follow position.
 			m.inspector.followPaused = true
-			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()))
 			left, _ := m.inspectorBounds()
 			x, y := left+m.inspectorInset()+a.Rect.X, 2+a.Rect.Y-m.inspector.offset
 			if m.pointerShapeAt(x, y) != "pointer" {
@@ -61,7 +61,7 @@ func TestWorkerInputListInteractionAndCache(t *testing.T) {
 			if !w.InputExpanded[a.Key] || w.InputExpanded[w.InputActions[1].Key] {
 				t.Fatal("lists not independently toggled")
 			}
-			if !strings.Contains(ansi.Strip(w.Doc.Text), "path-11.go") {
+			if !strings.Contains(ansi.Strip(w.Doc.FullText()), "path-11.go") {
 				t.Fatal("expanded content missing")
 			}
 			if w.Visible[0].Text != original {
@@ -74,7 +74,7 @@ func TestWorkerInputListInteractionAndCache(t *testing.T) {
 			}
 			m.extensionConversationRows(width)
 			a = w.InputActions[0]
-			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()))
 			x, y = left+m.inspectorInset()+a.Rect.X, 2+a.Rect.Y-m.inspector.offset
 			m.inspectorClick(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorMotion(tea.Mouse{Button: tea.MouseLeft, X: x + 1, Y: y})
@@ -91,7 +91,7 @@ func TestWorkerInputListInteractionAndCache(t *testing.T) {
 			m.Update(tea.WindowSizeMsg{Width: 30, Height: 40})
 			m.inspectorRows()
 			a = w.InputActions[0]
-			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+			m.inspector.offset = min(max(0, a.Rect.Y-3), max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()))
 			x, y = m.inspectorInset()+a.Rect.X, 2+a.Rect.Y-m.inspector.offset
 			m.inspectorClick(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
 			m.inspectorRelease(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})

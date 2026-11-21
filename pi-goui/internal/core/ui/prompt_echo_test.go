@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"pi-goui/internal/core/render"
 	"strings"
 	"testing"
 
@@ -67,13 +68,13 @@ func TestPromptEchoSurvivesPreviewAndInflightLayout(t *testing.T) {
 	}
 	owner.setValue("NEW-ECHO")
 	m.submitChecked(owner, false, true)
-	if !strings.Contains(ansi.Strip(owner.doc.Text), "NEW-ECHO") {
+	if !strings.Contains(ansi.Strip(owner.doc.FullText()), "NEW-ECHO") {
 		t.Fatal("echo waited for in-flight history layout")
 	}
 	owner.setValue("later")
 	// Publish the compatible native layout; it cannot remove the local echo.
 	m.receiveDocument(job.render().(documentResult))
-	if !strings.Contains(ansi.Strip(owner.doc.Text), "NEW-ECHO") || strings.Count(ansi.Strip(owner.doc.Text), "NEW-ECHO") != 1 {
+	if !strings.Contains(ansi.Strip(owner.doc.FullText()), "NEW-ECHO") || strings.Count(ansi.Strip(owner.doc.FullText()), "NEW-ECHO") != 1 {
 		t.Fatal("native layout erased or duplicated the echo")
 	}
 	if len(owner.state.Items) != 1 || owner.state.Items[0].Text != "SAVED-LOCAL-HISTORY" || owner.editor.Value() != "later" {
@@ -114,7 +115,7 @@ func TestPromptEchoConfirmationUsesNewNativeIdentity(t *testing.T) {
 		t.Fatal("native confirmation did not replace exactly one projected bubble")
 	}
 	m.Update(staleLayout())
-	if !strings.Contains(ansi.Strip(owner.doc.Text), "transformed by backend") || strings.Count(ansi.Strip(owner.doc.Text), "same text") != 1 {
+	if !strings.Contains(ansi.Strip(owner.doc.FullText()), "transformed by backend") || strings.Count(ansi.Strip(owner.doc.FullText()), "same text") != 1 {
 		t.Fatal("confirmation retained local text instead of native history")
 	}
 	m.Update(eventBatchMsg{id: owner.id, client: owner.client, events: []rpc.Event{current}})
@@ -261,18 +262,27 @@ func TestPromptEchoGeometryKeepsNativeDocumentImmutable(t *testing.T) {
 	m.document(owner)
 	base := owner.nativeDocument
 	m.showPromptEcho(owner, "echo [image1]", []map[string]any{{"data": "AA==", "mimeType": "image/png"}}, nil)
-	if len(base.Blocks) != 1 || base.Text != owner.nativeDocument.Text || len(base.ImageLinks) != 0 || len(owner.doc.ImageLinks) != 1 {
+	if len(base.Blocks) != 1 || base.FullText() != owner.nativeDocument.FullText() || len(base.ImageLinks) != 0 || len(owner.doc.ImageLinks) != 1 {
 		t.Fatal("echo mutated the published native document")
 	}
-	if len(owner.doc.Content) != len(strings.Split(owner.doc.Text, "\n")) {
+	if !hasSpans(owner.doc) {
 		t.Fatal("echo broke selection row geometry")
 	}
 	last := owner.doc.Blocks[len(owner.doc.Blocks)-1]
-	if last.Start < len(strings.Split(base.Text, "\n")) || last.End > len(owner.documentLines()) || owner.doc.ImageLinks[0].Row < last.Start {
+	if last.Start < len(strings.Split(base.FullText(), "\n")) || last.End > owner.doc.LineCount() || owner.doc.ImageLinks[0].Row < last.Start {
 		t.Fatal("echo block or attachment link has an incorrect row offset")
 	}
 	m.clearPromptEcho(owner, owner.promptEcho)
-	if owner.doc.Text != base.Text || len(owner.doc.Blocks) != 1 {
+	if owner.doc.FullText() != base.FullText() || len(owner.doc.Blocks) != 1 {
 		t.Fatal("removing echo changed native history")
 	}
+}
+
+func hasSpans(d render.Document) bool {
+	for i := 0; i < d.LineCount(); i++ {
+		if _, ok := d.Span(i); !ok {
+			return false
+		}
+	}
+	return true
 }

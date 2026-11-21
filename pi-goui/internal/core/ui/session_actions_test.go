@@ -66,7 +66,9 @@ func TestSessionActionSavedRenameDeleteAndCancellation(t *testing.T) {
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
+	stale := sidebarHistoryMsg{generation: m.sidebarHistory.generation, cwd: m.tabDirectory(tab), sessions: []session.Summary{{Path: p, ID: "saved-id", Name: "Saved"}}}
 	m.Update(result)
+	m.Update(stale) // completed after rename, but read the old name
 	data, _ := os.ReadFile(p)
 	if !strings.HasPrefix(string(data), string(before)) || !strings.Contains(string(data), `"name":"Saved renamed"`) {
 		t.Fatal("rename did not persist native metadata")

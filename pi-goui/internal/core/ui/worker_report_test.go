@@ -19,7 +19,7 @@ func TestWorkerReportConversationRendering(t *testing.T) {
 	w.RefreshVisibleMessages(w.Replay.View())
 	for _, width := range []int{20, 40, 80} {
 		rows := m.extensionConversationRows(width)
-		plain := ansi.Strip(strings.Join(rows, "\n"))
+		plain := ansi.Strip(rows.FullText())
 		for _, want := range []string{"摘要", "验证", "验收", "风险", "恢复中间活动"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("width %d missing %s", width, want)
@@ -29,7 +29,7 @@ func TestWorkerReportConversationRendering(t *testing.T) {
 			t.Fatalf("report was not rendered as Markdown: %s", plain)
 		}
 		cached := m.extensionConversationRows(width)
-		if &cached[0] != &rows[0] {
+		if cached != rows || cached != w.Doc.DocumentRows {
 			t.Fatal("cache rebuilt on static view")
 		}
 	}

@@ -17,9 +17,7 @@ type textPoint struct{ line, cell int }
 type transcriptSelection struct {
 	anchor, end     textPoint
 	dragging, moved bool
-	document        string
-	lines           []string
-	content         []render.ContentSpan
+	document        render.DocumentRows
 }
 
 func (s transcriptSelection) ordered() (textPoint, textPoint) {
@@ -59,8 +57,7 @@ func (s transcriptSelection) bounds(line string, row int) (int, int, bool) {
 	if row == b.line {
 		_, hi = cellSpan(line, b.cell)
 	}
-	if row < len(s.content) {
-		span := s.content[row]
+	if span, ok := s.document.Span(row); ok {
 		if !span.Content {
 			return 0, 0, false
 		}
@@ -72,17 +69,13 @@ func (s transcriptSelection) text() string {
 	if !s.moved {
 		return ""
 	}
-	lines := s.lines
-	if lines == nil {
-		lines = strings.Split(s.document, "\n")
-	}
 	a, b := s.ordered()
 	var selected []string
-	for row := max(0, a.line); row <= b.line && row < len(lines); row++ {
-		if row < len(s.content) && !s.content[row].Content {
+	for row := max(0, a.line); row <= b.line && row < s.document.LineCount(); row++ {
+		if span, ok := s.document.Span(row); ok && !span.Content {
 			continue
 		}
-		line := ansi.Strip(lines[row])
+		line := ansi.Strip(s.document.Line(row))
 		lo, hi, ok := s.bounds(line, row)
 		part := ""
 		if ok {
@@ -95,7 +88,7 @@ func (s transcriptSelection) text() string {
 	return render.Clean(strings.Join(selected, "\n"))
 }
 func (m *Model) selectionLine(t *tab, line string, row int) string {
-	if t.selection.document != t.doc.Text {
+	if t.selection.document != t.doc.DocumentRows {
 		return line
 	}
 	lo, hi, ok := t.selection.bounds(line, row)
@@ -112,10 +105,7 @@ func copySelection(t *tab, text string) tea.Cmd {
 }
 func (m *Model) transcriptPoint(t *tab, x, y int) textPoint {
 	row := t.offset + min(max(0, y-transcriptTop), max(0, m.transcriptHeight(t)-1))
-	lineCount := len(t.selection.lines)
-	if lineCount == 0 || t.selection.document != t.doc.Text {
-		lineCount = len(t.documentLines())
-	}
+	lineCount := t.doc.LineCount()
 	row = min(max(0, row), lineCount-1)
 	return textPoint{row, min(max(0, x), max(0, m.mainWidth()-1))}
 }
@@ -125,12 +115,11 @@ func (m *Model) beginSelection(t *tab, v tea.Mouse) {
 	if m.height < 8 || v.Mod&tea.ModShift != 0 || v.X < 0 || v.X >= m.mainWidth() || v.Y < transcriptTop || v.Y >= m.transcriptHeight(t)+transcriptTop {
 		return
 	}
-	lines := t.documentLines()
-	if v.Y-transcriptTop+t.offset >= len(lines) {
+	if v.Y-transcriptTop+t.offset >= t.doc.LineCount() {
 		return // Blank viewport rows are not the last message's fold target.
 	}
 	point := m.transcriptPoint(t, v.X, v.Y)
-	t.selection = transcriptSelection{anchor: point, end: point, dragging: true, document: t.doc.Text, lines: lines, content: t.doc.Content}
+	t.selection = transcriptSelection{anchor: point, end: point, dragging: true, document: t.doc.DocumentRows}
 }
 func (m *Model) mouseMotion(v tea.Mouse) {
 	if m.movePanelResize(v) {
@@ -222,7 +211,7 @@ func (m *Model) mouseRelease(v tea.Mouse) tea.Cmd {
 	}
 	if toggleDocumentBlock(t.doc, row, t.folds) {
 		t.invalidateDocument()
-		m.document(t)
+		m.reflowDocument(t)
 	}
 	return nil
 }
@@ -233,7 +222,7 @@ func (r hitRect) contains(x, y int) bool { return y == r.y && x >= r.x && x < r.
 
 // Both drawing and hit-testing derive from this exact status-row layout.
 func (m *Model) latestButton(t *tab) (string, hitRect, bool) {
-	bottom := max(0, len(t.documentLines())-m.transcriptHeight(t))
+	bottom := max(0, t.doc.LineCount()-m.transcriptHeight(t))
 	if m.height < 8 || len(t.dialogs) > 0 || t.follow || t.offset >= bottom {
 		return "", hitRect{}, false
 	}

@@ -69,7 +69,7 @@ export default function (pi: ExtensionAPI) {
             return;
         }
 
-        const serviceTier = config.level === 'ultrafast' && model.id === 'gpt-6-astra'
+        const serviceTier = config.level === 'ultrafast' && model.id?.endsWith('astra')
             ? 'ultrafast'
             : config.level !== 'normal' ? 'priority' : undefined;
 

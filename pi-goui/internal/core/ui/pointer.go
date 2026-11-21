@@ -120,7 +120,7 @@ func (m *Model) pointerShapeAt(x, y int) string {
 	}
 	if m.height >= 8 && y >= transcriptTop && y < transcriptTop+m.transcriptHeight(t) {
 		row := y - transcriptTop + t.offset
-		if row >= len(t.documentLines()) {
+		if row >= t.doc.LineCount() {
 			return "text"
 		}
 		for _, link := range t.doc.ImageLinks {

@@ -31,6 +31,7 @@ func (r *record) project() *recordProjection {
 		p.blocks = append(p.blocks, projectedBlock{item: t, busy: busy, active: active})
 	}
 	addTool := func(t Item, busy bool) {
+		t.layoutArgs, t.layoutDetails = freezeJSON(t.Arguments), freezeJSON(t.Details)
 		estimateItem(&t)
 		p.blocks = append(p.blocks, projectedBlock{item: t, busy: busy, tool: true})
 	}

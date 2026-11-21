@@ -10,6 +10,7 @@ import (
 )
 
 type branchJump struct {
+	awaitingLayout  bool
 	path, id, entry string
 	epoch           uint64
 	loading         *dialog
@@ -181,6 +182,20 @@ func (m *Model) branchOpenResult(v branchOpenMsg) tea.Cmd {
 }
 
 func (m *Model) finishOriginJump(t *tab) {
+	if t.originJump == nil {
+		return
+	}
+	if !t.selection.dragging && t == m.current() && t.originJump.epoch == m.branchEpoch {
+		m.reflowDocument(t)
+		if t.dirty {
+			t.originJump.awaitingLayout = true
+			return // apply after the compatible layout is published
+		}
+	}
+	m.applyOriginJump(t)
+}
+
+func (m *Model) applyOriginJump(t *tab) {
 	j := t.originJump
 	if j == nil {
 		return
@@ -200,7 +215,6 @@ func (m *Model) finishOriginJump(t *tab) {
 		t.notify("正在选择文本；请结束选择后重新查看来源")
 		return
 	}
-	m.document(t)
 	for _, b := range t.doc.Blocks {
 		if b.Role == "user" && strings.TrimSuffix(b.ID, "/0") == j.entry {
 			t.follow = false

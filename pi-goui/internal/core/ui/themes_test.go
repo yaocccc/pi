@@ -9,6 +9,24 @@ import (
 	"pi-goui/internal/core/config"
 )
 
+func TestLateThemeSaveDoesNotReplaceNewPreview(t *testing.T) {
+	m := testModel(t, "")
+	tab := m.current()
+	save := m.chooseTheme(tab, "gradient-frost")
+	m.chooseTheme(tab, "")
+	m.key(tea.KeyPressMsg{Code: tea.KeyDown})
+	preview := m.cfg.Theme
+	m.Update(commandResult(save))
+	if m.cfg.Theme != preview || m.cfg.ThemeName != "gradient-frost" {
+		t.Fatal("late save replaced active preview or lost the new default")
+	}
+	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
+	want, err := config.LoadTheme(m.cfg.AgentDir, "gradient-frost")
+	if err != nil || m.cfg.Theme != want {
+		t.Fatal("cancel restored pre-save theme", err)
+	}
+}
+
 func TestThemePickerOpenAndSelect(t *testing.T) {
 	m := testModel(t, "")
 	m.cfg.AgentDir = t.TempDir()
@@ -40,7 +58,11 @@ func TestThemePickerOpenAndSelect(t *testing.T) {
 		t.Fatalf("unexpected filtered options: %+v", options)
 	}
 	d.selected = 0
-	m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
+	save := m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if _, err := os.Stat(filepath.Join(m.cfg.AgentDir, "goui.json.lock")); !os.IsNotExist(err) {
+		t.Fatalf("selection waited for a file lock: %v", err)
+	}
+	m.Update(commandResult(save))
 	if len(tab.dialogs) != 0 {
 		t.Fatal("picker remained open")
 	}

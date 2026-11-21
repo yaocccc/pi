@@ -11,7 +11,7 @@ import (
 func TestMessageFramesTouchWithoutAddedBlankRows(t *testing.T) {
 	items := []session.Item{{ID: "u", Role: "user", Text: "你好", MessageIndex: 1}, {ID: "a", Role: "assistant", Text: "Hello", MessageIndex: 2}, {ID: "s", Role: "system", Text: "Context compacted — earlier messages retained\nSummary", MessageIndex: 3}, {ID: "u2", Role: "user", Text: "Next", MessageIndex: 4}}
 	doc := Transcript(items, testTheme(), Options{Width: 80, MessageCount: 4})
-	for _, line := range strings.Split(ansi.Strip(doc.Text), "\n") {
+	for _, line := range strings.Split(ansi.Strip(doc.FullText()), "\n") {
 		if strings.TrimSpace(line) == "" {
 			t.Fatal("inserted gap between message frames")
 		}
@@ -26,7 +26,7 @@ func TestMessageFramesTouchWithoutAddedBlankRows(t *testing.T) {
 	}
 	// A user paragraph separation remains part of its source, unlike frame gaps.
 	paragraph := Transcript([]session.Item{{ID: "p", Role: "assistant", Text: "first\n\nsecond"}}, testTheme(), Options{Width: 80})
-	if !strings.Contains(ansi.Strip(paragraph.Text), "first") || !strings.Contains(ansi.Strip(paragraph.Text), "second") {
+	if !strings.Contains(ansi.Strip(paragraph.FullText()), "first") || !strings.Contains(ansi.Strip(paragraph.FullText()), "second") {
 		t.Fatal("source paragraph lost")
 	}
 }

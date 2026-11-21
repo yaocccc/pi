@@ -1,18 +1,19 @@
 package hostui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/x/ansi"
 	"pi-goui/internal/core/extension"
 	"pi-goui/internal/core/render"
 	"pi-goui/internal/core/session"
-	"strings"
 )
 
 type ConversationTarget = extension.ConversationTarget
 
 // Build hit regions once per document, not once per pointer-motion event. The
 // coordinates are document cells; the viewport only translates and clips them.
-func ConversationTargets(doc render.Document, lines []string, items []session.Item, toolInspectButton string) []ConversationTarget {
+func ConversationTargets(doc render.Document, items []session.Item, toolInspectButton string) []ConversationTarget {
 	tools := map[string]bool{}
 	workers := map[string]bool{}
 	for _, it := range items {
@@ -24,10 +25,10 @@ func ConversationTargets(doc render.Document, lines []string, items []session.It
 	var out []ConversationTarget
 	for _, b := range doc.Blocks {
 		top := b.Start + 1
-		if !tools[b.ID] || !b.Expanded || top >= len(lines) {
+		if !tools[b.ID] || !b.Expanded || top >= doc.LineCount() {
 			continue
 		}
-		s := ansi.Strip(lines[top])
+		s := ansi.Strip(doc.Line(top))
 		l, r := strings.IndexAny(s, "╭┌"), strings.LastIndexAny(s, "╮┐")
 		if l < 0 || r < l {
 			continue

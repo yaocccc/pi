@@ -125,7 +125,7 @@ func TestWorkerWithoutExtensionBackendNeverReadsLocalRecordings(t *testing.T) {
 	if (m.inspector.content != nil && m.inspector.content.(*hostui.Inspector).Worker != nil) || !strings.Contains(m.inspector.content.(*hostui.Inspector).Fallback, "不可用") {
 		t.Fatal("missing backend did not fall back")
 	}
-	if strings.Contains(strings.Join(m.inspectorRows(), "\n"), "PRIVATE_LOCAL_RECORDING") {
+	if strings.Contains(m.inspectorRows().FullText(), "PRIVATE_LOCAL_RECORDING") {
 		t.Fatal("frontend read a local recording without RPC")
 	}
 }
@@ -134,7 +134,7 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 	m, parent, path := workerPageFixture(t)
 	original, _ := json.Marshal(parent.state)
 	rect := workerTaskButton(t, m, "index:batch:0")
-	parent.selection = transcriptSelection{anchor: textPoint{line: 1}, end: textPoint{line: 2}, moved: true, document: parent.doc.Text}
+	parent.selection = transcriptSelection{anchor: textPoint{line: 1}, end: textPoint{line: 2}, moved: true, document: parent.doc.DocumentRows}
 	savedSelection := parent.selection
 	click := tea.Mouse{Button: tea.MouseLeft, X: rect.x + rect.width - 1, Y: rect.y}
 	cmd := m.mouse(click)
@@ -153,7 +153,7 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 	m.inspector.content.(*hostui.Inspector).Worker.Next = time.Time{}
 	receiveWorkerCommand(t, m, m.pollExtensionInspectors(time.Now()))
 	rows := m.inspectorRows()
-	all := ansi.Strip(strings.Join(rows, "\n"))
+	all := ansi.Strip(rows.FullText())
 	for _, text := range []string{"真实任务输入", "实时中文"} {
 		if !strings.Contains(all, text) {
 			t.Fatalf("missing %q in %s", text, all)
@@ -179,20 +179,23 @@ func TestWorkerConversationInspectorLiveAndCopy(t *testing.T) {
 		m.inspectorWheel(tea.Mouse{Button: tea.MouseWheelDown, X: left + 3, Y: 5})
 		m.inspectorView()
 	}
-	if &m.inspectorRows()[0] != &rows[0] {
+	if m.inspectorRows() != rows {
 		t.Fatal("scroll rerendered conversation")
 	}
 	found := false
-	for i, line := range rows {
+	for i, line := range rows.Range(0, rows.LineCount()) {
 		plain := ansi.Strip(line)
 		at := strings.Index(plain, "实时中文")
 		if at < 0 {
 			continue
 		}
-		m.inspector.offset = min(i, max(0, len(rows)-m.inspectorBodyHeight()))
+		m.inspector.offset = min(i, max(0, rows.LineCount()-m.inspectorBodyHeight()))
 		y := 2 + i - m.inspector.offset
 		x := left + m.inspectorInset() + ansi.StringWidth(plain[:at])
 		m.mouse(tea.Mouse{Button: tea.MouseLeft, X: x, Y: y})
+		if m.inspector.selection.document != rows || rows != m.inspector.view().Document.DocumentRows {
+			t.Fatal("selection did not retain the published conversation snapshot")
+		}
 		m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: x + 3, Y: y})
 		if got := clipboardText(t, m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: x + 3, Y: y})); got != "实时" {
 			t.Fatalf("copy=%q", got)
@@ -237,7 +240,7 @@ func TestWorkerSummaryFallbackLifecycle(t *testing.T) {
 	if m.openExtensionInspector(parent, "w", "index:batch:0") != nil || (m.inspector.content != nil && m.inspector.content.(*hostui.Inspector).Worker != nil) {
 		t.Fatal("old snapshot started a recording read")
 	}
-	plain := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	plain := ansi.Strip(m.inspectorRows().FullText())
 	for _, want := range []string{"简要详情", "完整会话记录不可用", "未保存", "ONLY_A_GOAL", "FIRST_SUMMARY", "go test", "ONLY_A_RISK", "deep"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q in %s", want, plain)
@@ -250,11 +253,11 @@ func TestWorkerSummaryFallbackLifecycle(t *testing.T) {
 	}
 	rows := m.inspector.rows
 	m.inspectorRows()
-	if &rows[0] != &m.inspector.rows[0] {
+	if rows != m.inspector.rows {
 		t.Fatal("unchanged fallback rebuilt")
 	}
 	snapshot(true, "", "UPDATED_SUMMARY")
-	plain = ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	plain = ansi.Strip(m.inspectorRows().FullText())
 	if !strings.Contains(plain, "UPDATED_SUMMARY") || strings.Contains(plain, "ONLY_B_") {
 		t.Fatal("reorder or live summary failed")
 	}
@@ -312,7 +315,7 @@ func TestWorkerFallbackReadFailuresAndRecovery(t *testing.T) {
 			if !m.inspectorOpen() || (m.inspector.content != nil && m.inspector.content.(*hostui.Inspector).Worker != nil) || m.inspector.content.(*hostui.Inspector).Fallback == "" {
 				t.Fatal("failure did not open summary")
 			}
-			plain := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+			plain := ansi.Strip(m.inspectorRows().FullText())
 			if !strings.Contains(plain, "简要详情") || strings.Contains(plain, "PRIVATE") || strings.Contains(plain, "../../") {
 				t.Fatal("bad or unsafe summary")
 			}
@@ -498,18 +501,18 @@ func TestWorkerConversationWidthDragAndLiveCache(t *testing.T) {
 	for _, width := range []int{70, 80, 90, 75} {
 		m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: m.width - width, Y: 2})
 		m.View()
-		if &m.inspectorRows()[0] != &rows[0] || m.inspector.content.(*hostui.Inspector).Worker.Rendered != oldRevision {
+		if m.inspectorRows() != rows || m.inspector.content.(*hostui.Inspector).Worker.Rendered != oldRevision {
 			t.Fatal("drag rebuilt conversation")
 		}
 	}
 	appendWorkerLog(t, path, "{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"LIVE_AFTER_RESIZE\"}],\"timestamp\":10}}\n")
 	m.inspector.content.(*hostui.Inspector).Worker.Next = time.Time{}
 	receiveWorkerCommand(t, m, m.pollExtensionInspectors(time.Now()))
-	if &m.inspectorRows()[0] != &rows[0] {
+	if m.inspectorRows() != rows {
 		t.Fatal("live event rebuilt while dragging")
 	}
 	m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: m.width - 75, Y: 2})
-	if !strings.Contains(ansi.Strip(strings.Join(m.inspectorRows(), "\n")), "LIVE_AFTER_RESIZE") {
+	if !strings.Contains(ansi.Strip(m.inspectorRows().FullText()), "LIVE_AFTER_RESIZE") {
 		t.Fatal("release did not reflow latest data")
 	}
 	for _, width := range []int{1, 2, 30, 59, 60, 120} {
@@ -538,7 +541,7 @@ func TestWorkerConversationFollowsUntilManualScroll(t *testing.T) {
 		w.Revision++
 		m.inspectorRows()
 	}
-	bottom := func() int { return max(0, len(m.inspector.rows)-m.inspectorBodyHeight()) }
+	bottom := func() int { return max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()) }
 	appendText()
 	if bottom() == 0 || m.inspector.offset != bottom() {
 		t.Fatal("initial content did not follow to bottom")
@@ -664,13 +667,13 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 				map[string]any{"type": "tool_execution_start", "toolCallId": "call", "toolName": "read", "args": map[string]any{"path": "a.go"}},
 				map[string]any{"type": "tool_execution_end", "toolCallId": "call", "toolName": "read", "result": map[string]any{"content": []map[string]any{text("HIDDEN_TOOL_RESULT")}}, "isError": false},
 				message("message_end", "assistant", 1003, map[string]any{"type": "thinking", "thinking": "MORE_HIDDEN_THINKING"}))
-			if w.Revision == revision || &rows[0] == &m.inspector.rows[0] {
+			if w.Revision == revision || rows == m.inspector.rows {
 				t.Fatal("internal activity did not invalidate the document")
 			}
 			rows, revision = m.inspector.rows, w.Revision
 			w.RefreshVisibleMessages(w.Replay.View())
 			m.inspectorRows()
-			if w.Revision != revision || &rows[0] != &m.inspector.rows[0] {
+			if w.Revision != revision || rows != m.inspector.rows {
 				t.Fatal("unchanged activity invalidated the document")
 			}
 			deliver(false, message("message_start", "assistant", 1004))
@@ -697,7 +700,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 			if !strings.Contains(allText, conclusion) || !strings.Contains(allText, "FINAL_TAIL") || !toolFound || !thinkingFound {
 				t.Fatal("task result or intermediate activity not preserved in full")
 			}
-			plain := ansi.Strip(w.Doc.Text)
+			plain := ansi.Strip(w.Doc.FullText())
 			for _, hidden := range []string{"INHERITED_SECRET", "**bold**"} {
 				if strings.Contains(plain, hidden) {
 					t.Fatalf("unwanted output %q", hidden)
@@ -717,7 +720,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 			// Replacement/truncation restarts the inherited boundary and display.
 			header["entries"] = []map[string]any{}
 			deliver(true, header)
-			if w.Replay.View().MessageCount != 0 || len(w.Visible) != 0 || strings.Contains(w.Doc.Text, "FINAL_TAIL") {
+			if w.Replay.View().MessageCount != 0 || len(w.Visible) != 0 || strings.Contains(w.Doc.FullText(), "FINAL_TAIL") {
 				t.Fatal("reset retained previous task messages")
 			}
 			deliver(false, message("message_end", "user", 2000, text("REPLACED_INPUT")))
@@ -730,7 +733,7 @@ func TestWorkerConversationTaskMessages(t *testing.T) {
 
 func BenchmarkWorkerConversation(b *testing.B) {
 	for _, count := range []int{200, 1000} {
-		for _, phase := range []string{"scroll-view", "motion-view", "hover-view", "selection-view", "gesture"} {
+		for _, phase := range []string{"scroll-view", "motion-view", "hover-view", "selection-view", "gesture", "warm-publish"} {
 			b.Run(fmt.Sprintf("%d/%s", count, phase), func(b *testing.B) {
 				m := resizeBenchmarkModel(b, "worker", 1)
 				var items []session.Item
@@ -755,6 +758,10 @@ func BenchmarkWorkerConversation(b *testing.B) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					switch phase {
+					case "warm-publish":
+						// A new inspector revision with unchanged history reuses transcript sections.
+						m.inspector.content.(*hostui.Inspector).Worker.Revision++
+						m.inspectorRows()
 					case "scroll-view":
 						m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: m.width - 8, Y: 10})
 						m.View()

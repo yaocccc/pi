@@ -44,7 +44,7 @@ func TestForkLayoutPublishesPreparedHistoryOnce(t *testing.T) {
 	source.state.Items = append([]session.Item(nil), layout.state.Items...)
 	source.state.Items[len(source.state.Items)-1].Text = "SOURCE-ONLY OVERLAY"
 	m.document(source)
-	sourceText := source.doc.Text
+	sourceText := source.doc.FullText()
 	branch, cmd, err := m.openForkLayout(source, f, layout)
 	if err != nil || cmd == nil {
 		t.Fatal(err)
@@ -56,16 +56,16 @@ func TestForkLayoutPublishesPreparedHistoryOnce(t *testing.T) {
 		t.Fatal("must publish all entries without starting a writer or a second preview")
 	}
 	job := branch.documentJob
-	if job == nil || !branch.streamDirty || branch.doc.Text != "" {
+	if job == nil || !branch.streamDirty || branch.doc.FullText() != "" {
 		t.Fatal("first frame formatted the entire transcript synchronously")
 	}
 	m.Update(tea.MouseMotionMsg{X: 0, Y: 0})
-	if branch.documentJob != job || branch.doc.Text != "" {
+	if branch.documentJob != job || branch.doc.FullText() != "" {
 		t.Fatal("input forced full layout before background result")
 	}
 	m.receiveDocument(job.render().(documentResult))
 	cold := render.Transcript(branch.state.Items, m.cfg.Theme, m.documentOptions(branch))
-	if cold.Text == "" || branch.doc.Text != cold.Text || sourceText == "" || sourceText == cold.Text || source.doc.Text != sourceText {
+	if cold.FullText() == "" || branch.doc.FullText() != cold.FullText() || sourceText == "" || sourceText == cold.FullText() || source.doc.FullText() != sourceText {
 		t.Fatal("seeded layout did not preserve independent fork and source documents")
 	}
 	probe := func() tea.Cmd {

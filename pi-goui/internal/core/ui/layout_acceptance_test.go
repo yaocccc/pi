@@ -82,7 +82,7 @@ func TestScrollMessageProgressAndLatestHitbox(t *testing.T) {
 	m := testModel(t, "")
 	tab := m.current()
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	tab.doc = render.Document{Text: strings.Repeat("row\n", 200), MessageCount: 345, Blocks: []render.Block{{Start: 0, End: 3, MessageIndex: 121}, {Start: 3, End: 6, MessageIndex: 122}, {Start: 6, End: 80, MessageIndex: 123}, {Start: 80, End: 200, MessageIndex: 124}}}
+	tab.doc = render.Document{DocumentRows: render.TextRows(strings.Repeat("row\n", 200)), MessageCount: 345, Blocks: []render.Block{{Start: 0, End: 3, MessageIndex: 121}, {Start: 3, End: 6, MessageIndex: 122}, {Start: 6, End: 80, MessageIndex: 123}, {Start: 80, End: 200, MessageIndex: 124}}}
 	tab.dirty = false
 	tab.follow = false
 	tab.offset = 0

@@ -55,7 +55,7 @@ func TestPopupCompactBackdropAndSharedHitGeometry(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		lines = append(lines, fmt.Sprintf("BACKGROUND-%02d ", i)+strings.Repeat("x", m.mainWidth()))
 	}
-	tab.doc = render.Document{Text: strings.Join(lines, "\n")}
+	tab.doc = render.Document{DocumentRows: render.TextRows(strings.Join(lines, "\n"))}
 	tab.dirty = false
 	tab.offset = 4
 	tab.follow = false

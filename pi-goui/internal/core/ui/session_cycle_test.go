@@ -310,19 +310,19 @@ func TestDiskRefreshRetainsViewportSelectionAndDraft(t *testing.T) {
 	for i := range lines {
 		lines[i] = "unchanged text"
 	}
-	first := render.Document{Text: strings.Join(lines, "\n"), Blocks: []render.Block{{ID: "a", Start: 0, End: 10}, {ID: "b", Start: 10, End: 30}}}
-	m.publishDocument(owner, first, lines)
+	first := render.Document{DocumentRows: render.TextRows(strings.Join(lines, "\n")), Blocks: []render.Block{{ID: "a", Start: 0, End: 10}, {ID: "b", Start: 10, End: 30}}}
+	m.publishDocument(owner, first)
 	owner.offset = 12
-	owner.selection = transcriptSelection{anchor: textPoint{line: 2}, end: textPoint{line: 3, cell: 3}, moved: true, document: first.Text, lines: lines}
+	owner.selection = transcriptSelection{anchor: textPoint{line: 2}, end: textPoint{line: 3, cell: 3}, moved: true, document: first.DocumentRows}
 	appended := append(append([]string{}, lines...), "new saved response")
-	next := render.Document{Text: strings.Join(appended, "\n"), Blocks: []render.Block{{ID: "a", Start: 0, End: 10}, {ID: "b", Start: 10, End: 31}}}
-	m.publishDocument(owner, next, appended)
+	next := render.Document{DocumentRows: render.TextRows(strings.Join(appended, "\n")), Blocks: []render.Block{{ID: "a", Start: 0, End: 10}, {ID: "b", Start: 10, End: 31}}}
+	m.publishDocument(owner, next)
 	if owner.offset != 12 || !owner.selection.moved || owner.selection.text() == "" {
 		t.Fatal("background append disturbed viewport or unchanged selection")
 	}
 	inserted := append([]string{"insert1", "insert2", "insert3", "insert4"}, appended...)
-	next = render.Document{Text: strings.Join(inserted, "\n"), Blocks: []render.Block{{ID: "a", Start: 0, End: 14}, {ID: "b", Start: 14, End: 35}}}
-	m.publishDocument(owner, next, inserted)
+	next = render.Document{DocumentRows: render.TextRows(strings.Join(inserted, "\n")), Blocks: []render.Block{{ID: "a", Start: 0, End: 14}, {ID: "b", Start: 14, End: 35}}}
+	m.publishDocument(owner, next)
 	if owner.offset != 16 || owner.follow || owner.editor.Value() != "draft" || !owner.folds["b"] {
 		t.Fatal("background refresh lost message anchor or local UI state")
 	}

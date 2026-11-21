@@ -1,19 +1,19 @@
 package hostui
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"slices"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/render"
 	"pi-goui/internal/core/session"
 	"pi-goui/internal/extensions/worker"
 	rpc "pi-goui/internal/runtime"
-	"reflect"
-	"slices"
-	"strings"
-	"time"
 )
 
 // A recording belongs only to the inspector, never to an editable/RPC tab.
@@ -231,18 +231,21 @@ func ownedWorkerItems(items []session.Item) []session.Item {
 	return items
 }
 
-func (w *WorkerSession) Rows(theme config.Theme, width int, options func(session.State, int, bool, bool, map[string]bool) render.Options, inspectLabel string) []string {
+func (w *WorkerSession) Rows(theme config.Theme, width int, options func(session.State, int, bool, bool, map[string]bool) render.Options, inspectLabel string) render.DocumentRows {
 	view := w.Replay.View()
 	var actions []WorkerInputAction
 	view.Items, actions = WorkerInputItems(WorkerReportItems(w.Visible), w.InputExpanded)
 	w.Doc = w.RenderCache.Transcript(view.Items, theme, options(view, width, w.Expanded, w.ShowThinking, w.Folds))
 	w.InputActions = WorkerInputTargets(&w.Doc, actions)
-	rows := strings.Split(w.Doc.Text, "\n")
-	w.Targets = ConversationTargets(w.Doc, rows, w.Visible, inspectLabel)
+	if w.Doc.DocumentRows == (render.DocumentRows{}) {
+		// A blank recording displayed one empty line before it had content.
+		w.Doc.DocumentRows = render.TextRows("")
+	}
+	w.Targets = ConversationTargets(w.Doc, w.Visible, inspectLabel)
 	w.ActivityRows = make(map[int]bool, len(w.Doc.ActivityRows))
 	for _, row := range w.Doc.ActivityRows {
 		w.ActivityRows[row] = true
 	}
 	w.Rendered = w.Revision
-	return rows
+	return w.Doc.DocumentRows
 }

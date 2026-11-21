@@ -15,12 +15,11 @@ func lockFrontend(path string) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	for {
-		err = unix.Flock(int(f.Fd()), unix.LOCK_EX)
-		if !errors.Is(err, unix.EINTR) {
-			break
-		}
-	}
+	err = retryFrontendLock(path, func() error {
+		return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	}, func(err error) bool {
+		return errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EINTR)
+	})
 	if err != nil {
 		f.Close()
 		return nil, err

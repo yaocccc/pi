@@ -3,7 +3,6 @@ package ui
 import (
 	"maps"
 	"slices"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"pi-goui/internal/core/config"
@@ -25,16 +24,6 @@ func (t *tab) invalidateStream() {
 		t.streamDirty = true
 	}
 	t.dirty = true
-}
-
-// The published document is immutable. All viewport and hit-test consumers use
-// this index, instead of scanning the entire transcript on every input/event.
-func (t *tab) documentLines() []string {
-	if t.docLines == nil || t.docLinesText != t.doc.Text {
-		t.docLinesText = t.doc.Text
-		t.docLines = strings.Split(t.doc.Text, "\n")
-	}
-	return t.docLines
 }
 
 func (m *Model) documentOptions(t *tab) render.Options {
@@ -62,13 +51,12 @@ type documentResult struct {
 	job   *documentJob
 	cache render.TranscriptCache
 	doc   render.Document
-	lines []string
 }
 
 func (j *documentJob) render() tea.Msg {
 	cache := j.cache
 	doc := cache.Transcript(j.items, j.theme, j.opts)
-	return documentResult{job: j, cache: cache, doc: doc, lines: strings.Split(doc.Text, "\n")}
+	return documentResult{job: j, cache: cache, doc: doc}
 }
 
 func (m *Model) scheduleDocument(t *tab) tea.Cmd {
@@ -84,13 +72,7 @@ func (m *Model) scheduleDocument(t *tab) tea.Cmd {
 	opts.AssistantStats = maps.Clone(opts.AssistantStats)
 	items := slices.Clone(t.state.Items)
 	for i := range items {
-		items[i].Arguments = slices.Clone(items[i].Arguments)
-		items[i].Details = slices.Clone(items[i].Details)
-		items[i].Images = slices.Clone(items[i].Images)
-		if items[i].Compaction != nil {
-			value := *items[i].Compaction
-			items[i].Compaction = &value
-		}
+		items[i] = items[i].LayoutSnapshot()
 	}
 	job := &documentJob{id: t.id, client: t.client, file: t.state.File, sessionID: t.state.ID,
 		generation: t.layoutGeneration, revision: t.revision, items: items, theme: m.cfg.Theme, opts: opts, cache: t.renderCache}
@@ -113,16 +95,18 @@ func (m *Model) receiveDocument(v documentResult) {
 	}
 	// Publish compatible snapshots even when more deltas arrived while rendering.
 	// Rejecting every older content revision would starve a continuous stream.
-	m.publishDocument(t, v.doc, v.lines)
+	m.publishDocument(t, v.doc)
 	t.dirty = t.revision != v.job.revision
 	t.streamDirty = t.dirty
+	if t.originJump != nil && (t.originJump.awaitingLayout || t.resume.preview) {
+		m.applyOriginJump(t)
+	}
 }
 
-func (m *Model) publishDocument(t *tab, doc render.Document, lines []string) {
+func (m *Model) publishDocument(t *tab, doc render.Document) {
 	t.nativeDocument = doc
 	if t.promptEcho != nil {
 		doc = m.echoDocument(t, doc)
-		lines = nil
 	}
 	// Refreshes may insert rows above the viewport. Anchor the existing view
 	// to its stable message/tool ID instead of keeping only a raw row offset.
@@ -135,7 +119,6 @@ func (m *Model) publishDocument(t *tab, doc render.Document, lines []string) {
 		}
 	}
 	t.doc = doc
-	t.docLinesText, t.docLines = doc.Text, lines
 	if anchor != "" {
 		for _, block := range doc.Blocks {
 			if block.ID == anchor {
@@ -145,23 +128,18 @@ func (m *Model) publishDocument(t *tab, doc render.Document, lines []string) {
 		}
 	}
 	// A side-by-side recording retains the parent's immutable selection snapshot.
-	if t.selection.document != t.doc.Text && !((m.inspector.view().Conversation || m.inspector.parent != nil) && m.inspector.tabID == t.id) {
+	if t.selection.document != t.doc.DocumentRows && !((m.inspector.view().Conversation || m.inspector.parent != nil) && m.inspector.tabID == t.id) {
 		selection := &t.selection
 		a, b := selection.ordered()
-		oldLines := selection.lines
-		if oldLines == nil {
-			oldLines = strings.Split(selection.document, "\n")
-		}
-		newLines := t.documentLines()
-		unchanged := selection.moved && a.line >= 0 && b.line < len(oldLines) && b.line < len(newLines)
+		old := selection.document
+		unchanged := selection.moved && a.line >= 0 && b.line < old.LineCount() && b.line < doc.LineCount()
 		for row := a.line; unchanged && row <= b.line; row++ {
-			unchanged = oldLines[row] == newLines[row]
-			if row < len(selection.content) && row < len(doc.Content) {
-				unchanged = unchanged && selection.content[row] == doc.Content[row]
-			}
+			before, had := old.Span(row)
+			after, has := doc.Span(row)
+			unchanged = old.Line(row) == doc.Line(row) && had == has && before == after
 		}
 		if unchanged {
-			selection.document, selection.lines, selection.content = doc.Text, newLines, doc.Content
+			selection.document = doc.DocumentRows
 		} else {
 			*selection = transcriptSelection{}
 		}

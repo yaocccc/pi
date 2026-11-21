@@ -84,7 +84,7 @@ func TestToolGroupSpacingAroundProse(t *testing.T) {
 			group := blockByID(t, doc, "tool-group:a")
 			before := blockByID(t, doc, "before")
 			reply := blockByID(t, doc, "reply")
-			rows := strings.Split(ansi.Strip(doc.Text), "\n")
+			rows := strings.Split(ansi.Strip(doc.FullText()), "\n")
 			if group.End != group.Start+1 || group.Start != before.End+1 || strings.Trim(rows[before.End], " │") != "" {
 				t.Fatal("prose → group must have one blank row, with a one-row header hit range")
 			}
@@ -101,7 +101,7 @@ func TestToolGroupSpacingAroundProse(t *testing.T) {
 				t.Fatal("whole group → prose must have exactly one blank row")
 			}
 			tail := Transcript(items[:3], testTheme(), opts)
-			tailRows := strings.Split(ansi.Strip(tail.Text), "\n")
+			tailRows := strings.Split(ansi.Strip(tail.FullText()), "\n")
 			if strings.Trim(tailRows[len(tailRows)-2], " │") == "" {
 				t.Fatal("group without following prose must not leave a blank row")
 			}

@@ -86,6 +86,16 @@ func (m *Model) filtered(d *dialog) []option {
 func (m *Model) sessionDialog(t *tab, list []session.Summary, hideCurrent ...bool) {
 	d := m.newDialog("session", "Sessions", m.sessionSelectorHelp())
 	d.hideCurrent = len(hideCurrent) > 0 && hideCurrent[0]
+	m.refreshSessionOptions(t, d, list)
+	t.dialogs = append(t.dialogs, d)
+}
+
+func (m *Model) refreshSessionOptions(t *tab, d *dialog, list []session.Summary) {
+	selected := ""
+	if rows := m.filtered(d); d.selected >= 0 && d.selected < len(rows) {
+		selected = rows[d.selected].Value
+	}
+	d.options = nil
 	seen := map[string]bool{}
 	for _, other := range m.tabs {
 		seen[other.state.File] = true
@@ -129,7 +139,16 @@ func (m *Model) sessionDialog(t *tab, list []session.Summary, hideCurrent ...boo
 		}
 		d.options = append(d.options, option{Label: label, Detail: s.Path, Value: s.Path, Data: s})
 	}
-	t.dialogs = append(t.dialogs, d)
+	if selected != "" {
+		rows := m.filtered(d)
+		d.selected = min(d.selected, max(0, len(rows)-1))
+		for i, row := range rows {
+			if row.Value == selected {
+				d.selected = i
+				break
+			}
+		}
+	}
 }
 func (m *Model) dialogKey(t *tab, k tea.KeyPressMsg, chord string) tea.Cmd {
 	d := t.dialogs[0]

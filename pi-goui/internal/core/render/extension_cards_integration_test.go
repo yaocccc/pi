@@ -49,14 +49,14 @@ func TestCollapsedWorkerShowsOnlyHeader(t *testing.T) {
 			t.Fatalf("collapsed Worker leaked task previews: %v, %+v", rows, blocks)
 		}
 		doc := Transcript([]session.Item{item}, testTheme(), opts)
-		plain := ansi.Strip(doc.Text)
+		plain := ansi.Strip(doc.FullText())
 		for _, hidden := range []string{"implement", "Improve worker cards", "Implemented task cards", "Verify widths"} {
 			if strings.Contains(plain, hidden) {
 				t.Fatalf("collapsed task detail leaked: %s", hidden)
 			}
 		}
 		opts.Expanded[item.ID] = true
-		if !strings.Contains(ansi.Strip(Transcript([]session.Item{item}, testTheme(), opts).Text), "Implemented task cards") {
+		if !strings.Contains(ansi.Strip(Transcript([]session.Item{item}, testTheme(), opts).FullText()), "Implemented task cards") {
 			t.Fatal("expanded Worker lost task details")
 		}
 	}
@@ -74,7 +74,7 @@ func TestRunningWorkerStaysInCallsGroup(t *testing.T) {
 			groups++
 		}
 	}
-	if groups != 1 || !strings.Contains(ansi.Strip(doc.Text), "3 calls") {
+	if groups != 1 || !strings.Contains(ansi.Strip(doc.FullText()), "3 calls") {
 		t.Fatalf("worker outside group: %+v", doc.Blocks)
 	}
 	if len(doc.Blocks) != 1 || blockByID(t, doc, "tool-group:a").Expanded {
@@ -82,7 +82,7 @@ func TestRunningWorkerStaysInCallsGroup(t *testing.T) {
 	}
 	opts.Expanded["tool-group:a"] = true
 	doc = Transcript(items, testTheme(), opts)
-	if blockByID(t, doc, "w").Expanded || strings.Contains(ansi.Strip(doc.Text), "Implemented task cards") {
+	if blockByID(t, doc, "w").Expanded || strings.Contains(ansi.Strip(doc.FullText()), "Implemented task cards") {
 		t.Fatal("opening outer group must not auto-open Worker")
 	}
 	opts.Expanded["w"] = true
@@ -92,14 +92,14 @@ func TestRunningWorkerStaysInCallsGroup(t *testing.T) {
 		t.Fatal("task has fold state")
 	}
 	opts.Expanded[task.ID] = false
-	if !strings.Contains(ansi.Strip(Transcript(items, testTheme(), opts).Text), "Implemented task cards") {
+	if !strings.Contains(ansi.Strip(Transcript(items, testTheme(), opts).FullText()), "Implemented task cards") {
 		t.Fatal("obsolete task fold still hides conclusion")
 	}
 	opts.Expanded["tool-group:a"] = false
 	for _, global := range []bool{false, true} {
 		opts.ExpandTools = global
 		collapsed := Transcript(items, testTheme(), opts)
-		if len(collapsed.Blocks) != 1 || collapsed.Blocks[0].Expanded || strings.Contains(ansi.Strip(collapsed.Text), "╭─ worker ") || strings.Contains(ansi.Strip(collapsed.Text), "Implemented task cards") {
+		if len(collapsed.Blocks) != 1 || collapsed.Blocks[0].Expanded || strings.Contains(ansi.Strip(collapsed.FullText()), "╭─ worker ") || strings.Contains(ansi.Strip(collapsed.FullText()), "Implemented task cards") {
 			t.Fatal("outer fold must hide every child even with global expansion")
 		}
 	}

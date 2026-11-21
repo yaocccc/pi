@@ -167,7 +167,7 @@ func TestPanelResizeFreezesFullRenderingUntilRelease(t *testing.T) {
 			}
 			rows := m.inspectorRows()
 			key := m.inspector.cache
-			doc := tab.doc.Text
+			doc := tab.doc.FullText()
 			editorWidth := tab.editor.Area.Width()
 			m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: m.mainWidth(), Y: 2})
 			// RPC state keeps updating; only the displayed snapshot is frozen.
@@ -181,10 +181,10 @@ func TestPanelResizeFreezesFullRenderingUntilRelease(t *testing.T) {
 						t.Fatal("preview overflow")
 					}
 				}
-				if tab.doc.Text != doc || tab.editor.Area.Width() != editorWidth {
+				if tab.doc.FullText() != doc || tab.editor.Area.Width() != editorWidth {
 					t.Fatal("motion reflowed transcript/editor")
 				}
-				if detail && (&m.inspector.rows[0] != &rows[0] || m.inspector.cache != key) {
+				if detail && (m.inspector.rows != rows || m.inspector.cache != key) {
 					t.Fatal("motion regenerated full inspector rows")
 				}
 			}
@@ -194,12 +194,13 @@ func TestPanelResizeFreezesFullRenderingUntilRelease(t *testing.T) {
 			if m.panelResize.dragging || tab.editor.Area.Width() == editorWidth {
 				t.Fatal("release did not reflow editor")
 			}
-			if tab.doc.Text == doc || tab.dirty {
+			if tab.doc.FullText() == doc || tab.dirty {
 				t.Fatal("release lost streamed transcript update")
 			}
 			if detail {
 				want := render.ToolResultRows(tab.state.Items[0], m.cfg.Theme, 60-2*m.inspectorInset())
-				if !reflect.DeepEqual(m.inspectorRows(), want) {
+				got := m.inspectorRows()
+				if !reflect.DeepEqual(got.Range(0, got.LineCount()), want) {
 					t.Fatal("release not equivalent to full render")
 				}
 				if !strings.Contains(ansi.Strip(strings.Join(want, "\n")), "FINAL_TAIL") {
@@ -208,9 +209,9 @@ func TestPanelResizeFreezesFullRenderingUntilRelease(t *testing.T) {
 				if m.inspector.offset > max(0, len(want)-m.inspectorBodyHeight()) {
 					t.Fatal("release left scroll past bottom")
 				}
-				before := &m.inspector.rows[0]
+				before := m.inspector.rows
 				m.View()
-				if &m.inspector.rows[0] != before {
+				if m.inspector.rows != before {
 					t.Fatal("release failed to cache final reflow")
 				}
 			}

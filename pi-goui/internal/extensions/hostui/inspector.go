@@ -125,7 +125,7 @@ func (p *Inspector) View() InspectorView {
 	}
 	return v
 }
-func (p *Inspector) Rows(item session.Item, theme config.Theme, width int, options func(session.State, int, bool, bool, map[string]bool) render.Options, button string) []string {
+func (p *Inspector) Rows(item session.Item, theme config.Theme, width int, options func(session.State, int, bool, bool, map[string]bool) render.Options, button string) render.DocumentRows {
 	if p.Worker != nil {
 		return p.Worker.Rows(theme, width, func(state session.State, width int, expanded, thinking bool, folds map[string]bool) render.Options {
 			opts := options(state, width, expanded, thinking, folds)
@@ -137,9 +137,9 @@ func (p *Inspector) Rows(item session.Item, theme config.Theme, width int, optio
 		return render.ToolResultRows(item, theme, width, p.Tools)
 	}
 	if p.Fallback == "" {
-		return rows(item, theme, width)
+		return render.PlainRows(rows(item, theme, width))
 	}
-	return detail.WorkerTaskSummaryRows(item, p.Fallback, theme, width, render.StyledLines, render.Clean, rows)
+	return render.PlainRows(detail.WorkerTaskSummaryRows(item, p.Fallback, theme, width, render.StyledLines, render.Clean, rows))
 }
 func (p *Inspector) Activity(row int) bool {
 	w := p.Worker

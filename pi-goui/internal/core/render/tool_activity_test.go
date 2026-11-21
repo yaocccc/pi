@@ -1,7 +1,6 @@
 package render
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -21,13 +20,13 @@ func TestToolActivityCardLifecycleAndCache(t *testing.T) {
 	render := func() Document {
 		t.Helper()
 		got := cache.Transcript(items, testTheme(), opts)
-		if want := Transcript(items, testTheme(), opts); !reflect.DeepEqual(got, want) {
+		if want := Transcript(items, testTheme(), opts); !equalDocuments(got, want) {
 			t.Fatal("cached activity rendering differs")
 		}
 		return got
 	}
 	doc := render()
-	plain := ansi.Strip(doc.Text)
+	plain := ansi.Strip(doc.FullText())
 	for _, want := range []string{"✓ second", "✗ third", "⋯ fourth"} {
 		if !strings.Contains(plain, want) {
 			t.Fatal("missing " + want)
@@ -41,7 +40,7 @@ func TestToolActivityCardLifecycleAndCache(t *testing.T) {
 	}
 	items[3].Running = false
 	items[3].HasResult = true
-	if !strings.Contains(ansi.Strip(render().Text), "✓ fourth") {
+	if !strings.Contains(ansi.Strip(render().FullText()), "✓ fourth") {
 		t.Fatal("status update missing")
 	}
 	opts.Expanded = map[string]bool{"tool-group:a": false}
@@ -73,7 +72,7 @@ func TestToolActivityCardLifecycleAndCache(t *testing.T) {
 		t.Fatal("prose did not end activity")
 	}
 	items = append(items, session.Item{ID: "e", Role: "tool", ToolName: "newcall", Running: true})
-	if plain := ansi.Strip(render().Text); strings.Contains(plain, "Running") || !strings.Contains(plain, "⋯ newcall") || strings.Contains(plain, "✓ second") {
+	if plain := ansi.Strip(render().FullText()); strings.Contains(plain, "Running") || !strings.Contains(plain, "⋯ newcall") || strings.Contains(plain, "✓ second") {
 		t.Fatal("new group did not replace activity")
 	}
 	// A later section must also invalidate the prior section's activity cache.
@@ -93,7 +92,7 @@ func TestLiveCallsPreviewAndExpansionAreExclusive(t *testing.T) {
 	for _, expanded := range []bool{false, true} {
 		opts := Options{Tools: testToolViews(), Width: 100, ShowToolActivity: true, Expanded: map[string]bool{"tool-group:a": expanded}}
 		doc := Transcript(items, testTheme(), opts)
-		plain := ansi.Strip(doc.Text)
+		plain := ansi.Strip(doc.FullText())
 		rows := strings.Split(plain, "\n")
 		group := blockByID(t, doc, "tool-group:a")
 		if strings.Trim(rows[group.End], " │") == "" {
@@ -226,7 +225,7 @@ func TestRunningActivityIncludesFullActiveWorker(t *testing.T) {
 		{ID: "a", Role: "tool", ToolName: "read"}, {ID: "b", Role: "tool", ToolName: "bash"}}
 	opts := Options{Tools: testToolViews(), Width: 120, ShowToolActivity: true, Expanded: map[string]bool{"tool-group:old": false}}
 	doc := Transcript(items, testTheme(), opts)
-	plain := ansi.Strip(doc.Text)
+	plain := ansi.Strip(doc.FullText())
 	for _, want := range []string{"╭─ worker ", "Improve worker cards", "Implemented task cards", "Verify widths 中文", "Missing fixture", "≡ Activity"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing Worker detail %q: %s", want, plain)
@@ -237,37 +236,37 @@ func TestRunningActivityIncludesFullActiveWorker(t *testing.T) {
 	}
 	opts.Expanded[worker.ID] = false
 	folded := Transcript(items, testTheme(), opts)
-	if blockByID(t, folded, worker.ID).Expanded || strings.Contains(folded.Text, "Implemented task cards") {
+	if blockByID(t, folded, worker.ID).Expanded || strings.Contains(folded.FullText(), "Implemented task cards") {
 		t.Fatal("preview ignored manual Worker collapse")
 	}
 	delete(opts.Expanded, worker.ID)
 	for _, width := range []int{1, 4, 8, 20, 80, 160} {
 		opts.Width = width
-		checkWidth(t, Transcript(items, testTheme(), opts).Text, width)
+		checkWidth(t, Transcript(items, testTheme(), opts).FullText(), width)
 	}
 	items[1].Running = false
-	if !strings.Contains(Transcript(items, testTheme(), opts).Text, "Implemented task cards") {
+	if !strings.Contains(Transcript(items, testTheme(), opts).FullText(), "Implemented task cards") {
 		t.Fatal("completed Worker within latest three must stay expanded")
 	}
 	items = append(items, session.Item{ID: "c", Role: "tool", ToolName: "edit", Running: true})
 	for _, running := range []bool{true, false} {
 		items[1].Running = running
-		if strings.Contains(Transcript(items, testTheme(), opts).Text, "Implemented task cards") {
+		if strings.Contains(Transcript(items, testTheme(), opts).FullText(), "Implemented task cards") {
 			t.Fatal("Worker outside latest three must be omitted regardless of status")
 		}
 	}
 	items = []session.Item{worker}
 	items[0].Running = false
-	if !strings.Contains(Transcript(items, testTheme(), opts).Text, "Implemented task cards") {
+	if !strings.Contains(Transcript(items, testTheme(), opts).FullText(), "Implemented task cards") {
 		t.Fatal("completed Worker must stay expanded until activity ends")
 	}
 	items = append(items, session.Item{ID: "answer", Role: "assistant", Text: "Final conclusion"})
-	if strings.Contains(Transcript(items, testTheme(), opts).Text, "Implemented task cards") {
+	if strings.Contains(Transcript(items, testTheme(), opts).FullText(), "Implemented task cards") {
 		t.Fatal("Worker card remained after activity ended")
 	}
 	items = items[:1]
 	opts.ShowToolActivity = false
-	if strings.Contains(Transcript(items, testTheme(), opts).Text, "Implemented task cards") {
+	if strings.Contains(Transcript(items, testTheme(), opts).FullText(), "Implemented task cards") {
 		t.Fatal("Worker card remained when the session became idle")
 	}
 }
@@ -276,6 +275,6 @@ func TestToolActivityNarrowGeometry(t *testing.T) {
 	items := []session.Item{{ID: "t", Role: "tool", ToolName: "工具", Text: strings.Repeat("界👩‍💻", 30), Running: true}}
 	for _, width := range []int{1, 2, 4, 8, 12, 20, 80, 160} {
 		doc := Transcript(items, testTheme(), Options{Tools: testToolViews(), Width: width, ShowToolActivity: true})
-		checkWidth(t, doc.Text, width)
+		checkWidth(t, doc.FullText(), width)
 	}
 }

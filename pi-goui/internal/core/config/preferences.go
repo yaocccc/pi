@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func validateSidebarPosition(position string) error {
@@ -28,10 +29,34 @@ func SaveResumeLastSession(agentDir string, enabled bool) error {
 	return savePreference(agentDir, "resumeLastSession", enabled)
 }
 
-func savePreference(agentDir, key string, value any) (err error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return err
+// SaveFrontendPreferences commits only the supplied fields in one transaction.
+func SaveFrontendPreferences(agentDir string, sidebar *string, resume *bool, themeName string) error {
+	fields := make(map[string]any, 3)
+	if themeName != "" {
+		if _, err := LoadTheme(agentDir, themeName); err != nil {
+			return err
+		}
+		fields["theme"] = CanonicalThemeName(themeName)
+	}
+	if sidebar != nil {
+		if err := validateSidebarPosition(*sidebar); err != nil {
+			return err
+		}
+		fields["sidebarPosition"] = *sidebar
+	}
+	if resume != nil {
+		fields["resumeLastSession"] = *resume
+	}
+	return savePreferences(agentDir, fields)
+}
+
+func savePreference(agentDir, key string, value any) error {
+	return savePreferences(agentDir, map[string]any{key: value})
+}
+
+func savePreferences(agentDir string, fields map[string]any) (err error) {
+	if len(fields) == 0 {
+		return nil
 	}
 	if err = os.MkdirAll(agentDir, 0700); err != nil {
 		return err
@@ -49,7 +74,13 @@ func savePreference(agentDir, key string, value any) (err error) {
 	if prefs == nil {
 		prefs = map[string]json.RawMessage{}
 	}
-	prefs[key] = raw
+	for key, value := range fields {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		prefs[key] = raw
+	}
 	data, err := json.MarshalIndent(prefs, "", "  ")
 	if err != nil {
 		return err
@@ -67,4 +98,21 @@ func savePreference(agentDir, key string, value any) (err error) {
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+const frontendLockWait = 2 * time.Second
+
+func retryFrontendLock(path string, try func() error, busy func(error) bool) error {
+	deadline := time.Now().Add(frontendLockWait)
+	for {
+		err := try()
+		if err == nil {
+			return nil
+		}
+		remaining := time.Until(deadline)
+		if !busy(err) || remaining <= 0 {
+			return fmt.Errorf("acquiring preferences lock %s: %w", path, err)
+		}
+		time.Sleep(min(20*time.Millisecond, remaining))
+	}
 }

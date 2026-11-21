@@ -155,15 +155,15 @@ func (m *Model) startupDocument(t *tab) render.Document {
 	if n := m.updates.notes; n.Markdown != "" {
 		item := session.Item{ID: "pi-release-notes", Role: "assistant", Text: n.Markdown}
 		notes := t.renderCache.Transcript([]session.Item{item}, m.cfg.Theme, render.Options{Width: m.mainWidth(), AssistantTitle: "Pi " + n.Version + " — What's new"})
-		text += "\n\n" + notes.Text
+		text += "\n\n" + notes.FullText()
 	}
 	// Presentation only: never append notes to Pi history or model messages.
-	return render.Document{Text: text}
+	return render.Document{DocumentRows: render.TextRows(text)}
 }
 
 func (m *Model) markReleaseNotesDisplayed() tea.Cmd {
 	t := m.current()
-	if m.updates.notesAck || m.updates.notes.Markdown == "" || t == nil || !t.newSession || len(t.state.Items) != 0 || len(t.dialogs) != 0 || t.doc.Text == "" || m.height < 8 || t.selection.dragging {
+	if m.updates.notesAck || m.updates.notes.Markdown == "" || t == nil || !t.newSession || len(t.state.Items) != 0 || len(t.dialogs) != 0 || t.doc.ByteLen() == 0 || m.height < 8 || t.selection.dragging {
 		return nil
 	}
 	m.updates.notesAck = true

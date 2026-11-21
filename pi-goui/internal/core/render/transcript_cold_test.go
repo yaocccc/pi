@@ -2,7 +2,6 @@ package render
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -24,7 +23,7 @@ func TestColdManyTurnDocumentEquivalence(t *testing.T) {
 		var cache TranscriptCache
 		got := cache.Transcript(items, theme, opts)
 		want := Transcript(items, theme, opts)
-		if !reflect.DeepEqual(got, want) {
+		if !equalDocuments(got, want) {
 			t.Fatalf("serial and cold document differ at width %d", width)
 		}
 	}

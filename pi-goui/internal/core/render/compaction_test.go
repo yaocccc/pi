@@ -49,7 +49,7 @@ func TestCompactionStatsTranscript(t *testing.T) {
 		Compaction: &session.CompactionMetrics{BeforeTokens: 80000, AfterTokens: 24000}}
 	for _, width := range []int{80, 32, 20, 7} {
 		doc := Transcript([]session.Item{item}, testTheme(), Options{Width: width})
-		plain := ansi.Strip(doc.Text)
+		plain := ansi.Strip(doc.FullText())
 		for _, token := range []string{"≈80K", "24K", "tokens", "−70%"} {
 			if !strings.Contains(plain, token) {
 				t.Errorf("width %d lost %q:\n%s", width, token, plain)
@@ -58,17 +58,17 @@ func TestCompactionStatsTranscript(t *testing.T) {
 		if strings.Contains(plain, "×") {
 			t.Fatal("multiplicative ratio should not be shown")
 		}
-		for _, line := range strings.Split(doc.Text, "\n") {
+		for _, line := range strings.Split(doc.FullText(), "\n") {
 			if ansi.StringWidth(line) > width {
 				t.Errorf("width %d overflow: %q", width, line)
 			}
 		}
-		if len(doc.Blocks) != 1 || doc.Blocks[0].End != len(strings.Split(doc.Text, "\n")) {
+		if len(doc.Blocks) != 1 || doc.Blocks[0].End != len(strings.Split(doc.FullText(), "\n")) {
 			t.Fatalf("metrics escaped their checkpoint block: %#v", doc.Blocks)
 		}
 	}
 	item.Compaction = nil
-	plain := ansi.Strip(Transcript([]session.Item{item}, testTheme(), Options{Width: 80}).Text)
+	plain := ansi.Strip(Transcript([]session.Item{item}, testTheme(), Options{Width: 80}).FullText())
 	if !strings.Contains(plain, "Context compacted · Continue verification") || strings.Contains(plain, "tokens") {
 		t.Fatal("old checkpoint rendering changed:", plain)
 	}

@@ -103,7 +103,7 @@ func (m *Model) openExtensionInspector(t *tab, itemID, key string) tea.Cmd {
 		t.footerHover.active = ""
 		m.extensionControls.Hover = false
 		m.resizeEditor(t)
-		m.document(t)
+		m.reflowDocument(t)
 		return m.pollExtensionInspectors(time.Now())
 	}
 	return nil
@@ -125,7 +125,7 @@ func (m *Model) pollExtensionInspectors(now time.Time) tea.Cmd {
 		}
 		if wasConversation && !page.view().Conversation {
 			page.cache = inspectorKey{}
-			page.rows = nil
+			page.rows = render.DocumentRows{}
 			page.selection = transcriptSelection{}
 		}
 	}
@@ -148,7 +148,7 @@ func (m *Model) receiveInspectorMessage(msg tea.Msg) tea.Cmd {
 		cmd, handled := page.content.Update(msg, ptr)
 		if wasConversation && !page.view().Conversation {
 			page.cache = inspectorKey{}
-			page.rows = nil
+			page.rows = render.DocumentRows{}
 			page.selection = transcriptSelection{}
 		}
 		if handled {
@@ -168,9 +168,9 @@ func (p *toolInspector) view() inspectorView {
 	return p.content.View()
 }
 
-func (m *Model) extensionConversationRows(width int) []string {
+func (m *Model) extensionConversationRows(width int) render.DocumentRows {
 	p := &m.inspector
-	if p.rows == nil || p.cache.version != p.content.Version() || p.cache.width != width || p.cache.theme != m.cfg.Theme {
+	if p.cache.version != p.content.Version() || p.cache.width != width || p.cache.theme != m.cfg.Theme {
 		item, _ := m.inspectedTool()
 		p.rows = p.content.Rows(item, m.cfg.Theme, width, conversationOptions, toolInspectButton)
 		p.cache.version = p.content.Version()
@@ -178,7 +178,7 @@ func (m *Model) extensionConversationRows(width int) []string {
 		p.cache.theme = m.cfg.Theme
 		p.selection = transcriptSelection{}
 	}
-	bottom := max(0, len(p.rows)-m.inspectorBodyHeight())
+	bottom := max(0, p.rows.LineCount()-m.inspectorBodyHeight())
 	if !p.followPaused && !p.selection.dragging {
 		p.offset = bottom
 	} else {

@@ -40,7 +40,7 @@ func inspectorTarget(t *testing.T, m *Model) hitRect {
 			}
 		}
 	}
-	t.Fatalf("no target in\n%s", ansi.Strip(m.current().doc.Text))
+	t.Fatalf("no target in\n%s", ansi.Strip(m.current().doc.FullText()))
 	return hitRect{}
 }
 func TestToolInspectorHoverOpenCloseAndNormalFold(t *testing.T) {
@@ -77,7 +77,8 @@ func TestToolInspectorHoverOpenCloseAndNormalFold(t *testing.T) {
 	// The complete marker may wrap across rows in the numbered change grid.
 	// Remove only the visual gutter before joining continuations.
 	var content strings.Builder
-	for _, row := range m.inspectorRows() {
+	rows := m.inspectorRows()
+	for _, row := range rows.Range(0, rows.LineCount()) {
 		plain := ansi.Strip(row)
 		if at := strings.Index(plain, "│ "); at >= 0 {
 			plain = plain[at+len("│ "):]
@@ -214,13 +215,13 @@ func TestToolInspectorFramedViewport(t *testing.T) {
 		}
 	}
 	rows := m.inspectorRows()
-	m.inspector.offset = len(rows)
+	m.inspector.offset = rows.LineCount()
 	m.inspectorRows()
-	if m.inspector.offset != len(rows)-m.inspectorBodyHeight() {
+	if m.inspector.offset != rows.LineCount()-m.inspectorBodyHeight() {
 		t.Fatal("scroll clamp did not account for title and frame")
 	}
 	view = strings.Split(ansi.Strip(m.inspectorView()), "\n")
-	if !strings.Contains(view[m.height-3], ansi.Strip(rows[len(rows)-1])) {
+	if !strings.Contains(view[m.height-3], ansi.Strip(rows.Line(rows.LineCount()-1))) {
 		t.Fatal("last result row hidden behind footer")
 	}
 }
@@ -244,7 +245,7 @@ func TestToolInspectorScrollStreamingLifecycleAndCopy(t *testing.T) {
 	tab := m.current()
 	m.openInspector("write-1")
 	rows := m.inspectorRows()
-	if len(rows) < 100 {
+	if rows.LineCount() < 100 {
 		t.Fatal("long content did not wrap")
 	}
 	before := tab.offset
@@ -264,13 +265,13 @@ func TestToolInspectorScrollStreamingLifecycleAndCopy(t *testing.T) {
 	tab.state.Items[0].Arguments = json.RawMessage(`{"path":"/tmp/stream.go","content":"NEW_STREAM_CONTENT"}`)
 	tab.state.Items[0].HasResult = false
 	tab.state.Items[0].Running = true
-	all := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	all := ansi.Strip(m.inspectorRows().FullText())
 	if !strings.Contains(all, "writing /tmp/stream.go") || !strings.Contains(all, "NEW_STREAM_CONTENT") || strings.Contains(all, "line-01") {
 		t.Fatal("stale inspector cache")
 	}
 	tab.state.Items[0].HasResult = true
 	tab.state.Items[0].Running = false
-	if !strings.Contains(ansi.Strip(strings.Join(m.inspectorRows(), "\n")), "written /tmp/stream.go") {
+	if !strings.Contains(ansi.Strip(m.inspectorRows().FullText()), "written /tmp/stream.go") {
 		t.Fatal("completion state stale")
 	}
 	// Session replacement cannot leak the inspector into the next document.
@@ -395,14 +396,14 @@ func TestToolInspectorDeltaUpdates(t *testing.T) {
 	apply("toolcall_start", map[string]any{"id": "stream", "toolName": "write"})
 	apply("toolcall_delta", map[string]any{"delta": `{"path":"stream.txt","content":"FIRST`})
 	m.openInspector("tool:stream")
-	first := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	first := ansi.Strip(m.inspectorRows().FullText())
 	apply("toolcall_delta", map[string]any{"delta": `\nSECOND`})
-	second := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	second := ansi.Strip(m.inspectorRows().FullText())
 	if !strings.Contains(first, "FIRST") || strings.Contains(first, "SECOND") || !strings.Contains(second, "SECOND") || !strings.Contains(second, "writing stream.txt") {
 		t.Fatal("partial JSON deltas not visible in inspector")
 	}
 	apply("toolcall_end", map[string]any{"toolCall": map[string]any{"type": "toolCall", "id": "stream", "name": "write", "arguments": map[string]string{"path": "final.txt", "content": "FINAL"}}})
-	final := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	final := ansi.Strip(m.inspectorRows().FullText())
 	if !strings.Contains(final, "FINAL") || strings.Contains(final, "FIRST") || !strings.Contains(final, "writing final.txt") {
 		t.Fatal("final args did not replace preview")
 	}

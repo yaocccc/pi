@@ -3,7 +3,6 @@ package render
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -14,7 +13,7 @@ import (
 func assertCachedTranscript(t *testing.T, cache *TranscriptCache, items []session.Item, theme config.Theme, opts Options) Document {
 	t.Helper()
 	got, want := cache.Transcript(items, theme, opts), Transcript(items, theme, opts)
-	if !reflect.DeepEqual(got, want) {
+	if !equalDocuments(got, want) {
 		t.Fatalf("cached transcript differs\ngot: %#v\nwant: %#v", got, want)
 	}
 	return got

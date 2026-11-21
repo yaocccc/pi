@@ -21,7 +21,7 @@ func TestToolGroupHasNoAutomaticPreviews(t *testing.T) {
 	if group.Expanded || group.End-group.Start != 1 {
 		t.Fatalf("expected a collapsed single-line header: %+v", group)
 	}
-	plain := ansi.Strip(doc.Text)
+	plain := ansi.Strip(doc.FullText())
 	for _, want := range []string{"› 4 calls"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %s: %s", want, plain)
@@ -39,12 +39,12 @@ func TestToolGroupHasNoAutomaticPreviews(t *testing.T) {
 	for _, global := range []bool{false, true} {
 		collapsed := Transcript(items, testTheme(), Options{Width: 100, ExpandTools: global, Expanded: map[string]bool{"tool-group:a": false}})
 		b := blockByID(t, collapsed, "tool-group:a")
-		if b.Expanded || b.End-b.Start != 1 || strings.Contains(ansi.Strip(collapsed.Text), "✓ second") {
-			t.Fatalf("explicit collapse must hide every preview: %+v\n%s", b, collapsed.Text)
+		if b.Expanded || b.End-b.Start != 1 || strings.Contains(ansi.Strip(collapsed.FullText()), "✓ second") {
+			t.Fatalf("explicit collapse must hide every preview: %+v\n%s", b, collapsed.FullText())
 		}
 	}
 	opened := Transcript(items, testTheme(), Options{Width: 100, Expanded: map[string]bool{"tool-group:a": true}})
-	if !blockByID(t, opened, "tool-group:a").Expanded || !strings.Contains(ansi.Strip(opened.Text), "✓ first") {
+	if !blockByID(t, opened, "tool-group:a").Expanded || !strings.Contains(ansi.Strip(opened.FullText()), "✓ first") {
 		t.Fatal("explicit expansion must show all calls")
 	}
 	items = append(items, session.Item{ID: "answer", Role: "assistant", Text: "Done."})

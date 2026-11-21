@@ -139,7 +139,7 @@ func TestImageClickRoutesImageButDragDoesNot(t *testing.T) {
 	if opened != 1 {
 		t.Fatal("drag opened image")
 	}
-	if !strings.Contains(ansi.Strip(tab.doc.Text), "[image1]") {
+	if !strings.Contains(ansi.Strip(tab.doc.FullText()), "[image1]") {
 		t.Fatal("click changed message")
 	}
 	tab.selection = transcriptSelection{}

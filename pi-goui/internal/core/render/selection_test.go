@@ -14,12 +14,12 @@ func TestTranscriptContentSpansExcludeOnlyOuterFrame(t *testing.T) {
 	items := []session.Item{{ID: "u", Role: "user", Text: "user"}, {ID: "a", Role: "assistant", Text: "assistant"}}
 	body := []string{"  │ genuine box text │", "", "    界é👩‍💻"}
 	doc := transcript(items, testTheme(), Options{Width: 60}, func(string, int, config.Theme) []string { return body })
-	rows := strings.Split(doc.Text, "\n")
-	if len(rows) != len(doc.Content) {
-		t.Fatalf("rows=%d spans=%d", len(rows), len(doc.Content))
+	rows := strings.Split(doc.FullText(), "\n")
+	if len(rows) != len(allSpans(doc)) {
+		t.Fatalf("rows=%d spans=%d", len(rows), len(allSpans(doc)))
 	}
 	var selected []string
-	for i, span := range doc.Content {
+	for i, span := range allSpans(doc) {
 		if !span.Content {
 			continue
 		}
@@ -29,7 +29,7 @@ func TestTranscriptContentSpansExcludeOnlyOuterFrame(t *testing.T) {
 	if !reflect.DeepEqual(selected, want) {
 		t.Fatalf("content=%q want=%q", selected, want)
 	}
-	if doc.Content[1].Start <= 2 {
+	if allSpans(doc)[1].Start <= 2 {
 		t.Fatal("right-aligned user padding not represented")
 	}
 }
@@ -41,8 +41,18 @@ func TestTranscriptCachePreservesContentSpans(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		got := cache.Transcript(items, testTheme(), opts)
 		want := Transcript(items, testTheme(), opts)
-		if !reflect.DeepEqual(got.Content, want.Content) {
-			t.Fatalf("cached spans differ: %+v / %+v", got.Content, want.Content)
+		if !reflect.DeepEqual(allSpans(got), allSpans(want)) {
+			t.Fatalf("cached spans differ: %+v / %+v", allSpans(got), allSpans(want))
 		}
 	}
+}
+
+func allSpans(d Document) []ContentSpan {
+	var out []ContentSpan
+	for i := 0; i < d.LineCount(); i++ {
+		if v, ok := d.Span(i); ok {
+			out = append(out, v)
+		}
+	}
+	return out
 }

@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"pi-goui/internal/core/config"
@@ -20,9 +19,9 @@ func TestLongInspectorTransitionUsesBackgroundLayout(t *testing.T) {
 	m.document(tab)
 	tab.follow = false
 	tab.offset = 0
-	published := tab.doc.Text
+	published := tab.doc.FullText()
 	m.openInspector("write-1")
-	if !m.inspectorOpen() || tab.doc.Text != published || !tab.streamDirty || len(m.inspectorRows()) == 0 {
+	if !m.inspectorOpen() || tab.doc.FullText() != published || !tab.streamDirty || inspectorRowCount(m.inspectorRows()) == 0 {
 		t.Fatal("opening blocked on rebuilding the transcript or failed to expose detail")
 	}
 	old := m.scheduleDocument(tab)
@@ -30,11 +29,11 @@ func TestLongInspectorTransitionUsesBackgroundLayout(t *testing.T) {
 		t.Fatal("no pending width layout")
 	}
 	m.closeInspector()
-	if m.inspectorOpen() || tab.doc.Text != published {
+	if m.inspectorOpen() || tab.doc.FullText() != published {
 		t.Fatal("Esc synchronously reflowed or failed to close")
 	}
 	m.Update(old())
-	if !tab.dirty || tab.doc.Text != published {
+	if !tab.dirty || tab.doc.FullText() != published {
 		t.Fatal("stale inspector-width layout replaced the transcript")
 	}
 	current := m.scheduleDocument(tab)
@@ -42,7 +41,7 @@ func TestLongInspectorTransitionUsesBackgroundLayout(t *testing.T) {
 		t.Fatal("no replacement close layout")
 	}
 	m.Update(current())
-	if tab.dirty || tab.doc.Text != published {
+	if tab.dirty || tab.doc.FullText() != published {
 		t.Fatal("close did not restore the original viewport layout")
 	}
 	m.openInspector("write-1")
@@ -51,7 +50,7 @@ func TestLongInspectorTransitionUsesBackgroundLayout(t *testing.T) {
 		t.Fatal("no open layout")
 	}
 	m.Update(job())
-	if tab.dirty || !m.inspectorOpen() || strings.Join(m.inspectorRows(), "") == "" {
+	if tab.dirty || !m.inspectorOpen() || m.inspectorRows().ByteLen() == 0 {
 		t.Fatal("valid layout/detail not available")
 	}
 	// Re-opening at the same width must not invalidate a clean publication.
@@ -99,8 +98,7 @@ func BenchmarkInspectLastTool(b *testing.B) {
 				tab.doc.Blocks = append(tab.doc.Blocks, render.Block{ID: id, Role: "tool", Start: start, End: start + 5, Expanded: true, Foldable: true})
 				rows = append(rows, "tool", "╭──────────────────╮", "│payload           │", "╰──────────────────╯", "")
 			}
-			tab.doc.Text = strings.Join(rows, "\n")
-			tab.docLines, tab.docLinesText = rows, tab.doc.Text
+			tab.doc.DocumentRows = render.PlainRows(rows)
 			tab.offset = len(rows) - 5
 			x, y := 16, transcriptTop+2
 			want := tab.state.Items[n-1].ID

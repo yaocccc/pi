@@ -35,7 +35,7 @@ func TestToolGroupsIgnoreOnlyInvisibleRecords(t *testing.T) {
 				opts := Options{Width: 80, ShowThinking: tc.showThinking, Expanded: map[string]bool{"tool-group:t1": expanded}}
 				doc := Transcript(items, testTheme(), opts)
 				cached := cache.Transcript(items, testTheme(), opts)
-				if !reflect.DeepEqual(doc, cached) {
+				if !equalDocuments(doc, cached) {
 					t.Fatal("cached and uncached layouts differ")
 				}
 				groups := 0
@@ -61,4 +61,19 @@ func TestToolGroupsIgnoreOnlyInvisibleRecords(t *testing.T) {
 			}
 		})
 	}
+}
+
+func equalDocuments(a, b Document) bool {
+	if a.LineCount() != b.LineCount() {
+		return false
+	}
+	for y := 0; y < a.LineCount(); y++ {
+		as, ah := a.Span(y)
+		bs, bh := b.Span(y)
+		if a.Line(y) != b.Line(y) || as != bs || ah != bh {
+			return false
+		}
+	}
+	a.DocumentRows = b.DocumentRows
+	return reflect.DeepEqual(a, b)
 }

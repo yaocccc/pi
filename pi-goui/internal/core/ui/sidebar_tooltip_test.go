@@ -58,6 +58,40 @@ func TestSidebarHistoryTooltip(t *testing.T) {
 	}
 }
 
+func TestRecentTooltipDelete(t *testing.T) {
+	m := testModel(t, "")
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	s := session.Summary{Path: "recent.jsonl", ID: "saved", Name: "Recent"}
+	m.sidebarHistory.sessions = []session.Summary{s}
+	m.Update(tea.MouseMotionMsg{X: m.mainWidth() + 4, Y: m.sidebarLayout().HistoryStart})
+	box, ok := m.sidebarHistoryTooltip(m.current())
+	if !ok {
+		t.Fatal("missing tooltip")
+	}
+	r := box.deleteRect()
+	base := strings.Repeat(strings.Repeat(" ", m.width)+"\n", m.height)
+	visible := func() bool {
+		return strings.Contains(ansi.Strip(m.overlaySidebarHistoryTooltip(m.current(), base)), recentDeleteLabel)
+	}
+	if visible() {
+		t.Fatal("button visible before entering corner")
+	}
+	m.Update(tea.MouseMotionMsg{X: r.x, Y: r.y + 1})
+	if !visible() {
+		t.Fatal("button missing near corner")
+	}
+	rows := strings.Split(m.overlaySidebarHistoryTooltip(m.current(), base), "\n")
+	right := box.x + m.mainScreenX() + box.width - 1
+	if got := ansi.Cut(ansi.Strip(rows[box.y+1]), right-r.width, right); got != recentDeleteLabel {
+		t.Fatalf("first interior row, against right border: got %q", got)
+	}
+	m.Update(tea.MouseClickMsg{X: r.x, Y: r.y, Button: tea.MouseLeft})
+	ds := m.current().dialogs
+	if len(ds) != 1 || ds[0].action == nil || ds[0].action.path != s.Path || ds[0].action.kind != "delete" {
+		t.Fatal("expected confirmation for hovered history")
+	}
+}
+
 func TestSidebarHistoryTooltipSmallViewportAndOffset(t *testing.T) {
 	m := testModel(t, "")
 	m.sidebarHistory = sidebarHistoryState{cwd: m.tabDirectory(m.current()), sessions: []session.Summary{{Name: "first"}, {FirstMessage: "fallback"}}}

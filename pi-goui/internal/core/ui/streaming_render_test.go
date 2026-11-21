@@ -52,7 +52,7 @@ func TestStreamingInputDoesNotFlushDocument(t *testing.T) {
 	tab := m.current()
 	tab.follow = true
 	m.clampScroll(tab)
-	before := tab.doc.Text
+	before := tab.doc.FullText()
 	m.Update(events[1])
 	for _, msg := range []tea.Msg{
 		tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 3, Y: 5},
@@ -62,14 +62,14 @@ func TestStreamingInputDoesNotFlushDocument(t *testing.T) {
 	} {
 		m.Update(msg)
 		m.View()
-		if tab.doc.Text != before || !tab.dirty || tab.documentJob != nil {
+		if tab.doc.FullText() != before || !tab.dirty || tab.documentJob != nil {
 			t.Fatalf("%T flushed pending stream content", msg)
 		}
 	}
 	offset := tab.offset
 	m.Update(tickMsg(time.Now()))
 	job := tab.documentJob
-	if job == nil || tab.doc.Text != before {
+	if job == nil || tab.doc.FullText() != before {
 		t.Fatal("tick did not schedule an isolated layout")
 	}
 	// More events/ticks must not queue another job or starve this snapshot.
@@ -79,7 +79,7 @@ func TestStreamingInputDoesNotFlushDocument(t *testing.T) {
 		t.Fatal("more than one layout in flight")
 	}
 	m.Update(job.render())
-	if tab.doc.Text == before || !tab.dirty || tab.documentJob != nil {
+	if tab.doc.FullText() == before || !tab.dirty || tab.documentJob != nil {
 		t.Fatal("compatible older snapshot not published")
 	}
 	if tab.offset != offset || tab.follow {
@@ -88,10 +88,10 @@ func TestStreamingInputDoesNotFlushDocument(t *testing.T) {
 	m.Update(tickMsg(time.Now()))
 	finishStreamingDocument(m)
 	want := render.Transcript(tab.state.Items, m.cfg.Theme, m.documentOptions(tab))
-	if tab.dirty || !reflect.DeepEqual(tab.doc, want) {
+	if tab.dirty || !equalDocuments(tab.doc, want) {
 		t.Fatal("latest layout differs from full render")
 	}
-	if got := strings.Join(tab.documentLines(), "\n"); got != tab.doc.Text {
+	if got := strings.Join(tab.doc.Range(0, tab.doc.LineCount()), "\n"); got != tab.doc.FullText() {
 		t.Fatal("line index is stale")
 	}
 }
@@ -107,21 +107,21 @@ func TestStreamingLayoutSnapshotAndInvalidation(t *testing.T) {
 			if job == nil {
 				t.Fatal("missing layout")
 			}
-			before := tab.doc.Text
+			before := tab.doc.FullText()
 			switch change {
 			case "resize":
 				m.Update(tea.WindowSizeMsg{Width: 97, Height: 32})
-				before = tab.doc.Text
+				before = tab.doc.FullText()
 			case "theme":
 				m.cfg.Theme.Text = "#aa1122"
 				tab.invalidateDocument()
 				m.document(tab)
-				before = tab.doc.Text
+				before = tab.doc.FullText()
 			case "fold":
 				tab.folds["tool"] = true
 				tab.invalidateDocument()
 				m.document(tab)
-				before = tab.doc.Text
+				before = tab.doc.FullText()
 			case "backend":
 				tab.client = new(rpc.Client)
 			case "session":
@@ -142,10 +142,10 @@ func TestStreamingLayoutSnapshotAndInvalidation(t *testing.T) {
 				tab.client = nil
 			} // Not a running RPC client.
 			if change == "background" {
-				if tab.doc.Text != result.doc.Text || m.current().doc.Text == result.doc.Text {
+				if tab.doc.FullText() != result.doc.FullText() || m.current().doc.FullText() == result.doc.FullText() {
 					t.Fatal("result routed to wrong tab")
 				}
-			} else if tab.doc.Text != before {
+			} else if tab.doc.FullText() != before {
 				t.Fatal("invalid/frozen layout was published")
 			}
 		})
@@ -176,24 +176,24 @@ func TestStreamingSnapshotOwnsMutableInputs(t *testing.T) {
 	go func() { result <- cmd() }()
 	m.Update(events[1])
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 35})
-	before := tab.doc.Text
+	before := tab.doc.FullText()
 	m.Update(<-result)
-	if before != tab.doc.Text {
+	if before != tab.doc.FullText() {
 		t.Fatal("old worker replaced resized document")
 	}
 }
 
 func TestDocumentLinesReuse(t *testing.T) {
-	tab := &tab{doc: render.Document{Text: "first\n界👩‍💻\n"}}
-	lines := tab.documentLines()
-	if len(lines) != 3 || &lines[0] != &tab.documentLines()[0] {
+	tab := &tab{doc: render.Document{DocumentRows: render.TextRows("first\n界👩‍💻\n")}}
+	lines := tab.doc.Range(0, tab.doc.LineCount())
+	if len(lines) != 3 || lines[0] != tab.doc.Line(0) {
 		t.Fatal("published document index was rebuilt")
 	}
-	if n := testing.AllocsPerRun(100, func() { _ = tab.documentLines() }); n != 0 {
+	if n := testing.AllocsPerRun(100, func() { _ = tab.doc.Line(1) }); n != 0 {
 		t.Fatalf("cached lines allocated %v times", n)
 	}
-	tab.doc.Text = "replacement"
-	if got := tab.documentLines(); len(got) != 1 || got[0] != tab.doc.Text {
+	tab.doc.DocumentRows = render.TextRows("replacement")
+	if got := tab.doc.Range(0, tab.doc.LineCount()); len(got) != 1 || got[0] != tab.doc.FullText() {
 		t.Fatal("replacement kept stale index")
 	}
 }
@@ -211,7 +211,7 @@ func TestStreamingMarkdownBoundaries(t *testing.T) {
 		m.Update(tickMsg(time.Now()))
 		finishStreamingDocument(m)
 		want := render.Transcript(tab.state.Items, m.cfg.Theme, m.documentOptions(tab))
-		if !reflect.DeepEqual(tab.doc, want) {
+		if !equalDocuments(tab.doc, want) {
 			t.Fatal("streaming Markdown layout/geometry differs from full rendering")
 		}
 	}
@@ -237,7 +237,7 @@ func TestStreamingSettledFlushAndFollow(t *testing.T) {
 	if tab.dirty || !reflect.DeepEqual(want, tab.doc) {
 		t.Fatal("settled document not final")
 	}
-	if !tab.follow || tab.offset != max(0, len(tab.documentLines())-m.transcriptHeight(tab)) {
+	if !tab.follow || tab.offset != max(0, tab.doc.LineCount()-m.transcriptHeight(tab)) {
 		t.Fatal("bottom follow lost")
 	}
 }

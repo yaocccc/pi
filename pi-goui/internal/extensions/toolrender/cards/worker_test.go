@@ -154,7 +154,7 @@ func TestWorkerDetailsAuthoritativeAndTaskFolds(t *testing.T) {
 	item := workerFixture()
 	opts := render.Options{Tools: toolrender.NewViews(), Width: 120, Expanded: map[string]bool{"tool-group:" + item.ID: true, item.ID: true}}
 	doc := render.Transcript([]session.Item{item}, testTheme(), opts)
-	plain := ansi.Strip(doc.Text)
+	plain := ansi.Strip(doc.FullText())
 	for _, want := range []string{"worker · 2 tasks · blocked", "implement · normal · 2 turns", "test · fast", "• Implemented task cards", "Implemented task cards", "Missing fixture", "↑1k ↓300", "10s", "2s", "Improve worker cards"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q:\n%s", want, plain)
@@ -181,7 +181,7 @@ func TestWorkerDetailsAuthoritativeAndTaskFolds(t *testing.T) {
 	}
 	opts.Expanded[item.ID] = false
 	collapsed := render.Transcript([]session.Item{item}, testTheme(), opts)
-	if blockByID(t, collapsed, item.ID).Expanded || strings.Contains(ansi.Strip(collapsed.Text), "Implemented task cards") {
+	if blockByID(t, collapsed, item.ID).Expanded || strings.Contains(ansi.Strip(collapsed.FullText()), "Implemented task cards") {
 		t.Fatal("card did not collapse")
 	}
 }
@@ -192,17 +192,17 @@ func TestWorkerPartialSnapshotAndCompactPreview(t *testing.T) {
 	item.Details = json.RawMessage(`{"kind":"worker-ui","snapshotAt":5000,"controlErrors":[{"message":"Cancel was rejected"}],"tasks":[{"index":4,"status":"running","mode":"scout","objective":"Inspect source","requestedPreset":"fast","startedAt":1000,"phase":"Reading source","activities":[{"type":"tool","status":"running","label":"read","detail":"src/main.go"}]}]}`)
 	opts := render.Options{Tools: toolrender.NewViews(), Width: 100}
 	compact := render.Transcript([]session.Item{item}, testTheme(), opts)
-	if len(compact.Blocks) != 1 || compact.Blocks[0].Expanded || strings.Contains(ansi.Strip(compact.Text), "Inspect source") || strings.Contains(ansi.Strip(compact.Text), "╭─ worker ") {
+	if len(compact.Blocks) != 1 || compact.Blocks[0].Expanded || strings.Contains(ansi.Strip(compact.FullText()), "Inspect source") || strings.Contains(ansi.Strip(compact.FullText()), "╭─ worker ") {
 		t.Fatal("collapsed running task leaked preview")
 	}
 	opts.ExpandTools = true
 	first := render.Transcript([]session.Item{item}, testTheme(), opts)
 	second := render.Transcript([]session.Item{item}, testTheme(), opts)
-	if first.Text != second.Text {
+	if first.FullText() != second.FullText() {
 		t.Fatal("history snapshot duration drifted")
 	}
 	for _, s := range []string{"scout · fast · 4s", "Cancel was rejected", "≡ Activity"} {
-		if !strings.Contains(ansi.Strip(first.Text), s) {
+		if !strings.Contains(ansi.Strip(first.FullText()), s) {
 			t.Fatal(s)
 		}
 	}
@@ -211,7 +211,7 @@ func TestWorkerPartialSnapshotAndCompactPreview(t *testing.T) {
 func TestWorkerFallbackEnvelopesAndUnavailableMetrics(t *testing.T) {
 	item := session.Item{ID: "legacy", Role: "tool", ToolName: "worker", HasResult: true, Arguments: json.RawMessage(`{"batchId":"saved-batch"}`), Text: `{"batchId":"saved-batch","status":"completed","tasks":[{"taskId":"a","status":"blocked"}],"result":{"results":[{"status":"blocked","summary":["Need authorization"],"execution":{"resolved_preset":"deep","actual_model_id":"fixture/model","usage":{"input":42,"output":17,"turns":1}}}]}}`}
 	doc := render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, ExpandTools: true})
-	plain := ansi.Strip(doc.Text)
+	plain := ansi.Strip(doc.FullText())
 	for _, s := range []string{"blocked", "saved-batch", "deep", "↑42 ↓17", "Need authorization"} {
 		if !strings.Contains(plain, s) {
 			t.Fatalf("missing %q:\n%s", s, plain)
@@ -224,21 +224,21 @@ func TestWorkerFallbackEnvelopesAndUnavailableMetrics(t *testing.T) {
 	item.Running = true
 	item.Text = ""
 	item.HasResult = false
-	plain = ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, ExpandTools: true}).Text)
+	plain = ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, ExpandTools: true}).FullText())
 	if !strings.Contains(plain, "queued") || strings.Contains(plain, "1 turns") || strings.Contains(plain, "0ms") {
 		t.Fatal("arguments-only call invents progress")
 	}
 	for _, status := range []string{"failed", "cancelled", "blocked"} {
 		item.Running = false
 		item.Text = `{"status":"` + status + `","error":"Rejected operation"}`
-		plain = ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, ExpandTools: true}).Text)
+		plain = ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, ExpandTools: true}).FullText())
 		if !strings.Contains(plain, status) || !strings.Contains(plain, "Rejected operation") {
 			t.Fatal(plain)
 		}
 	}
 	item.Text = "Invalid response\nraw error evidence"
 	item.Details = json.RawMessage(`{broken`)
-	if !strings.Contains(ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, ExpandTools: true}).Text), "raw error evidence") {
+	if !strings.Contains(ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 100, ExpandTools: true}).FullText()), "raw error evidence") {
 		t.Fatal("non-JSON evidence lost")
 	}
 }
@@ -248,7 +248,7 @@ func TestWorkerControlPayloadWithoutTasks(t *testing.T) {
 		Arguments: json.RawMessage(`{"batchId":"missing","cancel":true}`),
 		Details:   json.RawMessage(`{"kind":"worker-ui","tasks":[],"payload":{"status":"failed","error":"Batch not found"}}`),
 		Text:      `{"summary":["UNTRUSTED CONTENT OVERRIDE"]}`}
-	text := ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 80, ExpandTools: true}).Text)
+	text := ansi.Strip(render.Transcript([]session.Item{item}, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: 80, ExpandTools: true}).FullText())
 	if !strings.Contains(text, "failed") || !strings.Contains(text, "Batch not found") || strings.Contains(text, "UNTRUSTED CONTENT") {
 		t.Fatal(text)
 	}
@@ -260,12 +260,12 @@ func TestWorkerWidthsSanitizationAndGroupIndent(t *testing.T) {
 	items := []session.Item{item, {ID: "b", Role: "tool", ToolName: "bash", Text: "hello", HasResult: true}}
 	for _, width := range []int{1, 2, 3, 5, 8, 12, 20, 40, 60, 80, 132} {
 		doc := render.Transcript(items, testTheme(), render.Options{Tools: toolrender.NewViews(), Width: width, ExpandTools: true})
-		checkWidth(t, doc.Text, width)
-		if strings.Contains(doc.Text, "\x1b[2J") || strings.Contains(doc.Text, "\x1b]52") || strings.Contains(doc.Text, "48;2;") {
+		checkWidth(t, doc.FullText(), width)
+		if strings.Contains(doc.FullText(), "\x1b[2J") || strings.Contains(doc.FullText(), "\x1b]52") || strings.Contains(doc.FullText(), "48;2;") {
 			t.Fatalf("unsafe style width=%d", width)
 		}
 		if width >= 20 {
-			lines := strings.Split(ansi.Strip(doc.Text), "\n")
+			lines := strings.Split(ansi.Strip(doc.FullText()), "\n")
 			group := blockByID(t, doc, "tool-group:w")
 			child := blockByID(t, doc, "w")
 			gx := strings.Index(lines[group.Start], "⌄")

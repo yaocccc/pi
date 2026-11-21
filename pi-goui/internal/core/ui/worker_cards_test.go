@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+
 	"pi-goui/internal/extensions/hostui"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func BenchmarkWorkerTaskInspector(b *testing.B) {
 				m := &Model{tabs: []*tab{taskTab}, width: 160, height: 40, inspector: toolInspector{tabID: 1, itemID: "large-worker", content: &hostui.Inspector{Key: "index:large:0"}}}
 				rows := m.inspectorRows()
 				if action == "selection-view" {
-					m.inspector.selection = transcriptSelection{dragging: true, lines: rows}
+					m.inspector.selection = transcriptSelection{dragging: true, document: rows}
 				}
 				b.ReportAllocs()
 				b.ResetTimer()
@@ -58,7 +59,7 @@ func TestWorkerTaskInspectorProjectionCache(t *testing.T) {
 			m := &Model{tabs: []*tab{taskTab}, width: 160, height: 40, inspector: toolInspector{tabID: 1, itemID: "large-worker", content: &hostui.Inspector{Key: "index:large:0"}}}
 			rows := m.inspectorRows()
 			projected, ok := m.inspectedTool()
-			if !ok || len(rows) < count {
+			if !ok || rows.LineCount() < count {
 				t.Fatal("large fixture did not render all activities")
 			}
 			// Content equality must hit even when a source update supplies a new
@@ -70,13 +71,13 @@ func TestWorkerTaskInspectorProjectionCache(t *testing.T) {
 			}
 			for i := 0; i < 10; i++ {
 				m.inspectorWheel(tea.Mouse{Button: tea.MouseWheelDown, X: 130, Y: 5})
-				m.inspector.selection = transcriptSelection{dragging: true, lines: rows}
+				m.inspector.selection = transcriptSelection{dragging: true, document: rows}
 				m.inspectorMotion(tea.Mouse{Button: tea.MouseLeft, X: 130, Y: 3 + i})
 				m.inspectorView()
 				m.inspector.selection.dragging = false
 			}
 			again, _ := m.inspectedTool()
-			if &again.Details[0] != &projected.Details[0] || &m.inspectorRows()[0] != &rows[0] {
+			if &again.Details[0] != &projected.Details[0] || m.inspectorRows() != rows {
 				t.Fatal("mouse interaction reprojected or rerendered unchanged data")
 			}
 			// In-place source mutation must invalidate the owned cache snapshot.
@@ -87,13 +88,13 @@ func TestWorkerTaskInspectorProjectionCache(t *testing.T) {
 			if !ok || m.inspector.content.(*hostui.Inspector).Title != "Other task" || &updated.Details[0] == &projected.Details[0] {
 				t.Fatal("in-place mutation failed to invalidate task projection")
 			}
-			if &m.inspectorRows()[0] == &rows[0] {
+			if m.inspectorRows() == rows {
 				t.Fatal("streamed mutation failed to invalidate rendered rows")
 			}
 			projected = updated
 			rows = m.inspectorRows()
 			m.width = 90
-			if &m.inspectorRows()[0] == &rows[0] {
+			if m.inspectorRows() == rows {
 				t.Fatal("width change retained stale wrapped rows")
 			}
 			updated, _ = m.inspectedTool()
@@ -115,7 +116,7 @@ func TestWorkerTaskInspectorProjectionCache(t *testing.T) {
 				t.Fatal("valid task not restored after failed lookup")
 			}
 			taskTab.state.Items[0].Details = json.RawMessage(`{"kind":"worker-ui","batchId":"large","tasks":[]}`)
-			if m.inspectorOpen() || len(m.inspectorRows()) != 0 {
+			if m.inspectorOpen() || inspectorRowCount(m.inspectorRows()) != 0 {
 				t.Fatal("removed task retained stale cache")
 			}
 			taskTab.state.Items[0] = largeWorkerItem(count)
@@ -179,7 +180,7 @@ func TestLegacyWorkerTaskViewShowsUnavailable(t *testing.T) {
 	if m.current() != parent || !m.inspectorOpen() || (m.inspector.content != nil && m.inspector.content.(*hostui.Inspector).Worker != nil) || len(m.tabs) != 1 {
 		t.Fatal("legacy task did not open isolated summary")
 	}
-	if !strings.Contains(strings.Join(m.inspectorRows(), "\n"), "简要详情") {
+	if !strings.Contains(m.inspectorRows().FullText(), "简要详情") {
 		t.Fatal("missing summary notice")
 	}
 }

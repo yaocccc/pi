@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -41,7 +40,7 @@ func TestMouseFoldWhileSameWidthLayoutInFlight(t *testing.T) {
 	}
 	want := render.Transcript(tab.state.Items, m.cfg.Theme, m.documentOptions(tab))
 	m.Update(<-result)
-	if !reflect.DeepEqual(tab.doc, want) {
+	if !equalDocuments(tab.doc, want) {
 		t.Fatal("same-width pending layout clobbered fold or changed block geometry")
 	}
 }

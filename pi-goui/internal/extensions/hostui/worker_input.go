@@ -273,34 +273,29 @@ func WorkerInputItems(items []session.Item, expanded map[string]bool) ([]session
 // Resolve only generated markers inside rendered user blocks. Removing each
 // marker as one space preserves frame geometry and selectable column offsets.
 func WorkerInputTargets(doc *render.Document, actions []WorkerInputAction) []WorkerInputAction {
-	rows := strings.Split(doc.Text, "\n")
+
 	var targets []WorkerInputAction
 	for _, action := range actions {
-		for y, row := range rows {
-			inUser := false
-			for _, block := range doc.Blocks {
-				if block.Role == "user" && block.ID == action.MessageID && y >= block.Start && y < block.End {
-					inUser = true
-					break
-				}
+		start, end := 0, 0
+		for _, b := range doc.Blocks {
+			if b.Role == "user" && b.ID == action.MessageID {
+				start, end = b.Start, b.End
+				break
 			}
-			if !inUser {
-				continue
-			}
+		}
+		for y := start; y < end; y++ {
+			row := doc.Line(y)
 			plain := ansi.Strip(row)
 			at := strings.Index(plain, action.Marker)
 			if at < 0 {
 				continue
 			}
 			x := ansi.StringWidth(plain[:at]) + 1
-			span := render.ContentSpan{}
-			if y < len(doc.Content) {
-				span = doc.Content[y]
-			}
+			span, _ := doc.Span(y)
 			// At very narrow widths the label may wrap. Only the actual visible part
 			// of its first row is actionable, never the frame or the following body.
 			width := min(ansi.StringWidth(action.Label), max(0, span.End-x))
-			rows[y] = strings.ReplaceAll(row, action.Marker, " ")
+			doc.DocumentRows = doc.WithLine(y, strings.ReplaceAll(row, action.Marker, " "))
 			if width > 0 {
 				action.Rect = Rect{X: x, Y: y, Width: width}
 				targets = append(targets, action)
@@ -308,6 +303,5 @@ func WorkerInputTargets(doc *render.Document, actions []WorkerInputAction) []Wor
 			break
 		}
 	}
-	doc.Text = strings.Join(rows, "\n")
 	return targets
 }

@@ -25,7 +25,7 @@ func TestWriteStreamingPreview(t *testing.T) {
 			event("toolcall_start", map[string]any{"id": "stream", "toolName": "write"})
 			render := func() string {
 				t.Helper()
-				return ansi.Strip(assertCachedTranscript(t, &cache, state.Items, testTheme(), opts).Text)
+				return ansi.Strip(assertCachedTranscript(t, &cache, state.Items, testTheme(), opts).FullText())
 			}
 			mustContainVisual(t, render(), "writing (awaiting path)", "╭─ write")
 			source := ""

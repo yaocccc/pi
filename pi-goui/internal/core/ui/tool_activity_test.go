@@ -37,20 +37,20 @@ func clickLiveTool(t *testing.T, m *Model, tab *tab, id string) {
 
 func TestLiveWorkerPreviewCanBeManuallyFolded(t *testing.T) {
 	m, tab := liveToolFixture(t, session.Item{ID: "w", ToolName: "worker", Details: json.RawMessage(`{"kind":"worker-ui","tasks":[{"index":0,"mode":"scout","status":"completed","objective":"Inspect source","result":{"summary":["Saved conclusion"]}}]}`)})
-	if !strings.Contains(tab.doc.Text, "Saved conclusion") {
+	if !strings.Contains(tab.doc.FullText(), "Saved conclusion") {
 		t.Fatal("preview not expanded by default")
 	}
 	clickLiveTool(t, m, tab, "w")
-	if value, ok := tab.folds["w"]; !ok || value || strings.Contains(tab.doc.Text, "Saved conclusion") {
+	if value, ok := tab.folds["w"]; !ok || value || strings.Contains(tab.doc.FullText(), "Saved conclusion") {
 		t.Fatal("Worker click did not collapse preview")
 	}
 	tab.state.Items[0].Running = false
 	m.document(tab)
-	if strings.Contains(tab.doc.Text, "Saved conclusion") {
+	if strings.Contains(tab.doc.FullText(), "Saved conclusion") {
 		t.Fatal("completion reopened manually folded Worker")
 	}
 	clickLiveTool(t, m, tab, "w")
-	if !strings.Contains(tab.doc.Text, "Saved conclusion") || !tab.folds["w"] {
+	if !strings.Contains(tab.doc.FullText(), "Saved conclusion") || !tab.folds["w"] {
 		t.Fatal("Worker click did not reopen preview")
 	}
 	if tab.folds["tool-group:w"] {
@@ -60,27 +60,27 @@ func TestLiveWorkerPreviewCanBeManuallyFolded(t *testing.T) {
 
 func TestLiveToolPreviewUsesNormalFoldState(t *testing.T) {
 	m, tab := liveToolFixture(t, session.Item{ID: "call", ToolName: "bash", Arguments: json.RawMessage(`{"command":"pwd"}`), Text: "summary\nLIVE_OUTPUT"})
-	if strings.Contains(tab.doc.Text, "LIVE_OUTPUT") {
+	if strings.Contains(tab.doc.FullText(), "LIVE_OUTPUT") {
 		t.Fatal("ordinary preview opened by default")
 	}
 	clickLiveTool(t, m, tab, "call")
-	if !tab.folds["call"] || !strings.Contains(tab.doc.Text, "LIVE_OUTPUT") {
+	if !tab.folds["call"] || !strings.Contains(tab.doc.FullText(), "LIVE_OUTPUT") {
 		t.Fatal("click did not expand normal tool result")
 	}
 	tab.state.Items[0].Text = "summary\nUPDATED_OUTPUT"
 	m.document(tab)
-	if !strings.Contains(tab.doc.Text, "UPDATED_OUTPUT") {
+	if !strings.Contains(tab.doc.FullText(), "UPDATED_OUTPUT") {
 		t.Fatal("stream update lost open state")
 	}
 	tab.folds["tool-group:call"] = true
 	m.document(tab)
-	if !strings.Contains(tab.doc.Text, "UPDATED_OUTPUT") {
+	if !strings.Contains(tab.doc.FullText(), "UPDATED_OUTPUT") {
 		t.Fatal("full group did not share child fold state")
 	}
 	tab.folds["tool-group:call"] = false
 	m.document(tab)
 	clickLiveTool(t, m, tab, "call")
-	if tab.folds["call"] || strings.Contains(tab.doc.Text, "UPDATED_OUTPUT") {
+	if tab.folds["call"] || strings.Contains(tab.doc.FullText(), "UPDATED_OUTPUT") {
 		t.Fatal("click did not collapse tool preview")
 	}
 	if tab.folds["tool-group:call"] {
@@ -90,14 +90,14 @@ func TestLiveToolPreviewUsesNormalFoldState(t *testing.T) {
 
 func TestRunningAnimationLeavesDocumentStable(t *testing.T) {
 	m, tab := liveToolFixture(t, session.Item{ID: "call", ToolName: "bash"})
-	before := tab.doc.Text
+	before := tab.doc.FullText()
 	first := m.View().Content
 	m.frame += 3
 	second := m.View().Content
 	if first == second {
 		t.Fatal("view did not animate")
 	}
-	if tab.doc.Text != before || tab.dirty {
+	if tab.doc.FullText() != before || tab.dirty {
 		t.Fatal("animation rebuilt or mutated transcript")
 	}
 }

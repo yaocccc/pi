@@ -74,6 +74,27 @@ func (m *Model) requestDeleteSession(t *tab) tea.Cmd {
 	return cmd
 }
 
+func (m *Model) requestRecentDelete(origin *tab, s session.Summary) tea.Cmd {
+	value := s.Path
+	for _, target := range m.tabs {
+		if target.state.ID == s.ID && sameSessionFile(target.state.File, s.Path) {
+			value = fmt.Sprintf("@%d", target.id)
+			break
+		}
+	}
+	selector := m.newDialog("session", "", "")
+	label := s.Name
+	if label == "" {
+		label = s.ID
+	}
+	selector.options = []option{{Label: label, Value: value, Data: s}}
+	cmd := m.requestSessionAction(origin, selector, "delete")
+	if selector.message != "" {
+		origin.notify(selector.message)
+	}
+	return cmd
+}
+
 func (m *Model) requestSessionAction(origin *tab, selector *dialog, kind string) tea.Cmd {
 	options := m.filtered(selector)
 	if len(options) == 0 {
@@ -306,6 +327,7 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 
 		return nil
 	}
+	m.patchHistoryAfterAction(a)
 	if a.kind == "rename" {
 		if target != nil {
 			target.state.Name = a.name
@@ -325,26 +347,6 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 		}
 	}
 	m.patchSessionSelectors(a, target, true)
-	// Publish the durable deletion immediately and reject scans started before it.
-	h := &m.sidebarHistory
-	h.generation++
-	h.pending = false
-	h.checked = time.Time{}
-	remove := func(list []session.Summary) []session.Summary {
-		out := make([]session.Summary, 0, len(list))
-		for _, saved := range list {
-			if !sameSessionPath(saved.Path, a.path) {
-				out = append(out, saved)
-			}
-		}
-		return out
-	}
-	h.sessions = remove(h.sessions)
-	for cwd, cached := range h.cache {
-		cached.sessions = remove(cached.sessions)
-		cached.checked = time.Time{}
-		h.cache[cwd] = cached
-	}
 	if target == nil {
 		return m.requestSidebarHistory(time.Now())
 	}
@@ -362,6 +364,37 @@ func (m *Model) finishSessionAction(v sessionActionMsg) tea.Cmd {
 		return tea.Batch(closed, focus, m.start(fresh), m.requestSidebarHistory(time.Now()))
 	}
 	return tea.Batch(closed, focus, m.requestSidebarHistory(time.Now()))
+}
+
+// Both the sidebar and open selectors consume these scans. A scan started
+// before a durable rename or deletion must not put the old row back.
+func (m *Model) patchHistoryAfterAction(a *sessionAction) {
+	h := &m.sidebarHistory
+	h.generation++
+	h.pending = false
+	h.checked = time.Time{}
+	patch := func(list []session.Summary) []session.Summary {
+		if list == nil {
+			return nil
+		}
+		out := make([]session.Summary, 0, len(list))
+		for _, saved := range list {
+			if sameSessionPath(saved.Path, a.path) {
+				if a.kind == "delete" {
+					continue
+				}
+				saved.Name = a.name
+			}
+			out = append(out, saved)
+		}
+		return out
+	}
+	h.sessions = patch(h.sessions)
+	for cwd, cached := range h.cache {
+		cached.sessions = patch(cached.sessions)
+		cached.checked = time.Time{}
+		h.cache[cwd] = cached
+	}
 }
 
 func (m *Model) restoreSessionSelector(previous *dialog) tea.Cmd {

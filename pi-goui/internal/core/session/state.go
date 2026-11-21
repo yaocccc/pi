@@ -606,7 +606,7 @@ func (s *State) Apply(raw json.RawMessage) bool {
 			t.ToolName = e.ToolName
 		}
 		if len(e.Args) > 0 {
-			t.Arguments = e.Args
+			t.Arguments, t.layoutArgs = e.Args, freezeJSON(e.Args)
 			t.argumentCharsKnown = false
 		}
 		t.Running = e.Type != "tool_execution_end"

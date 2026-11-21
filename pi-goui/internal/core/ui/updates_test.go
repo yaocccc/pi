@@ -111,7 +111,7 @@ func TestPiReleaseNotesBelowWelcomeAreScrollableAndNotHistory(t *testing.T) {
 	notes := updates.ReleaseNotes{Version: "1.2.4", Markdown: strings.Repeat("- Pi change.\n", 50) + "\nLast release note."}
 	m.receiveReleaseNotes(releaseNotesMsg{notes})
 	m.document(tab)
-	text := ansi.Strip(tab.doc.Text)
+	text := ansi.Strip(tab.doc.FullText())
 	welcome, title := strings.Index(text, "A quiet place to work."), strings.Index(text, "Pi 1.2.4")
 	if welcome < 0 || title <= welcome || !strings.Contains(text, "Last release note.") || tab.offset != 0 {
 		t.Fatal("release notes missing or not shown from the top", text)
@@ -131,7 +131,7 @@ func TestPiReleaseNotesBelowWelcomeAreScrollableAndNotHistory(t *testing.T) {
 	tab.state.Items = []session.Item{{ID: "u", Role: "user", Text: "Real chat"}}
 	tab.follow = true
 	m.document(tab)
-	if strings.Contains(ansi.Strip(tab.doc.Text), "What's new") || !strings.Contains(ansi.Strip(tab.doc.Text), "Real chat") {
+	if strings.Contains(ansi.Strip(tab.doc.FullText()), "What's new") || !strings.Contains(ansi.Strip(tab.doc.FullText()), "Real chat") {
 		t.Fatal("startup release notes leaked into actual transcript")
 	}
 }
@@ -143,7 +143,7 @@ func TestPiNotesNotAcknowledgedInResumedConversation(t *testing.T) {
 	// Even before the historical entries arrive, this is not a blank new tab.
 	m.receiveReleaseNotes(releaseNotesMsg{updates.ReleaseNotes{Version: "1.2.4", Markdown: "Pi change."}})
 	m.document(tab)
-	if m.markReleaseNotesDisplayed() != nil || m.updates.notesAck || strings.Contains(tab.doc.Text, "Pi change") {
+	if m.markReleaseNotesDisplayed() != nil || m.updates.notesAck || strings.Contains(tab.doc.FullText(), "Pi change") {
 		t.Fatal("unshown release notes were presented or acknowledged during resume")
 	}
 	tab.state.Items = []session.Item{{ID: "u", Role: "user", Text: "Existing history"}}

@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,6 +14,17 @@ import (
 func testTheme() config.Theme {
 	return config.Theme{Accent: "#b7915f", Border: "#756550", Muted: "#948672", Text: "#e0d4bd", Background: "#25231f", UserBackground: "#30342b", AssistantBackground: "#292720", ToolBackground: "#292720", Success: "#a4ad81", Warning: "#d7ae72", Error: "#c77965", Thinking: "#a79b87"}
 }
+func TestShortFrameRowsMatchHardwrap(t *testing.T) {
+	for _, s := range []string{"", "a b ", "\n👩‍💻e\u0301\n中文", "\x1b[1m字\x1b[m", "\x1b]8;;https://example.org\x1b\\link\x1b]8;;\x1b\\"} {
+		for w := 1; w <= len(s)+1; w++ {
+			want := lines(ansi.Hardwrap(s, w, true))
+			if got := wrap(s, w); !slices.Equal(got, want) {
+				t.Fatalf("wrap(%q, %d) = %q; want %q", s, w, got, want)
+			}
+		}
+	}
+}
+
 func checkWidth(t *testing.T, s string, width int) {
 	t.Helper()
 	for i, row := range strings.Split(s, "\n") {
@@ -26,11 +38,11 @@ func TestTranscriptBubblesMarkdownAndWidths(t *testing.T) {
 	for _, width := range []int{8, 16, 20, 40, 80, 132} {
 		t.Run(string(rune(width)), func(t *testing.T) {
 			doc := Transcript(items, testTheme(), Options{Width: width})
-			checkWidth(t, doc.Text, width)
+			checkWidth(t, doc.FullText(), width)
 			if len(doc.Blocks) != 2 {
 				t.Fatalf("blocks=%+v", doc.Blocks)
 			}
-			plain := ansi.Strip(doc.Text)
+			plain := ansi.Strip(doc.FullText())
 			if strings.Contains(plain, "```go") || strings.Contains(plain, "**strong**") {
 				t.Fatal("raw Markdown leaked")
 			}
@@ -44,37 +56,37 @@ func TestToolsFoldOffsetsAndBashPreview(t *testing.T) {
 	output := strings.Repeat("line 中文 long output\n", 1200) + "FINAL_RESULT_MARKER"
 	items := []session.Item{{ID: "a", Role: "assistant", Text: "Before tool"}, {ID: "tool1", Role: "tool", ToolName: "bash", Arguments: json.RawMessage(`{"command":"ls -l"}`), Text: output}, {ID: "b", Role: "assistant", Text: "After tool"}}
 	collapsed := Transcript(items, testTheme(), Options{Width: 70})
-	if strings.Contains(collapsed.Text, "FINAL_RESULT_MARKER") {
+	if strings.Contains(collapsed.FullText(), "FINAL_RESULT_MARKER") {
 		t.Fatal("default output not folded")
 	}
 	if len(collapsed.Blocks) != 3 {
 		t.Fatalf("blocks %+v", collapsed.Blocks)
 	}
 	b := collapsed.Blocks[1]
-	if b.ID != "tool-group:tool1" || !b.Foldable || b.End-b.Start != 1 || !strings.Contains(ansi.Strip(collapsed.Text), "1 calls") {
+	if b.ID != "tool-group:tool1" || !b.Foldable || b.End-b.Start != 1 || !strings.Contains(ansi.Strip(collapsed.FullText()), "1 calls") {
 		t.Fatalf("tool not single row: %+v", b)
 	}
-	rows := strings.Split(ansi.Strip(collapsed.Text), "\n")
+	rows := strings.Split(ansi.Strip(collapsed.FullText()), "\n")
 	if !strings.Contains(rows[b.Start], "bash") {
 		t.Fatalf("bad tool offset: %+v", b)
 	}
-	if strings.Count(ansi.Strip(collapsed.Text), "助手") != 1 {
+	if strings.Count(ansi.Strip(collapsed.FullText()), "助手") != 1 {
 		t.Fatal("assistant turn was not grouped")
 	}
 	expanded := Transcript(items, testTheme(), Options{Width: 70, Expanded: map[string]bool{"tool-group:tool1": true, "tool1": true}})
-	if strings.Contains(ansi.Strip(expanded.Text), "FINAL_RESULT_MARKER") || !strings.Contains(ansi.Strip(expanded.Text), "(truncated)") {
+	if strings.Contains(ansi.Strip(expanded.FullText()), "FINAL_RESULT_MARKER") || !strings.Contains(ansi.Strip(expanded.FullText()), "(truncated)") {
 		t.Fatal("expanded bash must show only the output head")
 	}
 	if items[1].Text != output {
 		t.Fatal("preview changed saved output")
 	}
-	checkWidth(t, expanded.Text, 70)
+	checkWidth(t, expanded.FullText(), 70)
 	global := Transcript(items, testTheme(), Options{Width: 70, ExpandTools: true, Expanded: map[string]bool{"tool1": false}})
-	if strings.Contains(global.Text, "FINAL_RESULT_MARKER") {
+	if strings.Contains(global.FullText(), "FINAL_RESULT_MARKER") {
 		t.Fatal("per-tool false must override global expand")
 	}
 	for _, block := range expanded.Blocks {
-		if block.Start < 0 || block.End > len(strings.Split(expanded.Text, "\n")) || block.End <= block.Start {
+		if block.Start < 0 || block.End > len(strings.Split(expanded.FullText(), "\n")) || block.End <= block.Start {
 			t.Fatalf("invalid range %+v", block)
 		}
 	}
@@ -84,8 +96,8 @@ func TestConcurrentMarkdownRendering(t *testing.T) {
 		t.Run(string(rune('a'+i)), func(t *testing.T) {
 			t.Parallel()
 			doc := Transcript([]session.Item{{ID: "code", Role: "assistant", Text: "```go\nfunc main() { println(42) }\n```"}}, testTheme(), Options{Width: 40})
-			checkWidth(t, doc.Text, 40)
-			if !strings.Contains(ansi.Strip(doc.Text), "println(42)") {
+			checkWidth(t, doc.FullText(), 40)
+			if !strings.Contains(ansi.Strip(doc.FullText()), "println(42)") {
 				t.Fatal("code content missing")
 			}
 		})
@@ -95,11 +107,11 @@ func TestConcurrentMarkdownRendering(t *testing.T) {
 func TestThinkingHiddenWithoutMutation(t *testing.T) {
 	items := []session.Item{{ID: "a", Role: "assistant", Text: "Visible answer", Thinking: "PRIVATE_REASONING_MARKER"}, {ID: "t", Role: "thinking", Text: "SECOND_THOUGHT_MARKER"}}
 	hidden := Transcript(items, testTheme(), Options{Width: 80})
-	if strings.Contains(hidden.Text, "REASONING") || strings.Contains(hidden.Text, "SECOND_THOUGHT") {
+	if strings.Contains(hidden.FullText(), "REASONING") || strings.Contains(hidden.FullText(), "SECOND_THOUGHT") {
 		t.Fatal("thinking exposed")
 	}
 	shown := Transcript(items, testTheme(), Options{Width: 80, ShowThinking: true})
-	if !strings.Contains(shown.Text, "PRIVATE_REASONING_MARKER") || !strings.Contains(shown.Text, "SECOND_THOUGHT_MARKER") {
+	if !strings.Contains(shown.FullText(), "PRIVATE_REASONING_MARKER") || !strings.Contains(shown.FullText(), "SECOND_THOUGHT_MARKER") {
 		t.Fatal("thinking missing")
 	}
 	if items[0].Thinking != "PRIVATE_REASONING_MARKER" {
@@ -116,7 +128,7 @@ func TestTerminalControlsCannotEscape(t *testing.T) {
 	}
 	doc := Transcript([]session.Item{{ID: "x", Role: "user", Text: hostile}, {ID: "t", Role: "tool", ToolName: hostile, Text: hostile}}, testTheme(), Options{Width: 60, ExpandTools: true})
 	for _, control := range []string{"\x1b[2J", "\x1b]52", "\x1b]8", "\a", "\r", "\b"} {
-		if strings.Contains(doc.Text, control) {
+		if strings.Contains(doc.FullText(), control) {
 			t.Fatalf("injection survived %q", control)
 		}
 	}
@@ -155,7 +167,7 @@ func TestSidebarSectionsDimensionsAndRows(t *testing.T) {
 	if !strings.Contains(ansi.Strip(Sidebar(state, nil, testTheme(), 38, 20)), "cost —") {
 		t.Fatal("unknown cost must be shown as unknown")
 	}
-	if Sidebar(state, nil, testTheme(), 0, 5) != "" || Transcript(nil, testTheme(), Options{Width: 0}).Text != "" {
+	if Sidebar(state, nil, testTheme(), 0, 5) != "" || Transcript(nil, testTheme(), Options{Width: 0}).FullText() != "" {
 		t.Fatal("zero size not empty")
 	}
 }
@@ -166,21 +178,21 @@ func TestCompleteHistoryAndCompactionBoundary(t *testing.T) {
 	}
 	items = append(items, session.Item{ID: "compact", Role: "compaction", Text: "Context compacted; full history retained"}, session.Item{ID: "last", Role: "assistant", Text: "LATEST_MESSAGE"})
 	d := Transcript(items, testTheme(), Options{Width: 60})
-	if len(d.Blocks) != 122 || strings.Count(ansi.Strip(d.Text), "Original entry") != 120 || !strings.Contains(ansi.Strip(d.Text), "LATEST_MESSAGE") {
-		t.Fatalf("history clipped: blocks=%d originals=%d", len(d.Blocks), strings.Count(ansi.Strip(d.Text), "Original entry"))
+	if len(d.Blocks) != 122 || strings.Count(ansi.Strip(d.FullText()), "Original entry") != 120 || !strings.Contains(ansi.Strip(d.FullText()), "LATEST_MESSAGE") {
+		t.Fatalf("history clipped: blocks=%d originals=%d", len(d.Blocks), strings.Count(ansi.Strip(d.FullText()), "Original entry"))
 	}
 }
 
 func TestLocalizedTitlesAndModelName(t *testing.T) {
 	items := []session.Item{{ID: "u", Role: "user", Text: "hi"}, {ID: "a", Role: "assistant", Text: "hello"}, {ID: "s", Role: "system", Text: "note"}}
 	doc := Transcript(items, testTheme(), Options{Width: 80, AssistantTitle: "Model 中文\x1b[2J"})
-	plain := ansi.Strip(doc.Text)
+	plain := ansi.Strip(doc.FullText())
 	for _, title := range []string{"╭─ 你 ", "╭─ Model 中文 ", "╭─ 系统 "} {
 		if !strings.Contains(plain, title) {
 			t.Fatal(plain)
 		}
 	}
-	if strings.Contains(doc.Text, "\x1b[2J") {
+	if strings.Contains(doc.FullText(), "\x1b[2J") {
 		t.Fatal("model title injected terminal commands")
 	}
 }

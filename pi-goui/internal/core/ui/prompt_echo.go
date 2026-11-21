@@ -50,7 +50,7 @@ func (m *Model) showPromptEcho(t *tab, original string, images []map[string]any,
 		base = render.Document{}
 	}
 	if !t.selection.dragging && !m.panelResize.dragging {
-		m.publishDocument(t, base, nil)
+		m.publishDocument(t, base)
 	}
 }
 
@@ -89,7 +89,7 @@ func (m *Model) clearPromptEcho(t *tab, e *promptEcho) {
 	if e != nil && t.promptEcho == e {
 		t.promptEcho = nil
 		if !t.selection.dragging && !m.panelResize.dragging {
-			m.publishDocument(t, t.nativeDocument, nil)
+			m.publishDocument(t, t.nativeDocument)
 		}
 	}
 }
@@ -112,12 +112,12 @@ func (m *Model) echoDocument(t *tab, base render.Document) render.Document {
 	}
 	var cache render.TranscriptCache
 	echo := cache.Transcript([]session.Item{t.promptEcho.item}, m.cfg.Theme, m.documentOptions(t))
-	if base.Text == "" {
+	if base.ByteLen() == 0 {
 		return echo
 	}
-	offset := len(strings.Split(base.Text, "\n")) + 1
+	offset := base.LineCount() + 1
 	doc := base
-	doc.Text = base.Text + "\n\n" + echo.Text
+	doc.DocumentRows = base.WithBlankAnd(echo.DocumentRows)
 	doc.Blocks = slices.Clone(base.Blocks)
 	for _, block := range echo.Blocks {
 		block.Start += offset
@@ -129,8 +129,6 @@ func (m *Model) echoDocument(t *tab, base render.Document) render.Document {
 		link.Row += offset
 		doc.ImageLinks = append(doc.ImageLinks, link)
 	}
-	doc.Content = append(slices.Clone(base.Content), render.ContentSpan{})
-	doc.Content = append(doc.Content, echo.Content...)
 	doc.ActivityRows = slices.Clone(base.ActivityRows)
 	return doc
 }

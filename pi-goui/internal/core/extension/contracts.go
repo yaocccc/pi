@@ -118,7 +118,8 @@ type Inspector interface {
 	Poll(item session.Item, now time.Time) tea.Cmd
 	Update(msg tea.Msg, item *session.Item) (cmd tea.Cmd, handled bool)
 	View() InspectorView
-	Rows(item session.Item, theme config.Theme, width int, options func(session.State, int, bool, bool, map[string]bool) render.Options, inspectLabel string) []string
+	// Rows returns the immutable display snapshot; callers read only the visible range.
+	Rows(item session.Item, theme config.Theme, width int, options func(session.State, int, bool, bool, map[string]bool) render.Options, inspectLabel string) render.DocumentRows
 	Activity(row int) bool
 	ToggleThinking()
 	ToggleFold(row int)

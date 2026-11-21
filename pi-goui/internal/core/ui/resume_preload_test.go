@@ -61,7 +61,7 @@ func TestResumePreloadHitIsPreparedAndIndependentAcrossTabs(t *testing.T) {
 			t.Fatal("warm preview did not render asynchronously")
 		}
 		m.receiveDocument(cmd().(documentResult))
-		if !strings.Contains(tab.doc.Text, "SAVED-LOCAL-HISTORY") {
+		if !strings.Contains(tab.doc.FullText(), "SAVED-LOCAL-HISTORY") {
 			t.Fatal("warm transcript missing")
 		}
 	}

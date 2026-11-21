@@ -16,26 +16,26 @@ func TestAssistantStatsInTitleAndCache(t *testing.T) {
 	stats := "↑35k ↓1k · 28s"
 	opts.AssistantStats["a"] = stats
 	doc := cache.Transcript(items, testTheme(), opts)
-	if doc.Text == before.Text {
+	if doc.FullText() == before.FullText() {
 		t.Fatal("new metrics did not invalidate cache")
 	}
-	for _, row := range strings.Split(ansi.Strip(doc.Text), "\n") {
+	for _, row := range strings.Split(ansi.Strip(doc.FullText()), "\n") {
 		if strings.Contains(row, stats) && !strings.Contains(row, "╭─ Model · "+stats) {
 			t.Fatal("metrics are not in the title")
 		}
 	}
-	if strings.Count(ansi.Strip(doc.Text), stats) != 1 {
+	if strings.Count(ansi.Strip(doc.FullText()), stats) != 1 {
 		t.Fatal("missing or duplicated metrics")
 	}
-	if doc.Text != Transcript(items, testTheme(), opts).Text {
+	if doc.FullText() != Transcript(items, testTheme(), opts).FullText() {
 		t.Fatal("cached rendering differs")
 	}
 	opts.AssistantStats["a"] = "↑40k ↓2k · 40s"
-	if cache.Transcript(items, testTheme(), opts).Text == doc.Text {
+	if cache.Transcript(items, testTheme(), opts).FullText() == doc.FullText() {
 		t.Fatal("in-place metrics update was cached")
 	}
 	for _, width := range []int{1, 8, 20, 40, 120} {
 		opts.Width = width
-		checkWidth(t, cache.Transcript(items, testTheme(), opts).Text, width)
+		checkWidth(t, cache.Transcript(items, testTheme(), opts).FullText(), width)
 	}
 }

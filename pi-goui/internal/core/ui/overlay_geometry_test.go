@@ -23,7 +23,7 @@ func TestToolInspectorOverlayWideBackdrop(t *testing.T) {
 					tab.state.Items[0].Arguments = args
 					m.document(tab)
 					r := inspectorTarget(t, m)
-					original := tab.doc.Text
+					original := tab.doc.FullText()
 					rows := strings.Split(original, "\n")
 					before := rows[r.y]
 					m.sidebarHistory.pointerKnown = true
@@ -39,7 +39,7 @@ func TestToolInspectorOverlayWideBackdrop(t *testing.T) {
 					if ansi.Strip(ansi.Cut(got, r.x+r.width, ansi.StringWidth(got))) != ansi.Strip(popupBackdropSlice(before, r.x+r.width, ansi.StringWidth(before))) {
 						t.Fatal("right border/backdrop moved")
 					}
-					if tab.doc.Text != original {
+					if tab.doc.FullText() != original {
 						t.Fatal("overlay changed underlying content")
 					}
 					m.mouse(tea.Mouse{Button: tea.MouseLeft, X: r.x, Y: r.y})

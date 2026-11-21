@@ -38,9 +38,9 @@ func (d *detailInspector) Update(msg tea.Msg, _ *session.Item) (tea.Cmd, bool) {
 	}
 	return nil, ok
 }
-func (d *detailInspector) Rows(session.Item, config.Theme, int, func(session.State, int, bool, bool, map[string]bool) render.Options, string) []string {
+func (d *detailInspector) Rows(session.Item, config.Theme, int, func(session.State, int, bool, bool, map[string]bool) render.Options, string) render.DocumentRows {
 	d.renders++
-	return []string{d.text}
+	return render.TextRows(d.text)
 }
 
 type detailModule struct{ detail *detailInspector }
@@ -62,7 +62,7 @@ func TestExtensionDetailVersionRefreshesWithoutChangingToolItem(t *testing.T) {
 	detail := &detailInspector{text: "first detail"}
 	m.extensions = extension.New([]extension.Extension{detailModule{detail}})
 	m.openExtensionInspector(m.current(), "write-1", "detail")
-	rows := func() string { return strings.Join(m.inspectorRows(), "\n") }
+	rows := func() string { return m.inspectorRows().FullText() }
 	if got := rows(); !strings.Contains(got, "first detail") {
 		t.Fatalf("missing initial detail: %q", got)
 	}

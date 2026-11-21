@@ -49,8 +49,8 @@ func TestResumePreservesAllThreadLevels(t *testing.T) {
 				if cmd == nil {
 					t.Fatal("resume did not request sessions")
 				}
-				result := commandResult(cmd).(sessionsMsg)
-				result.list, result.err = list, nil
+				result := commandResult(cmd).(sidebarHistoryMsg)
+				result.sessions, result.err = list, nil
 				m.Update(result)
 				d := current.dialogs[0]
 				options := m.filtered(d)
@@ -110,7 +110,7 @@ func TestResumeSeesNestedForksWithoutRestart(t *testing.T) {
 		if !handled || cmd == nil {
 			t.Fatal("resume not requested")
 		}
-		result := commandResult(cmd).(sessionsMsg)
+		result := commandResult(cmd).(sidebarHistoryMsg)
 		if result.err != nil {
 			t.Fatal(result.err)
 		}

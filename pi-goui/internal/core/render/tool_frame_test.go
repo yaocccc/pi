@@ -40,7 +40,7 @@ func TestGroupedExpandedToolFrameHitRange(t *testing.T) {
 	items := toolFixture()
 	opts := Options{Width: 60, Expanded: map[string]bool{"tool-group:t1": true, "t2": true}}
 	doc := Transcript(items, testTheme(), opts)
-	rows := strings.Split(ansi.Strip(doc.Text), "\n")
+	rows := strings.Split(ansi.Strip(doc.FullText()), "\n")
 	child := blockByID(t, doc, "t2")
 	group := blockByID(t, doc, "tool-group:t1")
 	if group.End > child.Start || !child.Expanded {
@@ -50,8 +50,8 @@ func TestGroupedExpandedToolFrameHitRange(t *testing.T) {
 	if !strings.Contains(body, "╭─ read ") || !strings.Contains(body, "SECOND_OUTPUT") || !strings.Contains(rows[child.End-1], "╰") {
 		t.Fatalf("child hit area must include complete result frame: %q", body)
 	}
-	checkWidth(t, doc.Text, 60)
+	checkWidth(t, doc.FullText(), 60)
 	for _, width := range []int{1, 4, 8, 12, 16} {
-		checkWidth(t, Transcript(items, testTheme(), Options{Width: width, ExpandTools: true}).Text, width)
+		checkWidth(t, Transcript(items, testTheme(), Options{Width: width, ExpandTools: true}).FullText(), width)
 	}
 }

@@ -142,7 +142,7 @@ func TestActivityHeadingRowsMatchCachedAndUncachedLayout(t *testing.T) {
 			if len(doc.ActivityRows) != 1 {
 				t.Fatalf("missing heading metadata: %+v", doc.ActivityRows)
 			}
-			rows := strings.Split(doc.Text, "\n")
+			rows := strings.Split(doc.FullText(), "\n")
 			if !strings.Contains(ansi.Strip(rows[doc.ActivityRows[0]]), "⋯ 1 calls") {
 				t.Fatal("heading metadata points to wrong row")
 			}

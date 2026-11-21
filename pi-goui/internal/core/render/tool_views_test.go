@@ -20,18 +20,18 @@ func TestTranscriptProviderIdentityInvalidatesCache(t *testing.T) {
 	opts := Options{Width: 80, ExpandTools: true, Tools: makeProvider("PROVIDER_ONE")}
 	var cache TranscriptCache
 	first := cache.Transcript(items, testTheme(), opts)
-	if !strings.Contains(first.Text, "PROVIDER_ONE") {
-		t.Fatal(first.Text)
+	if !strings.Contains(first.FullText(), "PROVIDER_ONE") {
+		t.Fatal(first.FullText())
 	}
 	opts.Tools = makeProvider("PROVIDER_TWO")
 	second := cache.Transcript(items, testTheme(), opts)
-	if strings.Contains(second.Text, "PROVIDER_ONE") || !strings.Contains(second.Text, "PROVIDER_TWO") {
-		t.Fatal(second.Text)
+	if strings.Contains(second.FullText(), "PROVIDER_ONE") || !strings.Contains(second.FullText(), "PROVIDER_TWO") {
+		t.Fatal(second.FullText())
 	}
 	opts.Tools = nil
 	fallback := cache.Transcript(items, testTheme(), opts)
-	if strings.Contains(fallback.Text, "PROVIDER_") || !strings.Contains(fallback.Text, "GENERIC_RESULT") {
-		t.Fatal(fallback.Text)
+	if strings.Contains(fallback.FullText(), "PROVIDER_") || !strings.Contains(fallback.FullText(), "GENERIC_RESULT") {
+		t.Fatal(fallback.FullText())
 	}
 }
 
@@ -40,8 +40,8 @@ func TestEmptyToolProviderPreservesGenericFallback(t *testing.T) {
 	opts := Options{Width: 80, ExpandTools: true}
 	plain := Transcript([]session.Item{item}, testTheme(), opts)
 	opts.Tools = &ToolViews{}
-	if got := Transcript([]session.Item{item}, testTheme(), opts); got.Text != plain.Text {
-		t.Fatalf("empty provider changed transcript: %s", got.Text)
+	if got := Transcript([]session.Item{item}, testTheme(), opts); got.FullText() != plain.FullText() {
+		t.Fatalf("empty provider changed transcript: %s", got.FullText())
 	}
 	if got, want := strings.Join(ToolResultRows(item, testTheme(), 80, &ToolViews{}), "\n"), strings.Join(ToolResultRows(item, testTheme(), 80), "\n"); got != want {
 		t.Fatalf("empty provider changed detail: %s", got)

@@ -16,7 +16,7 @@ func TestTranscriptScrollbarOverlaysAndRestoresContent(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	tab := m.current()
 	text := strings.Repeat("x", 78) + "界"
-	tab.doc = render.Document{Text: text}
+	tab.doc = render.Document{DocumentRows: render.TextRows(text)}
 	if got := ansi.Strip(m.transcriptViewport(tab, text, 100, 1)); got != text {
 		t.Fatal("inactive scrollbar reserved space")
 	}
@@ -25,7 +25,7 @@ func TestTranscriptScrollbarOverlaysAndRestoresContent(t *testing.T) {
 	if got != strings.Repeat("x", 78)+" ┃" || ansi.StringWidth(got) != 80 {
 		t.Fatalf("wide character overlay broken: %q", got)
 	}
-	if tab.doc.Text != text {
+	if tab.doc.FullText() != text {
 		t.Fatal("overlay mutated selectable document")
 	}
 	tab.scrollbarUntil = time.Now().Add(-time.Second)
@@ -50,7 +50,7 @@ func TestTranscriptScrollbarViewAndMouse(t *testing.T) {
 	m := testModel(t, "")
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	tab := m.current()
-	tab.doc = render.Document{Text: strings.Repeat("message\n", 99) + "last"}
+	tab.doc = render.Document{DocumentRows: render.TextRows(strings.Repeat("message\n", 99) + "last")}
 	tab.dirty, tab.follow, tab.offset = false, false, 0
 	height := m.transcriptHeight(tab)
 	rows := strings.Split(ansi.Strip(m.View().Content), "\n")
@@ -86,7 +86,7 @@ func TestTranscriptScrollbarViewAndMouse(t *testing.T) {
 	if !strings.HasSuffix(rows[height-1], " ") {
 		t.Fatal("scrollbar remained visible after scrolling stopped")
 	}
-	tab.doc = render.Document{Text: "short"}
+	tab.doc = render.Document{DocumentRows: render.TextRows("short")}
 	tab.offset = 0
 	rows = strings.Split(ansi.Strip(m.View().Content), "\n")
 	if !strings.HasSuffix(rows[0], " ") {
@@ -100,12 +100,12 @@ func TestTranscriptScrollbarDoesNotReserveWidth(t *testing.T) {
 	tab := m.current()
 	tab.state.Items = []session.Item{{ID: "a", Role: "assistant", Text: strings.Repeat("wide text ", 100)}}
 	m.document(tab)
-	for _, row := range strings.Split(tab.doc.Text, "\n") {
+	for _, row := range strings.Split(tab.doc.FullText(), "\n") {
 		if ansi.StringWidth(row) > m.mainWidth() {
 			t.Fatal("message exceeds viewport width")
 		}
 	}
-	if !strings.Contains(ansi.Strip(tab.doc.Text), "╮") {
+	if !strings.Contains(ansi.Strip(tab.doc.FullText()), "╮") {
 		t.Fatal("message frame lost right border")
 	}
 }

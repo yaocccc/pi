@@ -175,7 +175,7 @@ func (m *Model) key(k tea.KeyPressMsg) (cmd tea.Cmd) {
 	case match("app.thinking.toggle"):
 		t.showThinking = !t.showThinking
 		t.invalidateDocument()
-		m.document(t)
+		m.reflowDocument(t)
 		return nil
 	case match("app.message.copy"):
 		return m.copyLast(t)
@@ -351,13 +351,14 @@ func (m *Model) find(t *tab, direction int) {
 	if m.search == "" {
 		return
 	}
-	lines := strings.Split(ansi.Strip(t.doc.Text), "\n")
-	for n := 1; n <= len(lines); n++ {
-		i := (t.offset + direction*n) % len(lines)
+	count := t.doc.LineCount()
+	query := strings.ToLower(m.search)
+	for n := 1; n <= count; n++ {
+		i := (t.offset + direction*n) % count
 		if i < 0 {
-			i += len(lines)
+			i += count
 		}
-		if strings.Contains(strings.ToLower(lines[i]), strings.ToLower(m.search)) {
+		if strings.Contains(strings.ToLower(ansi.Strip(t.doc.Line(i))), query) {
 			t.offset = i
 			t.follow = false
 			m.clampScroll(t)
@@ -378,11 +379,15 @@ func (m *Model) copyLast(t *tab) tea.Cmd {
 	return nil
 }
 func (m *Model) listSessions(t *tab, hideCurrent bool) tea.Cmd {
-	id, root, cwd := t.id, m.cfg.AgentDir, m.tabDirectory(t)
-	return func() tea.Msg {
-		list, err := session.List(root, cwd)
-		return sessionsMsg{id: id, list: list, err: err, hideCurrent: hideCurrent}
+	m.restoreSidebarHistory()
+	h := &m.sidebarHistory
+	id := t.id
+	if h.sessions != nil || h.pending {
+		m.sessionDialog(t, h.sessions, hideCurrent)
+		id = 0
 	}
+	// Explicit refresh supersedes a scan started before a rename/fork.
+	return m.scanHistory(m.tabDirectory(t), time.Now(), id, hideCurrent)
 }
 func (m *Model) submit(t *tab, follow bool) tea.Cmd {
 	return m.submitChecked(t, follow, false)

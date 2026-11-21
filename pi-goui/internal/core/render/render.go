@@ -42,10 +42,9 @@ type Document struct {
 	messageTargets []messageTarget
 	ActivityRows   []int // Heading rows animated by the UI without rebuilding the transcript.
 	ImageLinks     []ImageLink
-	Content        []ContentSpan
-	Text           string
-	Blocks         []Block
-	MessageCount   int
+	DocumentRows
+	Blocks       []Block
+	MessageCount int
 }
 
 // Start is inclusive and End exclusive, in zero-based terminal lines of Text.
@@ -88,7 +87,14 @@ func lines(s string) []string {
 	}
 	return strings.Split(s, "\n")
 }
-func wrap(s string, width int) []string { return lines(ansi.Hardwrap(s, max(1, width), true)) }
+func wrap(s string, width int) []string {
+	// Byte length is an upper bound on cell width, even with escapes and
+	// wide graphemes. Already-short rows need only split at existing newlines.
+	if len(s) <= width {
+		return lines(s)
+	}
+	return lines(ansi.Hardwrap(s, max(1, width), true))
+}
 
 func newMarkdownRenderer(width int, theme config.Theme) (*glamour.TermRenderer, error) {
 	style := styles.DarkStyleConfig
@@ -173,8 +179,10 @@ func frameContent(body []string, title string, width int, kind string, right boo
 		middle = "─ " + title + " " + strings.Repeat("─", max(0, width-5-ansi.StringWidth(title)))
 	}
 	head := frames.Border(kind, "topLeft", "╭") + frames.Border(kind, "top", middle) + frames.Border(kind, "topRight", "╮")
-	out := []string{head}
-	spans := []ContentSpan{{}}
+	out := make([]string, 1, len(body)+2)
+	out[0] = head
+	spans := make([]ContentSpan, 1, len(body)+2)
+	leftBorder, rightBorder := frames.Border(kind, "left", "│"), frames.Border(kind, "right", "│")
 	left := 2
 	if right {
 		left += max(0, available-width)
@@ -183,11 +191,11 @@ func frameContent(body []string, title string, width int, kind string, right boo
 		// body already wrapped; preserve all rows rather than truncating content.
 		for _, part := range wrap(row, width-4) {
 			spans = append(spans, ContentSpan{Start: left, End: left + ansi.StringWidth(strings.TrimRight(ansi.Strip(part), " ")), Content: true})
-			out = append(out, frames.Border(kind, "left", "│")+" "+part+strings.Repeat(" ", max(0, width-4-ansi.StringWidth(part)))+" "+frames.Border(kind, "right", "│"))
+			out = append(out, leftBorder+" "+part+strings.Repeat(" ", max(0, width-4-ansi.StringWidth(part)))+" "+rightBorder)
 		}
 		if row == "" {
 			spans = append(spans, ContentSpan{Start: left, End: left, Content: true})
-			out = append(out, frames.Border(kind, "left", "│")+strings.Repeat(" ", width-2)+frames.Border(kind, "right", "│"))
+			out = append(out, leftBorder+strings.Repeat(" ", width-2)+rightBorder)
 		}
 	}
 	out = append(out, frames.Border(kind, "bottomLeft", "╰")+frames.Border(kind, "bottom", strings.Repeat("─", width-2))+frames.Border(kind, "bottomRight", "╯"))
@@ -300,6 +308,11 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 		messageCount = max(messageCount, item.MessageIndex)
 	}
 	items = visibleItems(items, opts)
+	// Only a cache miss reaches this renderer. Thaw native layout payloads
+	// into the private visible slice before invoking any card providers.
+	for i := range items {
+		items[i] = items[i].MaterializeLayoutJSON()
+	}
 	var out []string
 	var targets []messageTarget
 	var imageLinks []ImageLink
@@ -516,5 +529,5 @@ func transcript(items []session.Item, theme config.Theme, opts Options, renderMa
 			appendSection(body, []Block{{ID: item.ID, Role: item.Role, MessageIndex: item.MessageIndex, Start: 0, End: len(body)}})
 		}
 	}
-	return Document{messageTargets: targets, ActivityRows: activityRows, Text: strings.Join(out, "\n"), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: messageCount}
+	return Document{messageTargets: targets, ActivityRows: activityRows, DocumentRows: RowsWithSpans(out, content), Blocks: blocks, ImageLinks: imageLinks, MessageCount: messageCount}
 }

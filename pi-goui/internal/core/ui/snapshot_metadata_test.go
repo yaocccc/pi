@@ -42,7 +42,7 @@ func TestSnapshotMetadataPreservesTranscriptLayout(t *testing.T) {
 			tab.state.Items = []session.Item{{ID: "body", Role: "assistant", Text: "published body"}}
 			m.document(tab)
 			tab.editor.SetValue("local draft")
-			before := tab.doc.Text
+			before := tab.doc.FullText()
 			if pending {
 				tab.state.Items[0].Text = strings.Repeat("**Prepared history**\n\n", 512)
 				tab.invalidateStream()
@@ -55,7 +55,7 @@ func TestSnapshotMetadataPreservesTranscriptLayout(t *testing.T) {
 				file: tab.state.File, sourceID: tab.state.ID,
 				stats:    json.RawMessage(`{"tokens":{"input":19,"output":7}}`),
 				commands: json.RawMessage(`{"commands":[{"name":"new-command"}]}`)})
-			if tab.layoutGeneration != generation || tab.documentJob != job || tab.doc.Text != before {
+			if tab.layoutGeneration != generation || tab.documentJob != job || tab.doc.FullText() != before {
 				t.Fatal("optional metadata invalidated or synchronously rebuilt the transcript")
 			}
 			if tab.state.Stats.Input != 19 || len(tab.commands) != 1 || tab.commands[0].Name != "new-command" || tab.editor.Value() != "local draft" {
@@ -63,7 +63,7 @@ func TestSnapshotMetadataPreservesTranscriptLayout(t *testing.T) {
 			}
 			if pending {
 				m.Update(job.render())
-				if tab.documentJob != nil || tab.dirty || !strings.Contains(tab.doc.Text, "Prepared history") {
+				if tab.documentJob != nil || tab.dirty || !strings.Contains(tab.doc.FullText(), "Prepared history") {
 					t.Fatal("metadata made the prepared layout stale")
 				}
 			}

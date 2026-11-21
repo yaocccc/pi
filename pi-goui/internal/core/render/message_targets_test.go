@@ -26,15 +26,15 @@ func TestTranscriptMessageTargets(t *testing.T) {
 		if !reflect.DeepEqual(cached.messageTargets, d.messageTargets) {
 			t.Fatalf("cached offsets differ at %d", width)
 		}
-		if strings.Contains(d.Text, "\x1b]8;") {
+		if strings.Contains(d.FullText(), "\x1b]8;") {
 			t.Fatal("transcript delegated opening to terminal")
 		}
-		rows := strings.Split(d.Text, "\n")
+		rows := strings.Split(d.FullText(), "\n")
 		displayed := map[string]string{}
 		for _, hit := range d.messageTargets {
 			line := ansi.Strip(rows[hit.row])
 			displayed[hit.target] += ansi.Cut(line, hit.start, hit.end)
-			span := d.Content[hit.row]
+			span, _ := d.Span(hit.row)
 			if !span.Content || hit.start < span.Start || hit.end > span.End {
 				t.Fatalf("%+v outside body %+v", hit, span)
 			}
@@ -60,7 +60,7 @@ func TestTranscriptMessageTargets(t *testing.T) {
 
 func TestMessageTargetDisallowsTerminalCommands(t *testing.T) {
 	d := Transcript([]session.Item{{ID: "u", Role: "user", Text: "[no](javascript:alert) or \x1b]8;;https://example.org\aordinary label\x1b]8;;\a"}}, testTheme(), Options{Width: 80})
-	if len(d.messageTargets) != 0 || strings.Contains(d.Text, "\x1b]8;") {
+	if len(d.messageTargets) != 0 || strings.Contains(d.FullText(), "\x1b]8;") {
 		t.Fatal("unsafe or source-provided OSC link survived")
 	}
 }

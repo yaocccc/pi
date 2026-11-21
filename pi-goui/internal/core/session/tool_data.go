@@ -133,12 +133,12 @@ func mergeTool(t, old Item) Item {
 		t.ToolName = old.ToolName
 	}
 	if len(t.Arguments) == 0 {
-		t.Arguments = old.Arguments
+		t.Arguments, t.layoutArgs = old.Arguments, old.layoutArgs
 		t.argumentChars = old.argumentChars
 		t.argumentCharsKnown = old.argumentCharsKnown
 	}
 	if len(t.Details) == 0 {
-		t.Details = old.Details
+		t.Details, t.layoutDetails = old.Details, old.layoutDetails
 	}
 	if !t.HasResult && old.HasResult {
 		t.HasResult = true
@@ -161,7 +161,7 @@ func (t *Item) setResult(content, details json.RawMessage, isError *bool) {
 		t.Text, t.resultChars = toolResultContent(content)
 	}
 	if len(details) > 0 {
-		t.Details = details
+		t.Details, t.layoutDetails = details, freezeJSON(details)
 	}
 	if isError != nil {
 		t.Error = *isError

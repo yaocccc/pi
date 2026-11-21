@@ -52,7 +52,7 @@ func TestWelcomeWrapsAndScrolls(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 20, Height: 10})
 	tab := m.current()
 	m.document(tab)
-	for _, row := range strings.Split(tab.doc.Text, "\n") {
+	for _, row := range strings.Split(tab.doc.FullText(), "\n") {
 		if ansi.StringWidth(row) > m.mainWidth() {
 			t.Fatalf("welcome overflow: %q", row)
 		}

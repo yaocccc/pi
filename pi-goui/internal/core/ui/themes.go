@@ -30,17 +30,34 @@ func (m *Model) chooseTheme(t *tab, name string) tea.Cmd {
 		return m.focus(t)
 	}
 	theme, err := config.LoadTheme(m.cfg.AgentDir, name)
-	if err == nil {
-		err = config.SaveTheme(m.cfg.AgentDir, name)
-	}
 	if err != nil {
 		t.notify("Theme: " + err.Error())
 		return nil
 	}
+	q := &m.preferenceSaves.queued
+	q.themeName, q.palette, q.tabID = name, &theme, t.id
+	return tea.Batch(m.savePendingPreferences(), m.focus(t))
+}
+
+func (m *Model) finishTheme(name string, theme config.Theme, tabID int) {
 	m.cfg.ThemeName = name
-	m.applyTheme(theme)
-	t.notify("Theme: " + name)
-	return m.focus(t)
+	// A picker may have opened after Enter. Keep its live preview, but
+	// make Escape return to the newly committed palette.
+	previewing := false
+	for _, tab := range m.tabs {
+		for _, d := range tab.dialogs {
+			if d.themeBefore != nil {
+				d.themeBefore = &theme
+				previewing = previewing || tab == m.current()
+			}
+		}
+	}
+	if !previewing {
+		m.applyTheme(theme)
+	}
+	if t := m.byID(tabID); t != nil {
+		t.notify("Theme: " + name)
+	}
 }
 
 func (m *Model) applyTheme(theme config.Theme) {

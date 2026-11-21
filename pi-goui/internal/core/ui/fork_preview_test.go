@@ -148,7 +148,7 @@ func TestForkHoverClickAndCopyIsolation(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.document(source)
 	source.follow, source.offset = false, 0
-	before := source.doc.Text
+	before := source.doc.FullText()
 	var rect hitRect
 	found := false
 	for _, b := range source.doc.Blocks {
@@ -174,7 +174,7 @@ func TestForkHoverClickAndCopyIsolation(t *testing.T) {
 	m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, rect.x, rect.y
 	rows := strings.Split(before, "\n")
 	m.overlayFork(rows)
-	if !strings.Contains(ansi.Strip(rows[rect.y-transcriptTop]), "[从此轮fork]") || source.doc.Text != before {
+	if !strings.Contains(ansi.Strip(rows[rect.y-transcriptTop]), "[从此轮fork]") || source.doc.FullText() != before {
 		t.Fatal("missing overlay or polluted document")
 	}
 	if m.pointerShapeAt(rect.x, rect.y) != "pointer" {
@@ -206,7 +206,7 @@ func TestForkHoverClickAndCopyIsolation(t *testing.T) {
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
-	if len(source.dialogs) != 0 || source.doc.Text != before {
+	if len(source.dialogs) != 0 || source.doc.FullText() != before {
 		t.Fatal("direct fork changed dialogs or copy text")
 	}
 	m.forkCreated(result)

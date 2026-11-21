@@ -129,6 +129,7 @@ type sidebarHistoryCache struct {
 
 type sidebarHistoryState struct {
 	cache              map[string]sidebarHistoryCache
+	tooltip            *sidebarTooltip
 	pointerKnown       bool
 	pointerX, pointerY int
 	offset             int
@@ -141,18 +142,20 @@ type sidebarHistoryState struct {
 }
 
 type sidebarHistoryMsg struct {
-	generation uint64
-	cwd        string
-	sessions   []session.Summary
-	summaries  session.SummaryCache
-	err        error
+	openTab     int // only for a selector opened without a cached list
+	hideCurrent bool
+	generation  uint64
+	cwd         string
+	sessions    []session.Summary
+	summaries   session.SummaryCache
+	err         error
 }
 
 // Restore a directory immediately; disk refreshes never clear its visible list.
 func (m *Model) restoreSidebarHistory() {
 	cwd := m.tabDirectory(m.current())
 	h := &m.sidebarHistory
-	if h.cwd == cwd || m.opts.NoSession {
+	if h.cwd == cwd {
 		return
 	}
 	if h.cache == nil {
@@ -178,6 +181,11 @@ func (m *Model) requestSidebarHistory(now time.Time) tea.Cmd {
 	if m.opts.NoSession || h.pending || (cwd == h.cwd && now.Sub(h.checked) < 5*time.Second) {
 		return nil
 	}
+	return m.scanHistory(cwd, now, 0, false)
+}
+
+func (m *Model) scanHistory(cwd string, now time.Time, openTab int, hideCurrent bool) tea.Cmd {
+	h := &m.sidebarHistory
 	h.pending = true
 	h.checked = now
 	h.generation++
@@ -185,8 +193,44 @@ func (m *Model) requestSidebarHistory(now time.Time) tea.Cmd {
 	root, summaries := m.cfg.AgentDir, h.summaries
 	return func() tea.Msg {
 		list, next, err := summaries.Refresh(root, cwd)
-		return sidebarHistoryMsg{generation: generation, cwd: cwd, sessions: list, summaries: next, err: err}
+		return sidebarHistoryMsg{openTab: openTab, hideCurrent: hideCurrent, generation: generation, cwd: cwd, sessions: list, summaries: next, err: err}
 	}
+}
+
+// One scan feeds both RECENTS and any open selector for this directory.
+func (m *Model) applyHistoryList(v sidebarHistoryMsg) {
+	h := &m.sidebarHistory
+	if v.generation != h.generation {
+		return
+	}
+	h.pending = false
+	if h.cwd != v.cwd {
+		h.offset = 0
+	}
+	h.cwd = v.cwd
+	if v.err == nil {
+		h.sessions, h.summaries = v.sessions, v.summaries
+		for _, t := range m.tabs {
+			if m.tabDirectory(t) != v.cwd {
+				continue
+			}
+			for _, d := range t.dialogs {
+				if d.kind == "session" {
+					m.refreshSessionOptions(t, d, v.sessions)
+				}
+			}
+		}
+	} else if t := m.current(); t != nil && len(t.dialogs) != 0 && t.dialogs[0].kind == "session" {
+		t.status = v.err.Error()
+	}
+	if t := m.byID(v.openTab); t != nil && t == m.current() && m.tabDirectory(t) == v.cwd {
+		if v.err != nil {
+			t.status = v.err.Error()
+		} else {
+			m.sessionDialog(t, v.sessions, v.hideCurrent)
+		}
+	}
+	m.revealSidebar()
 }
 
 func (m *Model) requestGit(now time.Time) tea.Cmd {

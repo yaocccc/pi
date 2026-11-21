@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Each independent test process waits on the same start gate, then writes its
@@ -78,6 +79,31 @@ func TestConcurrentPreferenceProcesses(t *testing.T) {
 	}
 	if len(result["unknown"]) != (1<<17)+2 {
 		t.Error("lost unknown field")
+	}
+}
+
+func TestPreferenceSaveTimesOutBehindExistingLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "goui.json")
+	const before = `{"unknown":"retain"}`
+	put(t, path, before)
+	release, err := lockFrontend(path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	done := make(chan error, 1)
+	go func() { done <- SaveSidebarPosition(dir, "left") }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "lock") {
+			t.Fatalf("expected lock acquisition error, got %v", err)
+		}
+	case <-time.After(frontendLockWait + 2*time.Second):
+		t.Fatal("preference save waited indefinitely for the lock")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != before {
+		t.Fatalf("contended save changed preferences: %s (%v)", data, err)
 	}
 }
 

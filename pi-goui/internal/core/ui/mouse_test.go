@@ -27,7 +27,7 @@ func clipboardText(t *testing.T, cmd tea.Cmd) string {
 }
 func setDocument(m *Model, text string) *tab {
 	t := m.current()
-	t.doc = render.Document{Text: text}
+	t.doc = render.Document{DocumentRows: render.TextRows(text)}
 	t.dirty = false
 	t.follow = false
 	t.offset = 0
@@ -43,7 +43,7 @@ func TestMouseUnicodeSelectionAndConfiguredCopy(t *testing.T) {
 	if got := tab.selection.text(); got != "界e\u0301👩‍💻" {
 		t.Fatalf("unsafe Unicode selection %q", got)
 	}
-	if highlighted := m.selectionLine(tab, strings.Split(tab.doc.Text, "\n")[0], 0); ansi.Strip(highlighted) != "A界e\u0301👩‍💻Z" {
+	if highlighted := m.selectionLine(tab, strings.Split(tab.doc.FullText(), "\n")[0], 0); ansi.Strip(highlighted) != "A界e\u0301👩‍💻Z" {
 		t.Fatalf("highlight changed content: %q", highlighted)
 	}
 	if got := clipboardText(t, m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: 5, Y: transcriptTop})); got != "界e\u0301👩‍💻" {
@@ -149,7 +149,7 @@ func TestExpandedToolOutputSelection(t *testing.T) {
 	m.document(tab)
 	tab.follow = false
 	tab.offset = 0
-	lines := strings.Split(tab.doc.Text, "\n")
+	lines := strings.Split(tab.doc.FullText(), "\n")
 	row := -1
 	start := 0
 	for i, line := range lines {
@@ -176,7 +176,7 @@ func TestSelectionSessionResizeAndStreamIsolation(t *testing.T) {
 	m.document(first)
 	first.follow = false
 	first.offset = 0
-	old := first.doc.Text
+	old := first.doc.FullText()
 	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 2, Y: transcriptTop + 1})
 	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: 5, Y: transcriptTop + 1})
 	event(m, first, `{"type":"agent_start"}`)
@@ -185,13 +185,13 @@ func TestSelectionSessionResizeAndStreamIsolation(t *testing.T) {
 	}
 	first.state.Items = append(first.state.Items, session.Item{ID: "later", Role: "assistant", Text: "new live text"})
 	m.Update(tickMsg(time.Now()))
-	if first.doc.Text != old || !first.dirty {
+	if first.doc.FullText() != old || !first.dirty {
 		t.Fatal("drag snapshot was rebuilt or invalidation lost")
 	}
 	m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: 5, Y: transcriptTop + 1})
 	m.Update(tickMsg(time.Now()))
 	finishStreamingDocument(m)
-	if first.doc.Text == old || first.dirty || first.selection.document != "" {
+	if first.doc.FullText() == old || first.dirty || first.selection.document.ByteLen() != 0 {
 		t.Fatal("live text was not released after selection ended")
 	}
 	// Another session must never inherit either a completed or unfinished drag.
@@ -200,7 +200,7 @@ func TestSelectionSessionResizeAndStreamIsolation(t *testing.T) {
 	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 2, Y: transcriptTop + 1})
 	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: 5, Y: transcriptTop + 1})
 	second := m.addTab("")
-	if first.selection.dragging || second.selection.document != "" {
+	if first.selection.dragging || second.selection.document.ByteLen() != 0 {
 		t.Fatal("drag leaked across session activation")
 	}
 	if cmd := m.mouseRelease(tea.Mouse{Button: tea.MouseLeft, X: 5, Y: transcriptTop + 1}); cmd != nil {
@@ -212,7 +212,7 @@ func TestSelectionSessionResizeAndStreamIsolation(t *testing.T) {
 	m.mouse(tea.Mouse{Button: tea.MouseLeft, X: 2, Y: transcriptTop + 1})
 	m.mouseMotion(tea.Mouse{Button: tea.MouseLeft, X: 5, Y: transcriptTop + 1})
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
-	if first.selection.document != "" {
+	if first.selection.document.ByteLen() != 0 {
 		t.Fatal("resize kept stale cell coordinates")
 	}
 }

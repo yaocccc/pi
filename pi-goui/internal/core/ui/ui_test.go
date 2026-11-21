@@ -73,7 +73,7 @@ func TestNativeConfigDispatch(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("configured resume did not dispatch")
 	}
-	if _, ok := cmd().(sessionsMsg); !ok {
+	if _, ok := cmd().(sidebarHistoryMsg); !ok {
 		t.Fatal("Ctrl+Y fell through to editor yank")
 	}
 	assertValue(t, tab, "draft")
@@ -134,7 +134,7 @@ func TestPartialSnapshotRetainsHistory(t *testing.T) {
 	tab := m.current()
 	entries := json.RawMessage(`{"entries":[{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"before compaction"}},{"type":"compaction","id":"c1","parentId":"u1","summary":"summary","firstKeptEntryId":"u1"},{"type":"message","id":"a1","parentId":"c1","message":{"role":"assistant","content":"after compaction"}}],"leafId":"a1"}`)
 	m.Update(prepareSnapshotMessage(tab, snapshotMsg{id: tab.id, revision: tab.revision, err: errors.New("optional commands unavailable")}, json.RawMessage(`{"sessionId":"one","thinkingLevel":"high"}`), entries))
-	text := ansi.Strip(tab.doc.Text)
+	text := ansi.Strip(tab.doc.FullText())
 	if !strings.Contains(text, "before compaction") || !strings.Contains(text, "after compaction") {
 		t.Fatalf("valid history discarded after optional failure: %s", text)
 	}
@@ -147,13 +147,13 @@ func TestStreamingRenderCoalescedAndBackgroundScoped(t *testing.T) {
 	first := m.current()
 	first.setValue("first draft")
 	m.document(first)
-	doc := first.doc.Text
+	doc := first.doc.FullText()
 	second := m.addTab("")
 	second.setValue("second draft")
 	m.document(second)
 	event(m, first, `{"type":"agent_start"}`)
 	event(m, first, `{"type":"message_start","message":{"role":"assistant","timestamp":42,"content":"background text"}}`)
-	if first.doc.Text != doc || !first.dirty {
+	if first.doc.FullText() != doc || !first.dirty {
 		t.Fatal("background event rendered immediately")
 	}
 	if second.state.Busy {
@@ -162,17 +162,17 @@ func TestStreamingRenderCoalescedAndBackgroundScoped(t *testing.T) {
 	assertValue(t, second, "second draft")
 	m.activate(0)
 	m.Update(tickMsg(time.Now()))
-	if !strings.Contains(ansi.Strip(first.doc.Text), "background text") {
+	if !strings.Contains(ansi.Strip(first.doc.FullText()), "background text") {
 		t.Fatal("switch did not render latest background message")
 	}
-	prior := first.doc.Text
+	prior := first.doc.FullText()
 	event(m, first, `{"type":"message_update","message":{"role":"assistant","timestamp":42,"content":"stream updated"}}`)
-	if first.doc.Text != prior {
+	if first.doc.FullText() != prior {
 		t.Fatal("streaming event eagerly rendered Markdown")
 	}
 	m.Update(tickMsg(time.Now()))
 	finishStreamingDocument(m)
-	if !strings.Contains(ansi.Strip(first.doc.Text), "stream updated") {
+	if !strings.Contains(ansi.Strip(first.doc.FullText()), "stream updated") {
 		t.Fatal("tick did not flush streaming render")
 	}
 	assertValue(t, first, "first draft")

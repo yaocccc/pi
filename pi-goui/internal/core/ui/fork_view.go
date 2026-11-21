@@ -37,14 +37,13 @@ func (m *Model) forkTarget(x, y int) (string, hitRect, bool) {
 			return "", hitRect{}, false
 		}
 	}
-	lines := t.documentLines()
 	b := t.doc.Blocks[i]
-	if row >= b.End || b.Start < t.offset || b.Start >= t.offset+m.transcriptHeight(t) || b.Start >= len(lines) {
+	if row >= b.End || b.Start < t.offset || b.Start >= t.offset+m.transcriptHeight(t) || b.Start >= t.doc.LineCount() {
 		return "", hitRect{}, false
 	}
 	// On short bubbles use the empty left gutter; otherwise replace only
 	// the decorative top border to the right of the user title.
-	header := ansi.Strip(lines[b.Start])
+	header := ansi.Strip(t.doc.Line(b.Start))
 	left := ansi.StringWidth(header) - ansi.StringWidth(strings.TrimLeft(header, " "))
 	buttonX := m.mainWidth() - w - 1
 	if left >= w+1 {

@@ -46,8 +46,6 @@ type tab struct {
 	inspectBottom                                                                  int
 	requestedWidth                                                                 int
 	layoutHasInspector                                                             bool
-	docLinesText                                                                   string
-	docLines                                                                       []string
 	streamDirty                                                                    bool
 	layoutGeneration                                                               uint64
 	documentJob                                                                    *documentJob
@@ -100,6 +98,7 @@ type Model struct {
 	panelResize                    panelResizeState
 	pointerShape                   string
 	inspector                      toolInspector
+	preferenceSaves                preferenceSaveState
 	sidebarHistory                 sidebarHistoryState
 	resumePreload                  resumePreloadState
 	branchEpoch                    uint64
@@ -212,7 +211,7 @@ func (m *Model) Close() error {
 	m.fileReader.close()
 	m.quota.Close()
 	m.git.close()
-	return m.pool.close()
+	return errors.Join(m.pool.close(), m.preferenceSaves.close(m.cfg.AgentDir))
 }
 func (m *Model) current() *tab {
 	if len(m.tabs) == 0 {
@@ -338,12 +337,6 @@ type replyMsg struct {
 	draftRevision uint64
 	deferred      bool // Local intent captured before the first authoritative snapshot.
 	echo          *promptEcho
-}
-type sessionsMsg struct {
-	hideCurrent bool
-	id          int
-	list        []session.Summary
-	err         error
 }
 type tickMsg time.Time
 type noticeMsg struct {
@@ -508,29 +501,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.cycle.inflight = max(0, t.cycle.inflight-1)
 		}
 		cmds = append(cmds, m.reply(t, v))
+	case preferenceSavedMsg:
+		cmds = append(cmds, m.finishPreferenceSave(v))
 	case sidebarHistoryMsg:
-		if v.generation != m.sidebarHistory.generation {
-			return m, nil
-		}
-		m.sidebarHistory.pending = false
-		if m.sidebarHistory.cwd != v.cwd {
-			m.sidebarHistory.offset = 0
-		}
-		m.sidebarHistory.cwd = v.cwd
-		if v.err == nil {
-			m.sidebarHistory.sessions, m.sidebarHistory.summaries = v.sessions, v.summaries
-		}
-		m.revealSidebar()
-	case sessionsMsg:
-		t := m.byID(v.id)
-		if t == nil {
-			return m, nil
-		}
-		if v.err != nil {
-			t.status = v.err.Error()
-		} else {
-			m.sessionDialog(t, v.list, v.hideCurrent)
-		}
+		m.applyHistoryList(v)
 	case noticeMsg:
 		if t := m.byID(v.id); t != nil {
 			t.notify(v.text)
@@ -603,20 +577,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clipboardTarget = nil
 	case tea.MouseClickMsg:
 		v.X -= originX
-		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
+		m.trackRecentTooltip(v.X, v.Y)
 		cmds = append(cmds, m.mouse(v.Mouse()))
 	case tea.MouseMotionMsg:
 		v.X -= originX
-		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
+		m.trackRecentTooltip(v.X, v.Y)
 		m.extensionControls.Hover = m.extensionPopupVisible()
 		m.mouseMotion(v.Mouse())
 		cmds = append(cmds, m.hoverFooter())
 	case tea.MouseReleaseMsg:
 		v.X -= originX
-		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
+		m.trackRecentTooltip(v.X, v.Y)
 		cmds = append(cmds, m.mouseRelease(v.Mouse()))
 	case tea.MouseWheelMsg:
 		v.X -= originX
+		m.sidebarHistory.tooltip = nil
 		m.sidebarHistory.pointerKnown, m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = true, v.X, v.Y
 		if m.extensionPopupVisible() {
 			break
@@ -711,7 +686,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.scheduleDocument(t))
 			}
 		} else {
-			m.document(t)
+			m.reflowDocument(t)
+			if t.streamDirty {
+				cmds = append(cmds, m.scheduleDocument(t))
+			}
 		}
 	}
 	cmds = append(cmds, m.markReleaseNotesDisplayed(), m.updatePointer())
@@ -739,7 +717,7 @@ func (m *Model) onTick(now time.Time) []tea.Cmd {
 	return cmds
 }
 
-func (m *Model) document(t *tab) {
+func (m *Model) reflowDocument(t *tab) {
 	// Freeze only the display during a drag, never the RPC event projection.
 	if t.selection.dragging || m.panelResize.dragging {
 		return
@@ -755,17 +733,39 @@ func (m *Model) document(t *tab) {
 		if width == oldWidth && (!t.dirty || t.streamDirty) {
 			return // same-width detail switch; no transcript work
 		}
-		if len(t.doc.Text) >= 128<<10 || len(t.doc.Blocks) >= 512 {
-			t.invalidateDocument()
-			t.streamDirty = true
-			return
+	}
+	if t.largeDocument() && !m.showStartupInfo(t) {
+		t.inspectFrame = nil
+		t.invalidateDocument()
+		t.streamDirty = true // coalesce with other invalidations on the next layout tick
+		return
+	}
+	m.document(t)
+}
+
+// Inspect lengths only. Folded data can be expensive to lay out even if the
+// last published document is short (and there may be no published rows yet).
+func (t *tab) largeDocument() bool {
+	if len(t.state.Items) >= 128 || t.doc.ByteLen() >= 128<<10 || len(t.doc.Blocks) >= 512 {
+		return true
+	}
+	size := 0
+	for i := range t.state.Items {
+		it := &t.state.Items[i]
+		size += len(it.Text) + len(it.Thinking) + len(it.Arguments) + len(it.Details)
+		if size >= 16<<10 {
+			return true
 		}
 	}
+	return false
+}
+
+func (m *Model) document(t *tab) {
 	t.inspectFrame = nil
 	t.layoutGeneration++ // Invalidate any older asynchronous layout.
 	var doc render.Document
 	if m.showStartupInfo(t) {
-		if t.doc.Text == "" {
+		if t.doc.ByteLen() == 0 {
 			t.follow = false
 		}
 		doc = m.startupDocument(t)
@@ -773,10 +773,10 @@ func (m *Model) document(t *tab) {
 		doc = t.renderCache.Transcript(t.state.Items, m.cfg.Theme, m.documentOptions(t))
 	}
 	t.dirty, t.streamDirty = false, false
-	m.publishDocument(t, doc, nil)
+	m.publishDocument(t, doc)
 }
 func (m *Model) clampScroll(t *tab) {
-	bottom := max(0, len(t.documentLines())-m.transcriptHeight(t))
+	bottom := max(0, t.doc.LineCount()-m.transcriptHeight(t))
 	if t.follow {
 		t.offset = bottom
 	} else {
@@ -788,7 +788,7 @@ func (m *Model) scroll(t *tab, delta int) {
 	t.follow = false
 	t.offset += delta
 	m.clampScroll(t)
-	bottom := max(0, len(t.documentLines())-m.transcriptHeight(t))
+	bottom := max(0, t.doc.LineCount()-m.transcriptHeight(t))
 	t.follow = t.offset >= bottom
 }
 func (m *Model) editTarget(t *tab, action string, msg tea.Msg) tea.Cmd {

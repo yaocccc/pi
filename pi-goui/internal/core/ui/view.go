@@ -173,10 +173,9 @@ func (m *Model) View() tea.View {
 	} else {
 		completions := m.completion(t)
 		height := m.transcriptHeightFor(t, len(completions))
-		lines := t.documentLines()
-		offset := min(max(0, t.offset), len(lines))
-		bottom := min(len(lines), offset+height)
-		visible := append([]string(nil), lines[offset:bottom]...)
+		offset := min(max(0, t.offset), t.doc.LineCount())
+		bottom := min(t.doc.LineCount(), offset+height)
+		visible := t.doc.Range(offset, bottom)
 		for _, row := range t.doc.ActivityRows {
 			if row >= offset && row < bottom {
 				visible[row-offset] = render.AnimateToolActivity(visible[row-offset], theme, m.frame)
@@ -191,7 +190,7 @@ func (m *Model) View() tea.View {
 		if len(t.state.Items) == 0 && t.promptEcho == nil && !m.showStartupInfo(t) {
 			text = m.welcomeView()
 		}
-		rows := []string{m.transcriptViewport(t, text, len(lines), height)}
+		rows := []string{m.transcriptViewport(t, text, t.doc.LineCount(), height)}
 		if m.searching != "" {
 			rows = append(rows, m.paint(fitLine(" Find: "+m.search+"▏  · Enter next / Esc close", w), theme.Accent))
 		}
@@ -330,6 +329,13 @@ func (m *Model) mouse(v tea.Mouse) tea.Cmd {
 	}
 	t := m.current()
 	if t == nil {
+		return nil
+	}
+	if box, ok := m.sidebarHistoryTooltip(t); ok && box.contains(v.X, v.Y) {
+		if box.summary.Path != "" && box.deleteRect().contains(v.X, v.Y) {
+			m.sidebarHistory.tooltip = nil
+			return m.requestRecentDelete(t, box.summary)
+		}
 		return nil
 	}
 	if m.beginPanelResize(v) {

@@ -19,7 +19,7 @@ func TestShortBubbleFitsContentAndTitle(t *testing.T) {
 	} {
 		for _, available := range []int{16, 60, 132} {
 			d := Transcript([]session.Item{{ID: "short", Role: tc.role, Text: tc.text}}, testTheme(), Options{Width: available})
-			rows := strings.Split(ansi.Strip(d.Text), "\n")
+			rows := strings.Split(ansi.Strip(d.FullText()), "\n")
 			if len(rows) != 3 {
 				t.Fatalf("%s %q got %d rows: %q", tc.role, tc.text, len(rows), rows)
 			}
@@ -38,14 +38,14 @@ func TestShortBubbleFitsContentAndTitle(t *testing.T) {
 			if !strings.Contains(rows[0], "╭─ "+tc.title+" ") {
 				t.Fatalf("title clipped: %q", rows[0])
 			}
-			checkWidth(t, d.Text, available)
+			checkWidth(t, d.FullText(), available)
 		}
 	}
 }
 
 func TestBubbleMarkdownPaddingAndCodeIndentation(t *testing.T) {
 	d := Transcript([]session.Item{{ID: "code", Role: "assistant", Text: "```text\n    alpha  beta\n      gamma\n```"}}, testTheme(), Options{Width: 132})
-	plain := ansi.Strip(d.Text)
+	plain := ansi.Strip(d.FullText())
 	if !strings.Contains(plain, "    alpha  beta") || !strings.Contains(plain, "      gamma") {
 		t.Fatalf("code spacing lost: %q", plain)
 	}
@@ -65,12 +65,12 @@ func TestSystemBubbleSynopsisAndBlockOffsets(t *testing.T) {
 	original := []session.Item{{ID: "u", Role: "user", Text: "你好"}, {ID: "s", Role: "system", Text: "Context compacted — earlier messages retained\n# Summary\nKeep important context.\nHIDDEN_FULL_SUMMARY"}, {ID: "a", Role: "assistant", Text: "A short answer"}, {ID: "t", Role: "tool", ToolName: "bash", Text: "tool output"}}
 	saved := append([]session.Item(nil), original...)
 	d := Transcript(original, testTheme(), Options{Width: 80})
-	rows := strings.Split(ansi.Strip(d.Text), "\n")
+	rows := strings.Split(ansi.Strip(d.FullText()), "\n")
 	system := blockByID(t, d, "s")
 	if system.End-system.Start != 3 || !strings.HasPrefix(rows[system.Start], "╭─ 系统 ") || !strings.HasPrefix(rows[system.End-1], "╰") {
 		t.Fatalf("wrong System frame: %+v %q", system, rows)
 	}
-	if !strings.Contains(rows[system.Start+1], "Context compacted · Keep important context.") || strings.Contains(d.Text, "HIDDEN_FULL_SUMMARY") {
+	if !strings.Contains(rows[system.Start+1], "Context compacted · Keep important context.") || strings.Contains(d.FullText(), "HIDDEN_FULL_SUMMARY") {
 		t.Fatal("summary was lost or expanded")
 	}
 	if !reflect.DeepEqual(original, saved) {
@@ -94,9 +94,9 @@ func TestCompactBubblesLongTextAndNarrowWidths(t *testing.T) {
 		for _, role := range []string{"user", "assistant", "system"} {
 			unicodeItem := session.Item{ID: "unicode", Role: role, Text: "你好 é 👩‍💻"}
 			d := Transcript([]session.Item{unicodeItem}, testTheme(), Options{Width: width})
-			checkWidth(t, d.Text, width)
-			if width >= 16 && !strings.Contains(ansi.Strip(d.Text), "你好 é 👩‍💻") {
-				t.Fatalf("Unicode content split or lost: %q", d.Text)
+			checkWidth(t, d.FullText(), width)
+			if width >= 16 && !strings.Contains(ansi.Strip(d.FullText()), "你好 é 👩‍💻") {
+				t.Fatalf("Unicode content split or lost: %q", d.FullText())
 			}
 		}
 		for _, role := range []string{"user", "assistant", "system"} {
@@ -105,8 +105,8 @@ func TestCompactBubblesLongTextAndNarrowWidths(t *testing.T) {
 				text = strings.Repeat("long words ", 30) + "END"
 			}
 			d := Transcript([]session.Item{{ID: "x", Role: role, Text: text}}, testTheme(), Options{Width: width})
-			checkWidth(t, d.Text, width)
-			if role != "system" && width >= 8 && !strings.Contains(ansi.Strip(d.Text), "END") {
+			checkWidth(t, d.FullText(), width)
+			if role != "system" && width >= 8 && !strings.Contains(ansi.Strip(d.FullText()), "END") {
 				t.Fatalf("long message truncated: width=%d role=%s", width, role)
 			}
 		}

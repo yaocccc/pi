@@ -49,7 +49,7 @@ func TestToastLayoutExpiryAndIsolation(t *testing.T) {
 	first.status = "Ready"
 	for _, width := range []int{132, 80, 60} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
-		first.doc = render.Document{Text: strings.Repeat("transcript line\n", 80)}
+		first.doc = render.Document{DocumentRows: render.TextRows(strings.Repeat("transcript line\n", 80))}
 		first.dirty = false
 		first.offset = 7
 		first.follow = false

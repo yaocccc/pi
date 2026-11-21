@@ -5,7 +5,6 @@ import (
 
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +68,7 @@ func conversationFixture(t *testing.T) (*Model, *hostui.WorkerSession) {
 }
 func clickConversationRow(t *testing.T, m *Model, row int) {
 	t.Helper()
-	m.inspector.offset = min(row, max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+	m.inspector.offset = min(row, max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()))
 	left, _ := m.inspectorBounds()
 	v := tea.Mouse{Button: tea.MouseLeft, X: left + m.inspectorInset() + 1, Y: row - m.inspector.offset + 2}
 	m.mouse(v)
@@ -84,7 +83,7 @@ func TestConversationUsesMainDocumentAndFolds(t *testing.T) {
 		opts := conversationOptions(w.Replay.View(), m.inspector.cache.width, w.Expanded, w.ShowThinking, w.Folds)
 		opts.Tools = m.extensions.Tools
 		want := render.Transcript(w.Replay.View().Items, m.cfg.Theme, opts)
-		if !reflect.DeepEqual(w.Doc, want) {
+		if !equalDocuments(w.Doc, want) {
 			t.Fatal("inspector does not use ordinary transcript document")
 		}
 	}
@@ -138,7 +137,7 @@ func TestConversationDetailDrilldownBackAndCopy(t *testing.T) {
 	w.Expanded = true
 	w.Revision++
 	m.inspectorRows()
-	saved := w.Doc.Text
+	saved := w.Doc.FullText()
 	m.sidebarHistory.pointerKnown = true
 	var target hostui.ConversationTarget
 	for _, candidate := range w.Targets {
@@ -150,7 +149,7 @@ func TestConversationDetailDrilldownBackAndCopy(t *testing.T) {
 	if target.ID == "" {
 		t.Fatal("missing full-result target")
 	}
-	m.inspector.offset = min(target.Rect.Y, max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+	m.inspector.offset = min(target.Rect.Y, max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()))
 	left, _ := m.inspectorBounds()
 	v := tea.Mouse{Button: tea.MouseLeft, X: left + m.inspectorInset() + target.Rect.X, Y: 2 + target.Rect.Y - m.inspector.offset}
 	m.sidebarHistory.pointerX, m.sidebarHistory.pointerY = v.X, v.Y
@@ -159,18 +158,18 @@ func TestConversationDetailDrilldownBackAndCopy(t *testing.T) {
 	if m.inspector.parent == nil || (m.inspector.content != nil && m.inspector.content.(*hostui.Inspector).Worker != nil) || m.inspector.itemID != "tool:write" {
 		t.Fatal("did not drill down")
 	}
-	all := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	all := ansi.Strip(m.inspectorRows().FullText())
 	if !strings.Contains(all, "FIRST_SOURCE") || !strings.Contains(all, "LAST_SOURCE") {
 		t.Fatal("full source unavailable")
 	}
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.inspector.content.(*hostui.Inspector).Worker != w || m.inspector.parent != nil || w.Doc.Text != saved || !w.Expanded {
+	if m.inspector.content.(*hostui.Inspector).Worker != w || m.inspector.parent != nil || w.Doc.FullText() != saved || !w.Expanded {
 		t.Fatal("back lost conversation state")
 	}
 	// A selection never toggles a block, and copies only Content spans.
 	for _, b := range w.Doc.Blocks {
 		if b.ID == "tool:write" {
-			m.inspector.offset = min(b.Start, max(0, len(m.inspector.rows)-m.inspectorBodyHeight()))
+			m.inspector.offset = min(b.Start, max(0, inspectorRowCount(m.inspector.rows)-m.inspectorBodyHeight()))
 			v = tea.Mouse{Button: tea.MouseLeft, X: left + m.inspectorInset() + 2, Y: 2 + b.Start - m.inspector.offset}
 			revision := w.Revision
 			m.mouse(v)
@@ -193,17 +192,17 @@ func TestConversationStreamInvalidationAndUnknownEvents(t *testing.T) {
 	}
 	deliver(`{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":1}}`)
 	deliver(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"FIRST_STREAM"}}`)
-	if !strings.Contains(ansi.Strip(w.Doc.Text), "FIRST_STREAM") {
+	if !strings.Contains(ansi.Strip(w.Doc.FullText()), "FIRST_STREAM") {
 		t.Fatal("delta not rendered")
 	}
 	rows := m.inspector.rows
 	revision := w.Revision
 	deliver(`{"type":"turn_end"}`)
-	if revision != w.Revision || &rows[0] != &m.inspector.rows[0] {
+	if revision != w.Revision || rows != m.inspector.rows {
 		t.Fatal("nonvisual event rebuilt transcript")
 	}
 	deliver(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" NEXT"}}`)
-	if !strings.Contains(ansi.Strip(w.Doc.Text), "NEXT") {
+	if !strings.Contains(ansi.Strip(w.Doc.FullText()), "NEXT") {
 		t.Fatal("next delta stale")
 	}
 }
@@ -225,7 +224,7 @@ func TestConversationNestedSummaryFallbackReturns(t *testing.T) {
 	if m.openConversationDetail(id) != nil || (m.inspector.content != nil && m.inspector.content.(*hostui.Inspector).Worker != nil) || m.inspector.parent == nil || m.inspector.content.(*hostui.Inspector).Fallback == "" {
 		t.Fatal("missing nested log did not open summary")
 	}
-	plain := ansi.Strip(strings.Join(m.inspectorRows(), "\n"))
+	plain := ansi.Strip(m.inspectorRows().FullText())
 	if !strings.Contains(plain, "Nested task") || !strings.Contains(plain, "简要详情") {
 		t.Fatal("nested task summary missing")
 	}
@@ -245,7 +244,7 @@ func TestConversationThinkingKeysAndNestedReturn(t *testing.T) {
 	m.sidebarHistory.pointerY = 5
 	m.key(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	m.inspectorRows()
-	if w.ShowThinking || parent.showThinking != oldThinking || strings.Contains(ansi.Strip(w.Doc.Text), "PRIVATE_THINKING") {
+	if w.ShowThinking || parent.showThinking != oldThinking || strings.Contains(ansi.Strip(w.Doc.FullText()), "PRIVATE_THINKING") {
 		t.Fatal("thinking key not isolated")
 	}
 	m.key(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})

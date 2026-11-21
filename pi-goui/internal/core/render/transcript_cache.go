@@ -24,7 +24,6 @@ type TranscriptCache struct {
 type cachedSection struct {
 	items    []transcriptItemKey
 	doc      Document
-	lines    int
 	markdown map[markdownKey][]string
 }
 
@@ -48,15 +47,6 @@ type transcriptItemKey struct {
 	activityStart                                                  bool
 }
 
-// String conversion in the equality check does not allocate. Do not recopy
-// multi-MB tool JSON merely because a different section unfolded.
-func rawKey(raw []byte, previous string) string {
-	if string(raw) == previous {
-		return previous
-	}
-	return string(raw)
-}
-
 func itemKeys(items []session.Item, opts Options, old []transcriptItemKey) ([]transcriptItemKey, bool) {
 	var next []transcriptItemKey
 	if len(old) != len(items) {
@@ -68,9 +58,10 @@ func itemKeys(items []session.Item, opts Options, old []transcriptItemKey) ([]tr
 		if i < len(old) {
 			prev = old[i]
 		}
+		args, details := it.LayoutJSONKeys(prev.arguments, prev.details)
 		key := transcriptItemKey{
 			id: it.ID, role: it.Role, text: it.Text, thinking: it.Thinking, toolID: it.ToolID, toolName: it.ToolName,
-			arguments: rawKey(it.Arguments, prev.arguments), details: rawKey(it.Details, prev.details), running: it.Running, failed: it.Error, hasResult: it.HasResult,
+			arguments: args, details: details, running: it.Running, failed: it.Error, hasResult: it.HasResult,
 			estimatedTokens: it.EstimatedTokens, messageIndex: it.MessageIndex, imageCount: len(it.Images), hasCompaction: it.Compaction != nil,
 			// Both are local to a bubble: do not flush history when the latest
 			// tool's live preview or a completed turn's stats change.
@@ -164,7 +155,7 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 		cold = prepareColdMarkdown(items, opts.Width, theme)
 	}
 	next := make([]cachedSection, 0, len(c.sections))
-	textBytes, blockCount, spanCount := 0, 0, 0
+	blockCount := 0
 	for start := 0; start < len(items); {
 		end := start + 1
 		if assistantItem(items[start]) {
@@ -196,30 +187,21 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 				return rows
 			}
 			section.doc = transcript(items[start:end], theme, opts, cachedMarkdown)
-			section.lines = strings.Count(section.doc.Text, "\n") + 1
 			section.items, section.markdown = keys, used
 		}
 		next = append(next, section)
-		textBytes += len(section.doc.Text) + 1
 		blockCount += len(section.doc.Blocks)
-		spanCount += len(section.doc.Content)
 		start = end
 	}
-	var text strings.Builder
-	text.Grow(textBytes)
+	idx := &rowIndex{parts: make([]rowPart, 0, len(next))}
 	blocks := slices.Grow([]Block(nil), blockCount)
-	content := slices.Grow([]ContentSpan(nil), spanCount)
 	var targets []messageTarget
 	var imageLinks []ImageLink
 	var activityRows []int
 	lines := 0
 	for _, section := range next {
-		if section.doc.Text != "" || len(section.doc.Blocks) > 0 {
-			if lines > 0 {
-				text.WriteByte('\n')
-			}
-			text.WriteString(section.doc.Text)
-			content = append(content, section.doc.Content...)
+		if section.doc.ByteLen() != 0 || len(section.doc.Blocks) > 0 {
+			idx.append(section.doc.DocumentRows, lines)
 			targets = appendMessageTargets(targets, section.doc.messageTargets, lines, 0)
 			for _, row := range section.doc.ActivityRows {
 				activityRows = append(activityRows, row+lines)
@@ -233,9 +215,12 @@ func (c *TranscriptCache) Transcript(items []session.Item, theme config.Theme, o
 				block.End += lines
 				blocks = append(blocks, block)
 			}
-			lines += section.lines
+			lines += section.doc.LineCount()
 		}
 	}
 	c.sections = next
-	return Document{messageTargets: targets, ActivityRows: activityRows, Text: text.String(), Blocks: blocks, Content: content, ImageLinks: imageLinks, MessageCount: count}
+	if lines == 0 {
+		idx = nil
+	}
+	return Document{messageTargets: targets, ActivityRows: activityRows, DocumentRows: DocumentRows{idx}, Blocks: blocks, ImageLinks: imageLinks, MessageCount: count}
 }

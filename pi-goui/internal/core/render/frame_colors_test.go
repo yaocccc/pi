@@ -12,7 +12,7 @@ import (
 func TestRoleFramesRemainCompactAndKeepOffsets(t *testing.T) {
 	items := []session.Item{{ID: "u", Role: "user", Text: "你好"}, {ID: "a", Role: "assistant", Text: "Hello"}, {ID: "s", Role: "system", Text: "Context compacted — earlier messages retained\nshort summary"}}
 	doc := Transcript(items, testTheme(), Options{Width: 60})
-	rows := strings.Split(doc.Text, "\n")
+	rows := strings.Split(doc.FullText(), "\n")
 	roles := []string{"user", "assistant", "system"}
 	if len(doc.Blocks) != 3 {
 		t.Fatal("missing message ranges")
@@ -32,7 +32,7 @@ func TestRoleFramesRemainCompactAndKeepOffsets(t *testing.T) {
 		t.Fatal("System no longer left aligned")
 	}
 	for _, width := range []int{1, 8, 16, 60, 132} {
-		checkWidth(t, Transcript(items, testTheme(), Options{Width: width}).Text, width)
+		checkWidth(t, Transcript(items, testTheme(), Options{Width: width}).FullText(), width)
 	}
 }
 func TestGradientToolFrameRetainsCodemodeTokenTitle(t *testing.T) {
