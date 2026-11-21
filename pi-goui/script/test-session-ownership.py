@@ -242,6 +242,23 @@ class Suite:
         Terminal(self, 'mode-d').visible('ultrafast x8')
         self.checkpoint('cold Mode, independent running TUIs, fresh writers and next startup default')
 
+    def run_thinking(self):
+        owner = Terminal(self, 'thinking-owner', saved=False)
+        owner.idle()
+        owner.send(b'\x1b[Z')  # Shift+Tab before the first user message
+        self.wait(lambda: self.commands('cycle_thinking_level'), 'changed thinking')
+        owner.idle()  # force a fresh RPC for the actual prompt
+        assert len(self.wire('start')) == 1 and not self.commands('prompt')
+        owner.send('first-with-high\r')
+        owner.visible('STREAM-first-with-high')
+        setting, prompt = self.wire('start')
+        actual, = self.wire('thinking_at_prompt')
+        assert actual['pid'] == prompt['pid'] != setting['pid'] and actual['level'] == 'high', actual
+        self.control(prompt['pid'], 'finish')
+        owner.idle()
+        owner.quit()
+        self.checkpoint('thinking selected in an empty tab survives writer exit and applies to the first prompt')
+
     def run_fresh(self):
         owner = Terminal(self, 'fresh-owner', saved=False)
         owner.idle()
@@ -449,7 +466,7 @@ def main():
         if not args.binary:
             subprocess.run(['go', 'build', '-o', str(binary), './cmd/pi-goui'], cwd=ROOT, check=True)
         checks = []
-        for name, method in [('ownership', 'run'), ('fresh', 'run_fresh'), ('mode', 'run_mode')]:
+        for name, method in [('ownership', 'run'), ('fresh', 'run_fresh'), ('thinking', 'run_thinking'), ('mode', 'run_mode')]:
             folder = root / name
             folder.mkdir()
             suite = Suite(folder, binary)

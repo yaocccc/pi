@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,8 @@ type Config struct {
 	Bin, Cwd, AgentDir, SessionFile string
 	NoSession                       bool
 	Args                            []string
+	// ResumeThinking reads session-local metadata under the writer lease, before Pi starts.
+	ResumeThinking func(path string) (string, error)
 }
 type Event struct {
 	Data json.RawMessage
@@ -90,6 +93,15 @@ func Start(cfg Config) (*Client, error) {
 	if err = lease.prepareFile(); err != nil {
 		_ = lease.abortStart()
 		return nil, err
+	}
+	if cfg.ResumeThinking != nil {
+		level, err := cfg.ResumeThinking(cfg.SessionFile)
+		if err != nil {
+			return nil, errors.Join(err, lease.abortStart())
+		}
+		if level != "" {
+			cfg.Args = append(slices.Clone(cfg.Args), "--thinking", level)
+		}
 	}
 	c, err := startLeased(cfg, lease)
 	if err != nil {

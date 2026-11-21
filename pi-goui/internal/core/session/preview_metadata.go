@@ -1,6 +1,9 @@
 package session
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"os"
+)
 
 // Historical metadata is a read-only projection, not backend state. In
 // particular, model limits/URLs and live queues cannot be inferred from JSONL.
@@ -69,6 +72,36 @@ func previewString(raw json.RawMessage) string {
 	var value string
 	_ = json.Unmarshal(raw, &value)
 	return value
+}
+
+// BlankSessionThinking recovers metadata that Pi's startup ignores until the
+// branch contains a conversation. Called under the writer lease; never use a
+// stale tab preference after another writer has started a conversation.
+func BlankSessionThinking(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Size() == 0 {
+		return "", err
+	}
+	_, entries, leaf, err := readPreviewEntries(path)
+	if err != nil {
+		return "", err
+	}
+	branch, err := new(State).snapshotFromEntries(entries, leaf)
+	if err != nil {
+		return "", err
+	}
+	var level string
+	for _, e := range branch.path { // leaf to root
+		switch e.Type {
+		case "message", "custom_message", "branch_summary", "compaction":
+			return "", nil // native Pi restores conversation state
+		case "thinking_level_change":
+			if level == "" {
+				level = previewString(e.ThinkingLevel)
+			}
+		}
+	}
+	return level, nil
 }
 
 func preparePreviewMetadata(entries []entry, branch *snapshotCache) *previewMetadata {

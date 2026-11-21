@@ -240,8 +240,12 @@ func (m *Model) beginCycle(t *tab, intent *writeIntent) tea.Cmd {
 	id, generation, file := t.id, t.cycle.generation, t.state.File
 	opts, agentDir, pool := m.opts, m.cfg.AgentDir, m.pool
 	opts.Cwd = m.tabDirectory(t)
+	cfg := rpc.Config{Bin: opts.Bin, Cwd: opts.Cwd, AgentDir: agentDir, SessionFile: file, NoSession: opts.NoSession, Args: opts.PiArgs}
+	if file != "" && t.state.MessageCount == 0 && (t.newSession || t.state.ID != "") {
+		cfg.ResumeThinking = session.BlankSessionThinking
+	}
 	return func() tea.Msg {
-		client, err := pool.start(rpc.Config{Bin: opts.Bin, Cwd: opts.Cwd, AgentDir: agentDir, SessionFile: file, NoSession: opts.NoSession, Args: opts.PiArgs})
+		client, err := pool.start(cfg)
 		return openedMsg{id: id, client: client, err: err, generation: generation}
 	}
 }

@@ -24,6 +24,14 @@ ENTRIES = [json.loads(s) for s in SESSION.read_text().splitlines() if s.strip()]
 ENTRIES = [e for e in ENTRIES if e.get('type') != 'session']
 
 
+# Like native Pi, ignore saved thinking metadata at startup if there are no messages.
+THINKING = 'medium'
+if any(e['type'] == 'message' for e in ENTRIES):
+    THINKING = next((e['thinkingLevel'] for e in reversed(ENTRIES) if e['type'] == 'thinking_level_change'), THINKING)
+if '--thinking' in sys.argv:
+    THINKING = sys.argv[sys.argv.index('--thinking') + 1]
+
+
 def log(kind, **fields):
     with LOCK, (ROOT / 'wire.jsonl').open('a') as out:
         out.write(json.dumps({'kind': kind, 'pid': PID, **fields}) + '\n')
@@ -41,8 +49,12 @@ def message(role, text):
 
 
 def append_message(msg):
-    entry = {'type': 'message', 'id': str(len(ENTRIES) + 1),
-             'parentId': ENTRIES[-1]['id'] if ENTRIES else None, 'message': msg}
+    append_entry('message', message=msg)
+
+
+def append_entry(kind, **fields):
+    entry = {'type': kind, 'id': str(len(ENTRIES) + 1),
+             'parentId': ENTRIES[-1]['id'] if ENTRIES else None, **fields}
     ENTRIES.append(entry)
     SESSION.parent.mkdir(parents=True, exist_ok=True)
     if not SESSION.exists() or SESSION.stat().st_size == 0:
@@ -125,7 +137,7 @@ try:
             data = {}
             if typ == 'get_state':
                 data = {'sessionId': 'ownership-e2e', 'sessionFile': str(SESSION), 'sessionName': 'Ownership acceptance',
-                        'model': MODEL, 'thinkingLevel': 'medium', 'isStreaming': BUSY,
+                        'model': MODEL, 'thinkingLevel': THINKING, 'isStreaming': BUSY,
                         'isCompacting': False, 'pendingMessageCount': 0,
                         'steeringMessages': [], 'followUpMessages': [], 'messageCount': len(ENTRIES)}
             elif typ == 'get_entries':
@@ -135,6 +147,10 @@ try:
             elif typ == 'get_session_stats':
                 data = {'sessionId': 'ownership-e2e', 'sessionFile': str(SESSION), 'totalMessages': len(ENTRIES),
                         'tokens': {'input': 10, 'output': 5, 'total': 15}, 'cost': 0}
+            elif typ in ('cycle_thinking_level', 'set_thinking_level'):
+                THINKING = req['level'] if typ == 'set_thinking_level' else ('high' if THINKING == 'medium' else 'medium')
+                append_entry('thinking_level_change', thinkingLevel=THINKING)
+                data = {'level': THINKING} if typ == 'cycle_thinking_level' else {}
             elif typ == 'get_available_models':
                 data = {'models': [MODEL]}
             elif typ == 'get_commands':
@@ -159,6 +175,7 @@ try:
                 assert PENDING is None, 'test sent overlapping prompts'
                 BUSY = True
                 PENDING = req
+                log('thinking_at_prompt', level=THINKING)
                 if MODE:
                     log('mode_at_prompt', level=MODE)
                 emit({'type': 'agent_start'})

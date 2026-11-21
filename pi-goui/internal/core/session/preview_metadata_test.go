@@ -27,6 +27,27 @@ func applyMetadataPreview(t *testing.T, path string, base State) (State, *Prepar
 	return base, prepared
 }
 
+func TestBlankSessionThinkingUsesOnlyMetadataOnCurrentBranch(t *testing.T) {
+	const first = `{"type":"thinking_level_change","id":"one","parentId":null,"thinkingLevel":"low"}`
+	const next = `{"type":"thinking_level_change","id":"two","parentId":"one","thinkingLevel":"high"}`
+	const message = `{"type":"message","id":"msg","parentId":"two","message":{"role":"user","content":"question"}}`
+	const branch = `{"type":"session_info","id":"other","parentId":"one","name":"empty branch"}`
+	for _, tc := range []struct {
+		entries []string
+		want    string
+	}{
+		{nil, ""},
+		{[]string{first, next}, "high"},
+		{[]string{first, next, message}, ""},
+		{[]string{first, next, message, branch}, "low"},
+	} {
+		got, err := BlankSessionThinking(metadataPreviewFile(t, tc.entries...))
+		if got != tc.want || err != nil {
+			t.Fatalf("entries %v: got %q, %v; want %q", tc.entries, got, err, tc.want)
+		}
+	}
+}
+
 func TestPreviewMetadataColdAndPreloaded(t *testing.T) {
 	path := metadataPreviewFile(t,
 		`{"type":"model_change","id":"m0","parentId":null,"provider":"old-provider","modelId":"old-model"}`,
