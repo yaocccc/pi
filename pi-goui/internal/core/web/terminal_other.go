@@ -17,5 +17,9 @@ func terminatePTY(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 	}
 }
-func killPTY(cmd *exec.Cmd)              { terminatePTY(cmd) }
-func preparePTYCleanup(*exec.Cmd) func() { return func() {} }
+
+type processTable map[int]struct{}
+
+func (processTable) reclaim(int) error      { return nil }
+func snapshotPTY(int) (processTable, error) { return nil, nil }
+func awaitPTYExit(int) error                { return nil }

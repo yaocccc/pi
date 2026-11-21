@@ -518,7 +518,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.sidebarHistory.cwd = v.cwd
 		if v.err == nil {
-			m.sidebarHistory.sessions = v.sessions
+			m.sidebarHistory.sessions, m.sidebarHistory.summaries = v.sessions, v.summaries
 		}
 		m.revealSidebar()
 	case sessionsMsg:

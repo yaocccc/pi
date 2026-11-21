@@ -330,6 +330,7 @@ function renderInstances(instances) {
       button.type = 'button'; button.dataset.instanceId = instance.id;
       if (instance.desktop) button.setAttribute('data-desktop', '');
       if (instance.status === 'exited') name.textContent += ' · 已退出';
+      if (instance.status === 'cleanup_pending') name.textContent += ' · TUI 已退出，进程待清理';
       button.append(name, path); button.onclick = () => void openInstance(instance);
       item.append(button); $('instance-list').append(item);
       if (focused === instance.id) button.focus();

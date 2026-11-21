@@ -187,7 +187,8 @@ export async function runPiWorker(
 			let actualProvider: string | undefined;
 			let actualModel: string | undefined;
 			let stopReason: string | undefined;
-			let errorMessage: string | undefined;
+			let attemptError: string | undefined;
+			let errorMessage: string | undefined; // Terminal process/protocol errors survive later model attempts.
 			let truncated = false;
 			let stop: "cleanup" | "cancelled" | "timed_out" | "output" | undefined;
 			let settled = false;
@@ -225,8 +226,9 @@ export async function runPiWorker(
 				signal?.removeEventListener("abort", abortHandler);
 				if (childClosed) forgetChild(owner, child);
 				const aborted = stop === "cancelled", timedOut = stop === "timed_out";
-				const outcome = aborted ? "cancelled" : timedOut ? "timed_out" : exitCode === 0 ? "completed" : "failed";
-				transcript?.finish(outcome === "completed" && errorMessage ? "failed" : outcome);
+				errorMessage = [errorMessage, attemptError].filter(Boolean).join(": ") || undefined;
+				const outcome = aborted ? "cancelled" : timedOut ? "timed_out" : exitCode === 0 && !errorMessage ? "completed" : "failed";
+				transcript?.finish(outcome);
 				phaseCode = outcome;
 				phase = { cancelled: "已取消", timed_out: "已超时", completed: "子进程已完成", failed: "子进程失败" }[outcome];
 				for (const activity of activities) {
@@ -292,20 +294,20 @@ export async function runPiWorker(
 			if (!control?.managedTimeout) timeout = setTimeout(() => terminate("timeout"), Math.max(1, deadline - Date.now()));
 			if (signal?.aborted) abortHandler(); else signal?.addEventListener("abort", abortHandler, { once: true });
 			const processEvent = (event: any) => {
-				if (!event || typeof event !== "object" || typeof event.type !== "string") { transcript?.incomplete("protocol_error"); return; }
+				if (!event || typeof event !== "object" || typeof event.type !== "string") throw new Error("invalid worker event");
 				transcript?.record(event);
 				if (event.type === "message_end" && event.message?.role === "assistant") {
-					assistantText = extractText(event.message) || assistantText;
+					assistantText = extractText(event.message);
 					actualProvider = event.message.provider || actualProvider;
 					actualModel = event.message.model || actualModel;
-					stopReason = event.message.stopReason || stopReason;
-					errorMessage ||= event.message.errorMessage;
+					stopReason = event.message.stopReason;
+					attemptError = event.message.errorMessage || (stopReason === "error" || stopReason === "aborted" ? `Assistant ${stopReason}` : undefined);
 				}
 				eventProgress.record(event);
 			};
 			const processLine = (line: string) => {
 				try { processEvent(JSON.parse(line)); }
-				catch { transcript?.incomplete("protocol_error"); /* keep execution independent of logging */ }
+				catch { errorMessage ||= "Worker 协议事件无效"; transcript?.incomplete("protocol_error"); }
 			};
 			child.stdout!.on("data", (chunk: Buffer) => {
 				if (settled) return;

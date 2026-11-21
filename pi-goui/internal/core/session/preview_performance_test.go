@@ -173,7 +173,7 @@ func TestPreviewDescriptorRejectsConcurrentChanges(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := checkPreviewFile(path, opened); err == nil {
+			if err := checkSessionFileVersion(path, opened); err == nil {
 				t.Fatal("accepted changed file")
 			}
 		})

@@ -149,7 +149,12 @@ type terminal struct {
 	exit         []byte
 	done         chan struct{}
 	readDone     chan struct{}
-	stopOnce     sync.Once
+
+	cleanupPending bool       // protected by mu
+	ownershipMu    sync.Mutex // serializes snapshots with reaping the session leader
+	reaped         bool
+	descendants    processTable
+	ownershipErr   error
 }
 
 func startTerminal(cfg Config, cols, rows int) (*terminal, error) {
@@ -222,6 +227,15 @@ func (t *terminal) trackModes() {
 
 func (t *terminal) wait() {
 	f, cmd := t.pty, t.cmd
+	observeErr := awaitPTYExit(cmd.Process.Pid)
+	t.ownershipMu.Lock()
+	if observeErr == nil {
+		t.captureOwned()
+	} else {
+		t.ownershipErr = fmt.Errorf("cannot verify exited PTY ownership: %w", observeErr)
+	}
+	t.reaped = true
+	t.ownershipMu.Unlock()
 	err := cmd.Wait()
 	// The process exited but descendants may still hold the slave open. Drain
 	// final output briefly, then close the master instead of leaking a reader.
@@ -240,6 +254,7 @@ func (t *terminal) wait() {
 	}
 	t.mu.Lock()
 	t.exited = true
+	t.cleanupPending = t.ownershipErr != nil || len(t.descendants) != 0
 	t.exit = control("exit", message, code)
 	for _, p := range t.peers {
 		p.send(frame{websocket.MessageText, t.exit, true})
@@ -556,32 +571,48 @@ func (t *terminal) setSizeLocked(cols, rows int) error {
 	}
 	return nil
 }
-func (t *terminal) stop() {
-	t.stopOnce.Do(func() {
-		t.mu.Lock()
-		for _, p := range t.peers {
-			p.finish(nil)
-		}
-		t.mu.Unlock()
-		select {
-		case <-t.done:
-			return
-		default:
-		}
-		cleanup := preparePTYCleanup(t.cmd)
-		defer cleanup()
-		terminatePTY(t.cmd)
-		select {
-		case <-t.done:
-		case <-time.After(3 * time.Second):
-			// Capture/kill independently grouped descendants before the root
-			// disappears; killing only the PTY's group does not reach RPCs.
-			cleanup()
-			killPTY(t.cmd)
-			_ = t.pty.Close()
-			<-t.done
-		}
-	})
+func (t *terminal) captureOwned() {
+	known, err := snapshotPTY(t.cmd.Process.Pid)
+	if err != nil {
+		t.ownershipErr = err
+		return
+	}
+	if t.descendants == nil {
+		t.descendants = known
+		return
+	}
+	for pid, row := range known {
+		t.descendants[pid] = row
+	}
+}
+
+func (t *terminal) stop() error {
+	// The caller holds Server.lifecycle across shutdown (including retries).
+	t.mu.Lock()
+	for _, p := range t.peers {
+		p.finish(nil)
+	}
+	t.mu.Unlock()
+	t.ownershipMu.Lock()
+	if !t.reaped {
+		t.captureOwned()
+	}
+	terminatePTY(t.cmd)
+	t.ownershipMu.Unlock()
+	select {
+	case <-t.done:
+	case <-time.After(3 * time.Second):
+		// Kill only the process handle. wait captures the remaining PTY
+		// session before reaping; never signal a stale root process group.
+		_ = t.cmd.Process.Kill()
+		_ = t.pty.Close()
+		<-t.done
+	}
+	err := errors.Join(t.ownershipErr, t.descendants.reclaim(t.cmd.Process.Pid))
+	t.mu.Lock()
+	t.cleanupPending = err != nil
+	t.mu.Unlock()
+	return err
 }
 func validSize(cols, rows int) bool { return cols >= 20 && cols <= 500 && rows >= 5 && rows <= 200 }
 func querySize(r *http.Request) (int, int, error) {

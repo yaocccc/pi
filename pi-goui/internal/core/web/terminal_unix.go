@@ -3,6 +3,7 @@
 package web
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -33,11 +34,11 @@ func startPTY(cmd *exec.Cmd, cols, rows int) (*os.File, error) {
 		if fd >= 0 {
 			_ = unix.Close(fd)
 		}
-		cleanup := preparePTYCleanup(cmd)
-		cleanup()
-		killPTY(cmd)
+		_ = cmd.Process.Kill()
+		observeErr := awaitPTYExit(cmd.Process.Pid)
+		known, snapshotErr := snapshotPTY(cmd.Process.Pid)
 		_ = cmd.Wait()
-		return nil, err
+		return nil, errors.Join(err, observeErr, snapshotErr, known.reclaim(cmd.Process.Pid))
 	}
 	return os.NewFile(uintptr(fd), "webui-pty"), nil
 }
@@ -60,11 +61,5 @@ func resizePTY(f *os.File, cols, rows int) error {
 func terminatePTY(cmd *exec.Cmd) {
 	if cmd.Process != nil {
 		_ = cmd.Process.Signal(syscall.SIGTERM)
-	}
-}
-func killPTY(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Process.Kill()
 	}
 }

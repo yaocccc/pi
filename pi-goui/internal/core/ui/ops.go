@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"pi-goui/internal/core/config"
 	"pi-goui/internal/core/ui/imagepreview"
 )
 
@@ -63,46 +63,7 @@ func saveThinking(t *tab, root string) tea.Cmd {
 		if level == "" {
 			return noticeMsg{id, "No thinking level to save"}
 		}
-		path := filepath.Join(root, "settings.json")
-		data, err := os.ReadFile(path)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return noticeMsg{id, err.Error()}
-		}
-		settings := map[string]any{}
-		if len(data) > 0 {
-			if err = json.Unmarshal(data, &settings); err != nil {
-				return noticeMsg{id, err.Error()}
-			}
-		}
-		settings["defaultThinkingLevel"] = level
-		data, err = json.MarshalIndent(settings, "", "  ")
-		if err != nil {
-			return noticeMsg{id, err.Error()}
-		}
-		data = append(data, '\n')
-		if err = os.MkdirAll(root, 0700); err != nil {
-			return noticeMsg{id, err.Error()}
-		}
-		f, err := os.CreateTemp(root, ".settings-*.tmp")
-		if err != nil {
-			return noticeMsg{id, err.Error()}
-		}
-		defer os.Remove(f.Name())
-		if stat, e := os.Stat(path); e == nil {
-			_ = f.Chmod(stat.Mode().Perm())
-		}
-		_, err = f.Write(data)
-		if err == nil {
-			err = f.Sync()
-		}
-		ce := f.Close()
-		if err == nil {
-			err = ce
-		}
-		if err == nil {
-			err = os.Rename(f.Name(), path)
-		}
-		if err != nil {
+		if err := config.SaveDefaultThinkingLevel(root, level); err != nil {
 			return noticeMsg{id, err.Error()}
 		}
 		return noticeMsg{id, "Saved default thinking level: " + level}

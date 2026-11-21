@@ -33,6 +33,9 @@ func (s *Server) instanceSnapshot(id string) instanceInfo {
 		status, title = "running", s.terminal.title
 		if s.terminal.exited {
 			status = "exited"
+			if s.terminal.cleanupPending {
+				status = "cleanup_pending"
+			}
 		}
 		s.terminal.mu.Unlock()
 	}
@@ -200,8 +203,12 @@ func (s *Server) deleteInstance(w http.ResponseWriter, r *http.Request, id strin
 		writeError(w, 409, errors.New("project changed; refresh the instance list"))
 		return
 	}
+	if err := child.stopTerminal("project_closed"); err != nil {
+		child.lifecycle.Unlock()
+		writeError(w, 500, err)
+		return
+	}
 	child.cancel()
-	child.stopTerminal("project_closed")
 	child.lifecycle.Unlock()
 	_ = child.Close()
 	delete(s.instances, id)

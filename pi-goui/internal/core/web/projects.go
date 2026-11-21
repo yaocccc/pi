@@ -92,7 +92,10 @@ func (s *Server) selectProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err)
 		return
 	}
-	s.stopTerminal("project_changed")
+	if err := s.stopTerminal("project_changed"); err != nil {
+		writeError(w, 500, err)
+		return
+	}
 	s.cwd, s.projectID = cwd, id
 	s.rememberDirectory(cwd)
 	writeJSON(w, 200, projectRequest{Cwd: cwd, ProjectID: id})
@@ -125,22 +128,28 @@ func (s *Server) closeProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, errors.New("project changed; refresh the directory list"))
 		return
 	}
-	s.stopTerminal("project_closed")
+	if err := s.stopTerminal("project_closed"); err != nil {
+		writeError(w, 500, err)
+		return
+	}
 	s.cwd, s.projectID = "", ""
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 // stopTerminal is called with lifecycle held. It notifies the controller before
 // stopping the PTY and all backends; stale sockets retain no new-project access.
-func (s *Server) stopTerminal(kind string) {
+func (s *Server) stopTerminal(kind string) error {
 	if s.terminal == nil {
-		return
+		return nil
 	}
 	s.terminal.mu.Lock()
 	for _, p := range s.terminal.peers {
 		p.finish(control(kind, "", 0))
 	}
 	s.terminal.mu.Unlock()
-	s.terminal.stop()
+	if err := s.terminal.stop(); err != nil {
+		return err
+	}
 	s.terminal = nil
+	return nil
 }

@@ -32,7 +32,7 @@ See the [pi-goui guide](pi-goui/README_EN.md) for builds, platform dependencies,
 | Build a third-party UI | [Capability boundaries and RPC bridge](extensions/pi-ui/README_EN.md), plus module protocols |
 | Regress the whole repository | [Complete extension tests](extensions/README_EN.md#update-uninstall-and-maintain), [Go/PTY/Web validation](pi-goui/README_EN.md#verification); start with isolated environments and fake backends |
 | Modify the Go frontend | [Development rules](pi-goui/AGENTS_EN.md), [extension interfaces](pi-goui/internal/extensions/README_EN.md) |
-| Understand Agent working rules | [Engineering rules](AGENTS.md), [Worker orchestration skill](extensions/worker/SKILL.md), [design-question skill](skills/grill-with-docs/SKILL.md) |
+| Understand Agent working rules | [Engineering rules](AGENTS.md), [Worker orchestration skill](extensions/worker/SKILL.md) |
 
 Root `settings.json`, `keybindings.json`, and module configurations are personal examples; consult the relevant guide and source for defaults and supported options. Tool names are not slash commands; never send an undiscovered command as a model prompt.
 

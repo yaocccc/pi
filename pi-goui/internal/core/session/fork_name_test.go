@@ -142,7 +142,7 @@ func TestCreateNumberedForkPersistsUniqueNames(t *testing.T) {
 			t.Fatalf("unexpected names: %v", names)
 		}
 	}
-	list, err := listSessions(filepath.Dir(path), "")
+	list, err := listSessions(filepath.Dir(path), "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

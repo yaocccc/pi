@@ -41,7 +41,7 @@ func ReadPreview(path string) (Header, json.RawMessage, error) {
 	if err != nil {
 		return header, nil, err
 	}
-	if err := checkPreviewFile(path, opened); err != nil {
+	if err := checkSessionFileVersion(path, opened); err != nil {
 		return header, nil, err
 	}
 	return header, entries, nil
@@ -86,9 +86,13 @@ func openPreview(path string) (Header, *os.File, *bufio.Reader, os.FileInfo, err
 	return header, f, r, opened, nil
 }
 
-func checkPreviewFile(path string, opened os.FileInfo) error {
+func sameSessionFileVersion(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
+func checkSessionFileVersion(path string, opened os.FileInfo) error {
 	after, err := os.Lstat(path)
-	if err != nil || !os.SameFile(opened, after) || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) {
+	if err != nil || !after.Mode().IsRegular() || !sameSessionFileVersion(opened, after) {
 		return fmt.Errorf("history changed while reading")
 	}
 	return nil
@@ -136,7 +140,7 @@ func readPreviewEntries(path string) (Header, []entry, string, error) {
 			return header, nil, "", err
 		}
 	}
-	if err := checkPreviewFile(path, opened); err != nil {
+	if err := checkSessionFileVersion(path, opened); err != nil {
 		return header, nil, "", err
 	}
 	return header, entries, leaf, nil
@@ -204,7 +208,28 @@ func readRecordInto(r *bufio.Reader, out []byte) ([]byte, error) {
 // List reads native session metadata without changing sessions or following
 // symlinked directories/files. Missing session directories are normal.
 func List(root, cwd string) ([]Summary, error) {
-	return listSessions(filepath.Join(root, "sessions"), cwd)
+	return listSessions(filepath.Join(root, "sessions"), cwd, nil, nil)
+}
+
+// SummaryCache is an immutable snapshot of the summaries from one scan.
+// The zero value is ready to use. Refresh creates a new snapshot so background
+// scans can share the previous one without modifying it.
+type SummaryCache struct {
+	files map[string]cachedSummary
+}
+
+type cachedSummary struct {
+	info    os.FileInfo
+	summary Summary
+}
+
+func (c SummaryCache) Refresh(root, cwd string) ([]Summary, SummaryCache, error) {
+	next := SummaryCache{files: make(map[string]cachedSummary)}
+	list, err := listSessions(filepath.Join(root, "sessions"), cwd, c.files, next.files)
+	if err != nil {
+		return nil, c, err
+	}
+	return list, next, nil
 }
 
 // walkSessionFiles opens regular session logs for an in-place read. The
@@ -256,7 +281,7 @@ func checkSessionFileIdentity(path string, opened os.FileInfo) error {
 	return nil
 }
 
-func listSessions(dir, cwd string) ([]Summary, error) {
+func listSessions(dir, cwd string, previous, next map[string]cachedSummary) ([]Summary, error) {
 	var result []Summary
 	if cwd != "" {
 		abs, err := filepath.Abs(cwd)
@@ -266,48 +291,17 @@ func listSessions(dir, cwd string) ([]Summary, error) {
 		cwd = filepath.Clean(abs)
 	}
 	err := walkSessionFiles(dir, func(path string, f *os.File, opened os.FileInfo) error {
-		r := bufio.NewReaderSize(f, 32*1024)
-		raw, err := readRecord(r)
-		if err != nil && !errors.Is(err, io.EOF) {
+		v, err := readSessionSummary(f, path, cwd, opened, previous[path])
+		if err != nil || v.Path == "" {
 			return err
 		}
-		var header Header
-		if json.Unmarshal(raw, &header) != nil || header.Type != "session" {
-			return nil
-		}
-		if cwd != "" && filepath.Clean(header.Cwd) != cwd {
-			return nil
-		}
-		normalizeOrigin(&header)
-		v := Summary{ID: header.ID, Path: path, Cwd: header.Cwd, Modified: opened.ModTime().UnixMilli(), ParentSession: header.ParentSession, Fork: header.Fork}
-		for !errors.Is(err, io.EOF) {
-			raw, err = readRecordInto(r, raw[:0])
-			if err != nil && !errors.Is(err, io.EOF) {
-				return err
+		if next != nil {
+			next[path] = cachedSummary{info: opened, summary: v}
+			// Keep the snapshot isolated from callers modifying the returned list.
+			if v.Fork != nil {
+				fork := *v.Fork
+				v.Fork = &fork
 			}
-			// After the first user message, only session_info can change the
-			// summary. Avoid decoding large tool/assistant payloads. Any JSON
-			// spelling of that type contains its literal string or a Unicode
-			// escape; the latter must still take the full parsing path.
-			if v.FirstMessage != "" && !bytes.Contains(raw, []byte(`"session_info"`)) && !bytes.Contains(raw, []byte(`\u`)) {
-				continue
-			}
-			var e entry
-			if json.Unmarshal(raw, &e) != nil {
-				continue
-			}
-			if e.Type == "session_info" {
-				v.Name = e.Name
-			}
-			if e.Type == "message" && v.FirstMessage == "" {
-				var m message
-				if json.Unmarshal(e.Message, &m) == nil && m.Role == "user" {
-					v.FirstMessage = userText(m.Content)
-				}
-			}
-		}
-		if err := checkSessionFileIdentity(path, opened); err != nil {
-			return err
 		}
 		result = append(result, v)
 		return nil
@@ -322,4 +316,55 @@ func listSessions(dir, cwd string) ([]Summary, error) {
 		return result[i].Modified > result[j].Modified
 	})
 	return result, nil
+}
+
+func readSessionSummary(f io.Reader, path, cwd string, opened os.FileInfo, cached cachedSummary) (Summary, error) {
+	if cached.info != nil && (cwd == "" || filepath.Clean(cached.summary.Cwd) == cwd) &&
+		sameSessionFileVersion(cached.info, opened) && checkSessionFileVersion(path, opened) == nil {
+		return cached.summary, nil
+	}
+	r := bufio.NewReaderSize(f, 32*1024)
+	raw, err := readRecord(r)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return Summary{}, err
+	}
+	var header Header
+	if json.Unmarshal(raw, &header) != nil || header.Type != "session" {
+		return Summary{}, nil
+	}
+	if cwd != "" && filepath.Clean(header.Cwd) != cwd {
+		return Summary{}, nil
+	}
+	normalizeOrigin(&header)
+	v := Summary{ID: header.ID, Path: path, Cwd: header.Cwd, Modified: opened.ModTime().UnixMilli(), ParentSession: header.ParentSession, Fork: header.Fork}
+	for !errors.Is(err, io.EOF) {
+		raw, err = readRecordInto(r, raw[:0])
+		if err != nil && !errors.Is(err, io.EOF) {
+			return Summary{}, err
+		}
+		// After the first user message, only session_info can change the
+		// summary. Avoid decoding large tool/assistant payloads. Any JSON
+		// spelling of that type contains its literal string or a Unicode
+		// escape; the latter must still take the full parsing path.
+		if v.FirstMessage != "" && !bytes.Contains(raw, []byte(`"session_info"`)) && !bytes.Contains(raw, []byte(`\u`)) {
+			continue
+		}
+		var e entry
+		if json.Unmarshal(raw, &e) != nil {
+			continue
+		}
+		if e.Type == "session_info" {
+			v.Name = e.Name
+		}
+		if e.Type == "message" && v.FirstMessage == "" {
+			var m message
+			if json.Unmarshal(e.Message, &m) == nil && m.Role == "user" {
+				v.FirstMessage = userText(m.Content)
+			}
+		}
+	}
+	if err := checkSessionFileIdentity(path, opened); err != nil {
+		return Summary{}, err
+	}
+	return v, nil
 }

@@ -470,18 +470,45 @@ class WebSuite(shared.Suite):
         desktop.visible('RESULT-web-turn')
         self.checkpoint('all browser connections may leave while their TUI finishes and releases the session')
 
+        self.ws.send('web-orphan\r')
+        self.wait(lambda: len(self.starts()) == 3 and 'STREAM-web-orphan' in self.ws.text,
+                  'hosted TUI starts the crash fixture')
+        writer = self.starts()[-1]['pid']
+        self.control(writer, 'keep_alive_after_eof')
+        self.wait(lambda: any(r['pid'] == writer for r in self.wire('keep_alive')), 'orphan mode armed')
+        self.ws.close()
+        self.ws = None
+
+        def parent(pid):
+            return int(pathlib.Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
+
+        tui = parent(writer)
+        assert parent(tui) == self.web.pid and os.getsid(writer) == tui, 'not the isolated hosted TUI'
+        locks = self.registry / 'locks'
+        lock_ids = {p.name: p.stat().st_ino for p in locks.glob('*.lock')}
+        assert lock_ids
+        os.kill(tui, signal.SIGKILL)
+        self.wait(lambda: not shared.identity(tui) and any(r['pid'] == writer for r in self.wire('orphan')),
+                  'RPC survives death of hosted TUI')
+        desktop.visible('Read-only')
+        assert shared.identity(writer)
+        assert self.request('/api/terminal/restart', {'projectId': self.project_id})['ok']
+        self.wait(lambda: not shared.identity(writer), 'restart reclaims surviving RPC')
+        assert lock_ids == {p.name: p.stat().st_ino for p in locks.glob('*.lock')}
+        self.checkpoint('scoped restart after hosted TUI death reclaims its surviving RPC without replacing locks')
+
         self.stop_web()
         assert desktop.p.poll() is None, 'Web shutdown killed independent desktop'
         desktop.idle()
         desktop.send('after-web-exit\r')
         desktop.visible('STREAM-after-web-exit')
-        self.wait(lambda: len(self.starts()) == 3, 'desktop acquires after Web shutdown')
+        self.wait(lambda: len(self.starts()) == 4, 'desktop acquires after Web shutdown')
         third = self.starts()[-1]['pid']
         self.control(third, 'finish')
         desktop.visible('RESULT-after-web-exit')
         desktop.idle()
         self.wait(lambda: not shared.identity(third), 'final idle writer exits')
-        assert [x['message'] for x in self.commands('prompt')] == ['desktop-active', 'web-turn', 'after-web-exit']
+        assert [x['message'] for x in self.commands('prompt')] == ['desktop-active', 'web-turn', 'web-orphan', 'after-web-exit']
         desktop.quit()
         self.checkpoint('Web shutdown is isolated; desktop can acquire and finish another execution cycle')
 

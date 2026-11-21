@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,12 +28,20 @@ func SaveResumeLastSession(agentDir string, enabled bool) error {
 	return savePreference(agentDir, "resumeLastSession", enabled)
 }
 
-func savePreference(agentDir, key string, value any) error {
+func savePreference(agentDir, key string, value any) (err error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
+	if err = os.MkdirAll(agentDir, 0700); err != nil {
+		return err
+	}
 	path := filepath.Join(agentDir, "goui.json")
+	release, err := lockFrontend(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, release()) }()
 	prefs := map[string]json.RawMessage{}
 	if err := readJSON(path, &prefs); err != nil {
 		return err
@@ -43,9 +52,6 @@ func savePreference(agentDir, key string, value any) error {
 	prefs[key] = raw
 	data, err := json.MarshalIndent(prefs, "", "  ")
 	if err != nil {
-		return err
-	}
-	if err = os.MkdirAll(agentDir, 0700); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(agentDir, ".goui-*.json")

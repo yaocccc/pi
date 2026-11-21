@@ -30,6 +30,7 @@ type Server struct {
 	recent    []string
 	clients   sync.WaitGroup
 	closeOnce sync.Once
+	closeErr  error
 
 	// Lock order: instancesMu before lifecycle (root or child). Registry
 	// removal joins child shutdown, so Close also waits for active deletions.
@@ -93,18 +94,21 @@ func (s *Server) Close() error {
 		s.cancel()
 		s.instancesMu.Lock()
 		for id, child := range s.instances {
-			_ = child.Close()
-			delete(s.instances, id)
+			if err := child.Close(); err != nil {
+				s.closeErr = errors.Join(s.closeErr, fmt.Errorf("close instance %s: %w", id, err))
+			} else {
+				delete(s.instances, id)
+			}
 		}
 		s.instancesMu.Unlock()
 		s.lifecycle.Lock()
 		if s.terminal != nil {
-			s.terminal.stop()
+			s.closeErr = errors.Join(s.closeErr, s.terminal.stop())
 		}
 		s.lifecycle.Unlock()
 		s.clients.Wait()
 	})
-	return nil
+	return s.closeErr
 }
 
 func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
@@ -230,7 +234,10 @@ func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, errors.New("project changed; select it again"))
 		return
 	}
-	s.stopTerminal("restart")
+	if err := s.stopTerminal("restart"); err != nil {
+		writeError(w, 500, err)
+		return
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {

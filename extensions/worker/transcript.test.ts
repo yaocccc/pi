@@ -5,7 +5,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { WorkerTranscriptWriter } from "./transcript.ts";
-import { createWorkerOwner, runPiWorker } from "./process.ts";
+import { DEFAULT_OPTIONS } from "./config.ts";
+import { execFileSync } from "node:child_process";
+import { createWorkerOwner, executeTask, runPiWorker } from "./process.ts";
 import { batchUiSnapshot } from "./index.ts";
 import { workerBranchSnapshots } from "./history.ts";
 import type { WorkerTask } from "./types.ts";
@@ -110,9 +112,40 @@ test("real process pipeline publishes live descriptor and preserves UTF-8 chunks
    assert.ok(all.some((event) => event.type === "tool_execution_end"));
    assert.equal(all.at(-1).status, scenario === "complete" ? "completed" : scenario === "fail" ? "failed" : "incomplete");
    assert.ok(!JSON.stringify(all).includes("DO_NOT_LOG_SYSTEM_PROMPT"));
-   if (scenario === "bad-json") assert.equal(child.transcript.error, "protocol_error");
+   if (scenario === "bad-json") {
+    assert.equal(child.transcript.error, "protocol_error");
+    assert.match(child.errorMessage!, /协议/);
+   }
    assertLeaseReleased(root, child.transcript.id);
   }
+ }
+});
+
+test("SDK retry result determines task, process phase and transcript; previous 429 remains recorded", async t => {
+ const root = temporary(t);
+ const cwd = path.join(root, "workspace");
+ execFileSync("git", ["init", "-q", cwd]);
+ const agent = process.env.PI_CODING_AGENT_DIR;
+ const argv = process.argv[1];
+ t.after(() => {
+  process.argv[1] = argv;
+  if (agent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = agent;
+ });
+ process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
+ process.argv[1] = fileURLToPath(new URL("./fixtures/retry-child.mjs", import.meta.url));
+ const ctx = { cwd, modelRegistry: { getAvailable: () => [{ provider: "fixture", id: "model", reasoning: true }] } } as any;
+ const preset = { model: "fixture/model", thinking: "low" as const };
+ const config = { ...DEFAULT_OPTIONS, fast: preset, normal: preset, deep: preset };
+ for (const failed of [false, true]) {
+  const status = failed ? "failed" : "completed";
+  const phases: unknown[] = [];
+  const result = await executeTask({ ...task, objective: failed ? "exhaust-retries" : "recover" }, config, [], ctx, undefined, patch => phases.push(patch.phaseCode));
+  assert.equal(result.status, status, JSON.stringify(result));
+  assert.equal(result.execution.exit_code, failed ? 1 : 0);
+  assert.ok(phases.includes(status));
+  const events = records(root, result.transcript.id);
+  assert.ok(events.some(e => e.type === "message_end" && e.message.errorMessage === "429 rate limit"));
+  assert.equal(events.at(-1).status, status);
  }
 });
 

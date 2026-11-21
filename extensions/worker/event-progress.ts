@@ -3,6 +3,16 @@ import { estimateToolTokens } from "./token-estimate.ts";
 import { addWorkerUsage, appendUiActivity, emptyWorkerUsage, estimateMessageTokens, messageUsage, summarizeToolArgs, summarizeToolResult, uiSnippet, createThinkingActivityRecorder } from "./data.ts";
 import type { WorkerUsage, WorkerUiActivity, WorkerUiActivityStatus } from "./types";
 
+// JSON mode strips the partial message and sends cumulative usage beside the delta.
+function streamUpdate(event: any) {
+	const part = event.assistantMessageEvent;
+	return {
+		usage: event.usage ?? event.message?.usage,
+		deltaChars: typeof part?.delta === "string" ? part.delta.length : 0,
+		partialTokens: estimateMessageTokens(event.message),
+	};
+}
+
 // Project child protocol events into display activities and token counts.
 // Process completion, transcript recording and error handling stay with the caller.
 export function createWorkerEventProgress(activities: WorkerUiActivity[], emit: (force?: boolean) => void) {
@@ -17,6 +27,7 @@ export function createWorkerEventProgress(activities: WorkerUiActivity[], emit: 
 		: undefined;
 	let settledUsage = emptyWorkerUsage();
 	let streamUsage = emptyWorkerUsage();
+	let streamChars = 0;
 	let currentTurn = 1;
 	let activeTurn = true;
 	const usageSnapshot = (): WorkerUsage => {
@@ -49,24 +60,20 @@ export function createWorkerEventProgress(activities: WorkerUiActivity[], emit: 
 			return;
 		}
 		if (event.type === "message_update") {
-			if (event.message?.role === "assistant") {
-				streamUsage = messageUsage(event.message);
-				streamUsage.output = Math.max(streamUsage.output, estimateMessageTokens(event.message));
-				activeTurn = true;
-			}
-			const thinking = activities.find((item) => item.type === "thinking" && item.status === "running");
-			if (thinking?.detail) streamUsage.output = Math.max(streamUsage.output, Math.ceil(thinking.detail.length / 4));
+			const update = streamUpdate(event);
+			streamChars += update.deltaChars;
+			if (update.usage) streamUsage = messageUsage(update);
+			streamUsage.output = Math.max(streamUsage.output, update.partialTokens, Math.ceil(streamChars / 4));
+			activeTurn = true;
 			emit();
 			return;
 		}
 		if (event.type === "message_end" && event.message?.role === "assistant") {
-			const reported = messageUsage(event.message, 1);
-			if (!reported.input) reported.input = streamUsage.input;
-			// Match main-session output: explicit usage (even zero) is authoritative.
-			if (event.message.usage == null) reported.output = Math.max(streamUsage.output, estimateMessageTokens(event.message));
-			if (!reported.cacheRead) reported.cacheRead = streamUsage.cacheRead;
-			if (!reported.cacheWrite) reported.cacheWrite = streamUsage.cacheWrite;
-			if (!reported.contextTokens) reported.contextTokens = streamUsage.contextTokens;
+			// Explicit usage (even zero) replaces provisional counts for this attempt.
+			const reported = event.message.usage != null ? messageUsage(event.message, 1) : {
+				...streamUsage, turns: 1, output: Math.max(streamUsage.output, estimateMessageTokens(event.message)),
+			};
+			streamChars = 0;
 			settledUsage = addWorkerUsage(settledUsage, reported);
 			currentTurn = Math.max(currentTurn, settledUsage.turns);
 			streamUsage = emptyWorkerUsage();

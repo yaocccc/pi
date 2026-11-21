@@ -43,7 +43,7 @@ func (p *ForkPlan) createNumbered(root, sourcePath, sourceID, cwd, name string, 
 	// Avoid reading their directory twice when List already covered it.
 	rel, relErr := filepath.Rel(filepath.Join(root, "sessions"), filepath.Dir(sourcePath))
 	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		siblings, err := listSessions(filepath.Dir(sourcePath), cwd)
+		siblings, err := listSessions(filepath.Dir(sourcePath), cwd, nil, nil)
 		if err != nil {
 			return Fork{}, err
 		}

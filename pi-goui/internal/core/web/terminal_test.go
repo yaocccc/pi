@@ -467,7 +467,7 @@ func TestPTYWriteDeadlineAndForcedShutdown(t *testing.T) {
 }
 
 func TestProcessSnapshotOwnership(t *testing.T) {
-	before, err := parseProcessTable("10 1 10 Mon Jan 1 00:00:00 2024\n20 10 20 Mon Jan 1 00:00:01 2024\n30 20 30 Mon Jan 1 00:00:02 2024\n40 1 40 Mon Jan 1 00:00:03 2024")
+	before, err := parseProcessTable("10 1 10 S Mon Jan 1 00:00:00 2024\n20 10 20 S Mon Jan 1 00:00:01 2024\n30 20 30 S Mon Jan 1 00:00:02 2024\n40 1 40 S Mon Jan 1 00:00:03 2024")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestProcessSnapshotOwnership(t *testing.T) {
 	if len(known) != 3 {
 		t.Fatalf("unrelated sibling collected, or grandchild missed: %v", known)
 	}
-	after, err := parseProcessTable("20 1 20 Mon Jan 1 00:00:01 2024\n30 1 30 Tue Jan 2 00:00:02 2024\n50 20 50 Mon Jan 1 00:00:04 2024\n60 30 60 Tue Jan 2 00:00:03 2024")
+	after, err := parseProcessTable("20 1 20 S Mon Jan 1 00:00:01 2024\n30 1 30 S Tue Jan 2 00:00:02 2024\n50 20 50 S Mon Jan 1 00:00:04 2024\n60 30 60 S Tue Jan 2 00:00:03 2024")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +487,7 @@ func TestProcessSnapshotOwnership(t *testing.T) {
 	if _, ok := known[60]; ok || known[30].started == after[30].started {
 		t.Fatal("recycled PID granted ownership of unrelated processes")
 	}
-	for _, invalid := range []string{"", "invalid", "x 1 1 Mon Jan 1 00:00:00 2024", "0 1 1 Mon Jan 1 00:00:00 2024"} {
+	for _, invalid := range []string{"", "invalid", "x 1 1 S Mon Jan 1 00:00:00 2024", "0 1 1 S Mon Jan 1 00:00:00 2024"} {
 		if _, err := parseProcessTable(invalid); err == nil {
 			t.Fatalf("invalid snapshot accepted: %q", invalid)
 		}
@@ -495,10 +495,13 @@ func TestProcessSnapshotOwnership(t *testing.T) {
 }
 
 func TestPTYStopReclaimsIndependentDescendantGroups(t *testing.T) {
-	for _, action := range []string{"close", "restart", "graceful"} {
+	for _, action := range []string{"close", "restart", "graceful", "exited-close", "exited-restart"} {
 		t.Run(action, func(t *testing.T) {
 			args := []string{"--descendants"}
-			if action != "graceful" {
+			exited := strings.HasPrefix(action, "exited-")
+			if exited {
+				args = append(args, "--exit-immediate")
+			} else if action != "graceful" {
 				args = append(args, "--ignore-term")
 			}
 			s, h, log := terminalServer(t, args...)
@@ -529,19 +532,49 @@ func TestPTYStopReclaimsIndependentDescendantGroups(t *testing.T) {
 				t.Fatalf("expected TUI, RPC and tool: %v", old)
 			}
 			for _, pid := range old {
+				if exited && pid == s.terminal.cmd.Process.Pid {
+					continue
+				}
 				if pgid, err := syscall.Getpgid(pid); err != nil || pgid != pid {
 					t.Fatalf("fixture %d is not an independent group: %d, %v", pid, pgid, err)
 				}
 			}
+			if exited {
+				<-s.terminal.done
+				if got := s.instanceSnapshot("main").Status; got != "cleanup_pending" {
+					t.Fatalf("orphaned PTY status = %s", got)
+				}
+				if action == "exited-restart" {
+					// Mismatched start identity must fail closed, keep the record,
+					// and not signal even processes with the expected session ID.
+					term := s.terminal
+					saved := term.descendants
+					term.descendants = processTable{}
+					for pid, row := range saved {
+						row.started = "different incarnation"
+						term.descendants[pid] = row
+					}
+					w := request(t, s, "POST", "/api/terminal/restart", projectRequest{ProjectID: s.projectID})
+					term.descendants = saved
+					if w.Code != 500 || !strings.Contains(w.Body.String(), "cannot verify") || s.terminal != term {
+						t.Fatalf("unverified cleanup discarded or reported success: %d %s", w.Code, w.Body)
+					}
+				}
+				for _, pid := range old {
+					if pid != s.terminal.cmd.Process.Pid && syscall.Kill(pid, 0) != nil {
+						t.Fatalf("orphan fixture %d was not alive before cleanup", pid)
+					}
+				}
+			}
 			started := time.Now()
-			if action == "restart" {
+			if strings.HasSuffix(action, "restart") {
 				if w := request(t, s, "POST", "/api/terminal/restart", projectRequest{ProjectID: s.projectID}); w.Code != 200 {
 					t.Fatal(w.Body)
 				}
-			} else {
-				_ = s.Close()
+			} else if err := s.Close(); err != nil {
+				t.Fatal(err)
 			}
-			if action != "graceful" && time.Since(started) < 3*time.Second {
+			if !exited && action != "graceful" && time.Since(started) < 3*time.Second {
 				t.Fatal("fixture did not exercise the forced shutdown deadline")
 			}
 			for _, pid := range old {

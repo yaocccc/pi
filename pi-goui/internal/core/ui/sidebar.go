@@ -121,9 +121,10 @@ func (m *Model) revealSidebar() {
 }
 
 type sidebarHistoryCache struct {
-	sessions []session.Summary
-	offset   int
-	checked  time.Time
+	sessions  []session.Summary
+	summaries session.SummaryCache
+	offset    int
+	checked   time.Time
 }
 
 type sidebarHistoryState struct {
@@ -133,6 +134,7 @@ type sidebarHistoryState struct {
 	offset             int
 	cwd                string
 	sessions           []session.Summary
+	summaries          session.SummaryCache
 	pending            bool
 	generation         uint64
 	checked            time.Time
@@ -142,6 +144,7 @@ type sidebarHistoryMsg struct {
 	generation uint64
 	cwd        string
 	sessions   []session.Summary
+	summaries  session.SummaryCache
 	err        error
 }
 
@@ -160,10 +163,10 @@ func (m *Model) restoreSidebarHistory() {
 		if h.pending {
 			checked = time.Time{}
 		}
-		h.cache[h.cwd] = sidebarHistoryCache{h.sessions, h.offset, checked}
+		h.cache[h.cwd] = sidebarHistoryCache{sessions: h.sessions, summaries: h.summaries, offset: h.offset, checked: checked}
 	}
 	cached := h.cache[cwd]
-	h.cwd, h.sessions, h.offset, h.checked = cwd, cached.sessions, cached.offset, cached.checked
+	h.cwd, h.sessions, h.summaries, h.offset, h.checked = cwd, cached.sessions, cached.summaries, cached.offset, cached.checked
 	h.pending = false
 	h.generation++ // Ignore a scan for the directory we just left.
 }
@@ -179,10 +182,10 @@ func (m *Model) requestSidebarHistory(now time.Time) tea.Cmd {
 	h.checked = now
 	h.generation++
 	generation := h.generation
-	root := m.cfg.AgentDir
+	root, summaries := m.cfg.AgentDir, h.summaries
 	return func() tea.Msg {
-		list, err := session.List(root, cwd)
-		return sidebarHistoryMsg{generation: generation, cwd: cwd, sessions: list, err: err}
+		list, next, err := summaries.Refresh(root, cwd)
+		return sidebarHistoryMsg{generation: generation, cwd: cwd, sessions: list, summaries: next, err: err}
 	}
 }
 
